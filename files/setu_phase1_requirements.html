@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Setu Finance - Current State Requirements</title>
+<style>
+  :root {
+    --ink: #1a1a1f;
+    --amber: #ba7517;
+    --amber-soft: #faeeda;
+    --paper: #ffffff;
+    --paper-2: #f5f4f0;
+    --paper-3: #faf9f5;
+    --text-1: #1a1a1f;
+    --text-2: #5b5b75;
+    --text-3: #9295a8;
+    --border-1: #d8d6cf;
+    --border-2: #e8e6df;
+    --success: #0d6b4d;
+    --success-bg: #e1f5ee;
+    --warn-bg: #fef3c7;
+    --warn-text: #92520c;
+    --sans: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: var(--sans);
+    color: var(--text-1);
+    background: var(--paper-2);
+    line-height: 1.6;
+  }
+
+  .cover {
+    background: var(--ink);
+    color: white;
+    padding: 58px 0 50px;
+  }
+
+  .wrap {
+    max-width: 980px;
+    margin: 0 auto;
+    padding: 0 24px;
+  }
+
+  .wordmark {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    margin-bottom: 20px;
+  }
+
+  .letters {
+    font-size: 34px;
+    letter-spacing: -0.04em;
+    line-height: 1;
+  }
+
+  .deck {
+    margin-top: 5px;
+    width: 70px;
+    height: 3px;
+    background: var(--amber);
+    border-radius: 3px;
+  }
+
+  h1 {
+    margin: 0 0 10px;
+    font-size: 34px;
+    letter-spacing: -0.05em;
+  }
+
+  .subtitle {
+    color: #d0d0da;
+    font-size: 15px;
+    max-width: 70ch;
+  }
+
+  .meta {
+    margin-top: 18px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .tag {
+    border-radius: 999px;
+    padding: 7px 11px;
+    font-size: 12px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+
+  .toc, section {
+    background: var(--paper);
+    border: 1px solid var(--border-1);
+    border-radius: 18px;
+    margin-top: 20px;
+    box-shadow: 0 22px 60px -40px rgba(12, 12, 18, 0.3);
+  }
+
+  .toc {
+    padding: 22px 24px;
+  }
+
+  .toc h2, .sec-title {
+    margin: 0 0 14px;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-3);
+  }
+
+  .toc ol {
+    margin: 0;
+    padding-left: 18px;
+  }
+
+  section {
+    padding: 28px 28px 18px;
+  }
+
+  h3 {
+    margin: 0 0 8px;
+    font-size: 24px;
+    letter-spacing: -0.04em;
+  }
+
+  h4 {
+    margin: 20px 0 8px;
+    font-size: 17px;
+    letter-spacing: -0.02em;
+  }
+
+  p {
+    margin: 0 0 12px;
+    color: var(--text-1);
+  }
+
+  .lead {
+    color: var(--text-2);
+  }
+
+  ul, ol {
+    margin: 0 0 14px 20px;
+  }
+
+  li {
+    margin-bottom: 6px;
+  }
+
+  code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: var(--paper-3);
+    border: 1px solid var(--border-2);
+    border-radius: 6px;
+    padding: 2px 6px;
+    color: var(--amber);
+  }
+
+  .callout {
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin: 14px 0;
+    font-size: 14px;
+  }
+
+  .callout.info {
+    background: var(--paper-3);
+    border-left: 3px solid var(--amber);
+  }
+
+  .callout.success {
+    background: var(--success-bg);
+    color: var(--success);
+  }
+
+  .callout.warn {
+    background: var(--warn-bg);
+    color: var(--warn-text);
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 12px 0 18px;
+  }
+
+  th {
+    text-align: left;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-3);
+    background: var(--paper-3);
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-1);
+  }
+
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border-2);
+    vertical-align: top;
+  }
+
+  .foot {
+    padding: 34px 0 46px;
+    color: var(--text-3);
+    font-size: 12px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <div class="cover">
+    <div class="wrap">
+      <div class="wordmark">
+        <div class="letters">setu</div>
+        <div class="deck"></div>
+      </div>
+      <h1>Current State Requirements and Handoff</h1>
+      <div class="subtitle">This document replaces the earlier aspirational Phase 1 brief with the product state that is actually implemented now in the local codebase.</div>
+      <div class="meta">
+        <span class="tag">Internal portal</span>
+        <span class="tag">Login-protected</span>
+        <span class="tag">Postgres-backed</span>
+        <span class="tag">SMTP + Gmail integration hooks</span>
+        <span class="tag">Ready for repo handoff</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div class="toc">
+      <h2>Contents</h2>
+      <ol>
+        <li>Product state summary</li>
+        <li>Implemented capabilities</li>
+        <li>Frontend behavior</li>
+        <li>Backend architecture</li>
+        <li>Database and persistence</li>
+        <li>Performance and scale posture</li>
+        <li>Known limits and next steps</li>
+      </ol>
+    </div>
+
+    <section>
+      <div class="sec-title">1. Product State Summary</div>
+      <h3>What exists now</h3>
+      <p class="lead">The app is no longer just a wireframe or front-end mock. It is a local full-stack product with portal authentication, a React operator UI, an Express API, real Postgres persistence, SMTP-backed invoice and receipt sending hooks, and Gmail-based Zelle confirmation ingestion hooks.</p>
+
+      <div class="callout success">The portal can now function as a real internal operations surface instead of a disconnected prototype.</div>
+
+      <h4>Primary operator surfaces</h4>
+      <ul>
+        <li><strong>Login screen</strong> with session-based access control.</li>
+        <li><strong>Dashboard</strong> for collected cash, outstanding balances, expected inflow, aging, and needs-attention items.</li>
+        <li><strong>Billing console</strong> for due invoices, queued payments, exceptions, inbox sync, and manual invoicing.</li>
+        <li><strong>Customer search</strong> across identity fields and invoice references.</li>
+      </ul>
+    </section>
+
+    <section>
+      <div class="sec-title">2. Implemented Capabilities</div>
+      <h3>Current functional scope</h3>
+      <table>
+        <tr>
+          <th>Area</th>
+          <th>Current behavior</th>
+        </tr>
+        <tr>
+          <td>Portal access</td>
+          <td>Username/password login using secure server-issued session cookies.</td>
+        </tr>
+        <tr>
+          <td>Invoices</td>
+          <td>Create manual invoices, save drafts, send immediately, or send from the due queue.</td>
+        </tr>
+        <tr>
+          <td>Customer selection</td>
+          <td>New invoice flow uses search instead of a customer dropdown, matching by first name, last name, email, and phone.</td>
+        </tr>
+        <tr>
+          <td>Service selection</td>
+          <td>Existing members expose predefined services plus a <code>Custom</code> option.</td>
+        </tr>
+        <tr>
+          <td>Email operations</td>
+          <td>Backend sends invoices and receipts through SMTP when configured.</td>
+        </tr>
+        <tr>
+          <td>Zelle ingestion</td>
+          <td>Backend can read Gmail confirmations, parse likely payment details, and route records to either payment confirmation or exceptions.</td>
+        </tr>
+        <tr>
+          <td>Exceptions</td>
+          <td>Resolve mismatch and ambiguous payer flows from the billing console.</td>
+        </tr>
+        <tr>
+          <td>Search</td>
+          <td>Search spans names, emails, phones, aliases, and invoice codes.</td>
+        </tr>
+        <tr>
+          <td>Persistence</td>
+          <td>Live state is stored in Postgres, not in a runtime-only client store or a JSON blob.</td>
+        </tr>
+      </table>
+
+      <div class="callout info">SMTP and Gmail are integrated honestly: the UI shows when those services are not configured yet instead of pretending they are live.</div>
+    </section>
+
+    <section>
+      <div class="sec-title">3. Frontend Behavior</div>
+      <h3>Operator UX requirements now reflected in the product</h3>
+      <h4>Login</h4>
+      <ul>
+        <li>Unauthenticated users see a dedicated sign-in screen before finance data loads.</li>
+        <li>Expired sessions return the user to login and protect the API from unauthorized requests.</li>
+      </ul>
+
+      <h4>Billing console</h4>
+      <ul>
+        <li>Status chips show schedule linkage, email readiness, and Gmail authorization state.</li>
+        <li><code>Sync Zelle inbox</code> calls the backend Gmail sync endpoint.</li>
+        <li>Due invoices, payments to confirm, and exceptions update from backend state.</li>
+      </ul>
+
+      <h4>Manual invoice flow</h4>
+      <ul>
+        <li>Existing member search replaces the original static customer picker.</li>
+        <li>Member selection autofills identity details.</li>
+        <li>Service choices are constrained to member-specific services when a known member is selected.</li>
+        <li>New customers can still be created inline.</li>
+      </ul>
+    </section>
+
+    <section>
+      <div class="sec-title">4. Backend Architecture</div>
+      <h3>Current service layers</h3>
+      <ol>
+        <li><strong>React frontend</strong> calls <code>/api</code> through the Vite local proxy.</li>
+        <li><strong>Express API</strong> owns auth, invoice actions, payment confirmation, exception resolution, and inbox sync entry points.</li>
+        <li><strong>State store layer</strong> translates portal actions into transactional database operations.</li>
+        <li><strong>Service layer</strong> handles SMTP email, Gmail authorization, Gmail message parsing, and payment matching logic.</li>
+        <li><strong>Postgres</strong> acts as the source of truth for operational state.</li>
+      </ol>
+
+      <div class="callout info">The route layer is intentionally thin so the product can grow into more modules and APIs without business logic getting trapped in Express handlers.</div>
+    </section>
+
+    <section>
+      <div class="sec-title">5. Database and Persistence</div>
+      <h3>Persistence model</h3>
+      <p>The product now uses a normalized Postgres schema with transactional writes. The earlier JSON file is retained only as a bootstrap seed source for local development.</p>
+
+      <h4>Core domains persisted</h4>
+      <ul>
+        <li>Customers</li>
+        <li>Customer services</li>
+        <li>Customer emails</li>
+        <li>Customer phones</li>
+        <li>Customer aliases</li>
+        <li>Invoices</li>
+        <li>Payments</li>
+        <li>Exceptions and candidate matches</li>
+        <li>Activity events</li>
+        <li>Processed Gmail message ids</li>
+        <li>Integration state</li>
+        <li>Invoice sequences</li>
+        <li>Dashboard snapshots and projections</li>
+      </ul>
+
+      <table>
+        <tr>
+          <th>Why it matters</th>
+          <th>Current design choice</th>
+        </tr>
+        <tr>
+          <td>Data integrity</td>
+          <td>Transactional invoice, payment, exception, and activity updates.</td>
+        </tr>
+        <tr>
+          <td>Operational lookup speed</td>
+          <td>Indexes for normalized names, emails, phone last-4, invoice status, payment review status, and exception status.</td>
+        </tr>
+        <tr>
+          <td>Local development</td>
+          <td>Database starts locally through the provided scripts and seeds from the demo state snapshot.</td>
+        </tr>
+      </table>
+    </section>
+
+    <section>
+      <div class="sec-title">6. Performance and Scale Posture</div>
+      <h3>Why this backend is a better product-suite foundation</h3>
+      <ul>
+        <li>Postgres replaces the monolithic state blob, which is better for concurrency, queryability, and future automation.</li>
+        <li>Connection pooling is configurable, keeping local and small-team operating cost low while leaving room to grow.</li>
+        <li>Identity matching fields are normalized for predictable search and reconciliation.</li>
+        <li>Integration metadata uses JSON only where flexibility is helpful and query pressure is low.</li>
+        <li>The model can evolve toward tenant-aware <code>organizations</code> and <code>workspaces</code> without rethinking the core financial domains.</li>
+      </ul>
+
+      <div class="callout success">This is now shaped like the early backend of a product suite, not just a demo portal.</div>
+    </section>
+
+    <section>
+      <div class="sec-title">7. Known Limits and Next Steps</div>
+      <h3>What still comes next</h3>
+      <ul>
+        <li>SMTP and Gmail need real credentials before external delivery and inbox sync can be validated end to end.</li>
+        <li>Email delivery and Gmail polling still run inline with request flow. A background jobs layer is the next performance and reliability step.</li>
+        <li>The portal is still single-tenant. Multi-workspace support should be the next structural evolution if this becomes a broader suite.</li>
+        <li>Dashboard projections are currently stored for the existing UI contract; later they can be fed by scheduled jobs or a dedicated analytics pipeline.</li>
+      </ul>
+
+      <div class="callout warn">Recommended next product-suite move: add tenant scoping plus an outbox/job system before increasing operator count or payment volume significantly.</div>
+    </section>
+
+    <div class="foot">Setu finance current-state handoff · generated from the working local implementation</div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.DS_Store
+files.zip
+server/credentials/*.json
+server/credentials/*.token
+server/credentials/gmail-token.json
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
