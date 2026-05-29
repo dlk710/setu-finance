@@ -65,8 +65,10 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 
 ### 6. Receipts must be sent from the client record
 
-- Once a payment is applied, the system must send the receipt to the customer’s primary email from the database.
-- Receipt communication must include the payment details that matter to the client and the operations team.
+- Once a payment is applied, the transaction must remain visible in a completed ledger so finance can send or re-send the receipt separately.
+- The receipt must go to the customer’s primary email from the database.
+- The receipt should be attached as a simple PDF for the customer’s records.
+- The receipt should include the important confirmation details, such as amount, transaction number, payment date, memo, invoice reference when available, and the confirmation timestamp.
 
 ### 7. Dashboard visibility must support simple finance review
 
@@ -106,6 +108,6 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 
 ## Success Criteria
 
-- A finance team member can onboard a client, send an invoice, review a synced Zelle transaction, apply it, and send a receipt without leaving the portal.
+- A finance team member can onboard a client, send an invoice, review a synced Zelle transaction, apply it, and send or re-send a PDF receipt without leaving the portal.
 - A referred client can be linked to a referrer during onboarding and tracked until the reward becomes available.
 - Leadership can see outstanding invoices, pending confirmations, exceptions, referral progress, and received-amount trends in one system.

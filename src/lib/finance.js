@@ -2,8 +2,9 @@ export function formatCurrency(value) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
 }
 
 export function formatCompactCurrency(value) {
@@ -60,11 +61,11 @@ export function formatShortDate(value) {
 }
 
 export function calculateZelleAmount(amount, discountPct) {
-  return Math.round(Number(amount || 0) * (1 - Number(discountPct || 0) / 100));
+  return Math.round(Number(amount || 0) * (1 - Number(discountPct || 0) / 100) * 100) / 100;
 }
 
 export function makeInvoiceCode(sequence) {
-  return `ASC-2026-${String(sequence).padStart(4, "0")}`;
+  return String(500000 + Number(sequence || 0)).padStart(6, "0");
 }
 
 export function normalizeDigits(value) {

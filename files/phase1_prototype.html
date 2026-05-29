@@ -1083,7 +1083,7 @@
               </div>
               <div class="field">
                 <label>Customer ID</label>
-                <div class="fake-input mono">CUS-00008</div>
+                <div class="fake-input mono">100009</div>
               </div>
               <div class="field">
                 <label>Home address</label>
@@ -1143,7 +1143,7 @@ United States</textarea>
               <div class="field-row">
                 <div class="field">
                   <label>Referred by existing client</label>
-                  <div class="fake-input">Rohan Sharma · CUS-00001</div>
+                  <div class="fake-input">Rohan Sharma · 100001</div>
                 </div>
                 <div class="field">
                   <label>Referral source</label>
@@ -1282,8 +1282,8 @@ United States</textarea>
               <h3>Recent operating events</h3>
               <div class="timeline">
                 <div class="timeline-item">
-                  <div class="timeline-head"><strong>Receipt sent</strong><span class="mono">9:42 AM</span></div>
-                  <div class="sub">Anjali Mehta payment applied and receipt emailed</div>
+                  <div class="timeline-head"><strong>Receipt sent</strong><span class="mono">2:08 PM</span></div>
+                  <div class="sub">Karthik Pamaraju receipt PDF emailed after transaction apply</div>
                 </div>
                 <div class="timeline-item">
                   <div class="timeline-head"><strong>Client onboarded</strong><span class="mono">8:15 AM</span></div>
@@ -1307,7 +1307,7 @@ United States</textarea>
         <div class="nav-label">Finance</div>
         <div class="nav-item"><span>Client onboarding</span></div>
         <div class="nav-item"><span>Dashboard</span></div>
-        <div class="nav-item active"><span>Billing console</span><span class="badge">7</span></div>
+        <div class="nav-item active"><span>Billing console</span><span class="badge">5</span></div>
         <div class="nav-item"><span>Customer search</span></div>
         <div class="nav-item"><span>Program admin</span></div>
         <div class="sidebar-foot">
@@ -1324,8 +1324,8 @@ United States</textarea>
           </div>
           <div class="topbar-right">
             <span class="status">Linked to schedule sheet</span>
-            <span class="status warn">Email not configured</span>
-            <span class="status warn">Gmail not configured</span>
+            <span class="status good">Email ready</span>
+            <span class="status good">Gmail authorized</span>
             <button class="btn">Sync Zelle inbox</button>
             <button class="btn primary">New invoice</button>
           </div>
@@ -1344,8 +1344,8 @@ United States</textarea>
             </div>
             <div class="metric">
               <div class="label">Exceptions</div>
-              <div class="value">2</div>
-              <div class="note">Human review required</div>
+              <div class="value">0</div>
+              <div class="note">Queue currently clear</div>
             </div>
           </div>
 
@@ -1363,19 +1363,19 @@ United States</textarea>
                 <div>Action</div>
               </div>
               <div class="trow invoice-grid">
-                <div><div class="cust">Anjali Mehta</div><div class="sub">CUS-00002 · anjali.mehta@email.com</div></div>
+                <div><div class="cust">Anjali Mehta</div><div class="sub">100002 · anjali.mehta@email.com</div></div>
                 <div>Authorship M2<div class="sub">Due May 28</div></div>
                 <div class="mono">$1,425</div>
                 <div><button class="btn primary">Send</button></div>
               </div>
               <div class="trow invoice-grid">
-                <div><div class="cust">Suresh Iyer</div><div class="sub">CUS-00005 · s.iyer@email.com</div></div>
+                <div><div class="cust">Suresh Iyer</div><div class="sub">100005 · s.iyer@email.com</div></div>
                 <div>Judging M1<div class="sub">Due May 28</div></div>
                 <div class="mono">$902</div>
                 <div><button class="btn primary">Send</button></div>
               </div>
               <div class="trow invoice-grid">
-                <div><div class="cust">Vikram Patel</div><div class="sub">CUS-00003 · v.patel@email.com</div></div>
+                <div><div class="cust">Vikram Patel</div><div class="sub">100003 · v.patel@email.com</div></div>
                 <div>Full profile M3<div class="sub">Due May 28</div></div>
                 <div class="mono">$1,900</div>
                 <div><button class="btn primary">Send</button></div>
@@ -1397,16 +1397,38 @@ United States</textarea>
                 <div>Action</div>
               </div>
               <div class="trow payment-grid">
-                <div><div class="cust">Anjali Mehta</div><div class="sub">$1,425 received · ASC-2026-0061</div></div>
-                <div>name · email · amount</div>
-                <div><span class="status good">100</span></div>
+                <div><div class="cust">Sandeep K Singh</div><div class="sub">$120.00 received · 29182954384</div></div>
+                <div>name</div>
+                <div><span class="status good">50</span></div>
                 <div><button class="btn primary" onclick="showFrame('review')">Review &amp; apply</button></div>
               </div>
               <div class="trow payment-grid">
-                <div><div class="cust">Priya Sharma</div><div class="sub">$1,425 received · ASC-2026-0064</div></div>
-                <div>name · email · amount</div>
-                <div><span class="status good">100</span></div>
+                <div><div class="cust">Karthik Pamaraju</div><div class="sub">$15.00 received · 29122698607</div></div>
+                <div>name</div>
+                <div><span class="status good">50</span></div>
                 <div><button class="btn primary">Review &amp; apply</button></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="panel" style="margin-bottom:18px;">
+            <div class="section-head">
+              <h3>Completed transactions</h3>
+              <button class="btn ghost">Send receipt</button>
+            </div>
+            <div class="desc">Applying the money and sending the receipt are separate finance actions. Completed transactions stay visible so the operator can send or re-send the PDF receipt later.</div>
+            <div class="table">
+              <div class="trow head payment-grid">
+                <div>Customer</div>
+                <div>Transaction</div>
+                <div>Receipt status</div>
+                <div>Action</div>
+              </div>
+              <div class="trow payment-grid">
+                <div><div class="cust">Karthik Pamaraju</div><div class="sub">100009 · Invoice pending</div></div>
+                <div>Ref 29358007012<div class="sub">$16.20 · camping · applied 2:29 PM</div></div>
+                <div><span class="status good">PDF sent</span><div class="sub">lohith.deshpande@gmail.com</div></div>
+                <div><button class="btn">Re-send receipt</button></div>
               </div>
             </div>
           </div>
@@ -1422,16 +1444,10 @@ United States</textarea>
                 <div>Action</div>
               </div>
               <div class="trow exception-grid">
-                <div><div class="cust">Rahul Kapoor</div><div class="sub">no.reply.alerts@chase.com · May 25</div></div>
-                <div>Amount mismatch. Paid $1,800, expected $1,710. Transaction details are already saved.</div>
-                <div><span class="status warn">Review</span></div>
-                <div><button class="btn">Resolve</button></div>
-              </div>
-              <div class="trow exception-grid">
-                <div><div class="cust">R. Sharma</div><div class="sub">no.reply.alerts@chase.com · May 25</div></div>
-                <div>Ambiguous payer. Two customer candidates score closely and need human choice.</div>
-                <div><span class="status warn">Resolve</span></div>
-                <div><button class="btn">Resolve</button></div>
+                <div><div class="cust">No open exceptions</div><div class="sub">Current queue is clear</div></div>
+                <div>Manual customer match, duplicate blocking, and mismatch handling are available when a payment cannot move straight to apply.</div>
+                <div><span class="status good">Clear</span></div>
+                <div><button class="btn" disabled>Waiting</button></div>
               </div>
             </div>
           </div>
@@ -1446,7 +1462,7 @@ United States</textarea>
         <div class="review-head">
           <div>
             <h2>Review transaction before apply</h2>
-            <div class="sub">One click applies the payment, marks the invoice paid, updates referral progress, and sends the receipt to the customer’s primary email.</div>
+            <div class="sub">One click applies the payment and marks the invoice paid. Sending the customer receipt PDF happens separately from the completed-transactions ledger.</div>
           </div>
           <div class="topbar-right">
             <span class="status good">Match score 100</span>
@@ -1457,14 +1473,14 @@ United States</textarea>
           <div class="review-grid">
             <div class="detail-box">
               <h3>Captured transaction record</h3>
-              <div class="kv"><span class="k">Customer</span><span>Anjali Mehta</span></div>
-              <div class="kv"><span class="k">Customer ID</span><span class="mono">CUS-00002</span></div>
-              <div class="kv"><span class="k">Matched invoice</span><span class="mono">ASC-2026-0061</span></div>
-              <div class="kv"><span class="k">Amount received</span><span class="mono">$1,425.00</span></div>
+              <div class="kv"><span class="k">Customer</span><span>Karthik Pamaraju</span></div>
+              <div class="kv"><span class="k">Customer ID</span><span class="mono">100009</span></div>
+              <div class="kv"><span class="k">Matched invoice</span><span class="mono">Invoice pending</span></div>
+              <div class="kv"><span class="k">Amount received</span><span class="mono">$16.20</span></div>
               <div class="kv"><span class="k">Transaction date</span><span>May 26, 2026</span></div>
               <div class="kv"><span class="k">Transaction number</span><span class="mono">29358007012</span></div>
-              <div class="kv"><span class="k">Memo</span><span>authorship milestone</span></div>
-              <div class="kv"><span class="k">Matched signals</span><span>name, email, amount</span></div>
+              <div class="kv"><span class="k">Memo</span><span>camping</span></div>
+              <div class="kv"><span class="k">Matched signals</span><span>name</span></div>
               <div class="kv"><span class="k">Review status</span><span class="status good">Ready to apply</span></div>
             </div>
 
@@ -1472,13 +1488,17 @@ United States</textarea>
               <h3>Email metadata captured from sync</h3>
               <div class="kv"><span class="k">Subject</span><span>You received money with Zelle</span></div>
               <div class="kv"><span class="k">Message from</span><span>no.reply.alerts@chase.com</span></div>
-              <div class="kv"><span class="k">Message to</span><span>ops@setu.local</span></div>
+              <div class="kv"><span class="k">Message to</span><span>zelle.eb1a@gmail.com</span></div>
               <div class="kv"><span class="k">Header date</span><span>Mon, May 25, 2026 at 11:13 PM</span></div>
               <div class="kv"><span class="k">Payer name parsed</span><span>KARTHIK PAMARAJU</span></div>
               <div class="kv"><span class="k">Payer email parsed</span><span>Not present in message</span></div>
-              <div class="kv"><span class="k">Payer phone last 4</span><span class="mono">0124</span></div>
+              <div class="kv"><span class="k">Payer phone last 4</span><span class="mono">Not captured</span></div>
               <div class="kv"><span class="k">Source provider</span><span>gmail</span></div>
-              <div class="raw">CHASE
+              <div class="raw">Preview hidden by default
+
+Click to open raw extract
+
+CHASE
 
 Zelle payment
 KARTHIK PAMARAJU sent you money
@@ -1488,7 +1508,7 @@ Transaction number 29358007012
 Memo camping</div>
             </div>
           </div>
-          <div class="note-card">This is the key design decision: the system saves the full parsed transaction before posting any money. That means finance can review, explain, and audit every payment application later.</div>
+          <div class="note-card">This is the key design decision: the system saves the full parsed transaction before posting any money. That means finance can review, explain, and audit every payment application later. After apply, the receipt PDF can be sent or re-sent from Completed transactions.</div>
         </div>
         <div class="review-foot topbar-right">
           <button class="btn primary">Apply transaction</button>
@@ -1611,14 +1631,14 @@ Memo camping</div>
                 <div>Status</div>
               </div>
               <div class="trow admin-grid">
-                <div><div class="cust">Rohan Sharma</div><div class="sub">CUS-00001</div></div>
-                <div><div class="cust">Karthik Pamaraju</div><div class="sub">CUS-00008</div></div>
+                <div><div class="cust">Rohan Sharma</div><div class="sub">100001</div></div>
+                <div><div class="cust">Karthik Pamaraju</div><div class="sub">100009</div></div>
                 <div class="sub">$500 bonus after $3,000 paid or 6 months</div>
                 <div><span class="status warn">tracking</span></div>
               </div>
               <div class="trow admin-grid">
-                <div><div class="cust">Anjali Mehta</div><div class="sub">CUS-00002</div></div>
-                <div><div class="cust">Rahul Kapoor</div><div class="sub">CUS-00007</div></div>
+                <div><div class="cust">Anjali Mehta</div><div class="sub">100002</div></div>
+                <div><div class="cust">Rahul Kapoor</div><div class="sub">100007</div></div>
                 <div class="sub">$500 bonus after $3,000 paid or 6 months</div>
                 <div><span class="status good">awarded</span></div>
               </div>
@@ -1635,7 +1655,7 @@ Memo camping</div>
                 <div>Earned</div>
               </div>
               <div class="trow reward-grid">
-                <div><div class="cust">Anjali Mehta</div><div class="sub">CUS-00002</div></div>
+                <div><div class="cust">Anjali Mehta</div><div class="sub">100002</div></div>
                 <div><div class="mono">$500</div><div class="sub">Referral bonus</div></div>
                 <div><span class="status warn">available</span></div>
                 <div class="sub">May 28, 2026 9:40 AM</div>
@@ -1708,37 +1728,37 @@ Memo camping</div>
                 <div class="trow search-ledger-grid">
                   <div>
                     <button class="search-link" onclick="showFrame('search')">Rahul Kapoor</button>
-                    <div class="sub">CUS-00007 · Intake complete</div>
+                    <div class="sub">100007 · Intake complete</div>
                   </div>
                   <div><span class="status danger">Mismatch</span><div class="sub">Open exception review</div></div>
                   <div>r.kapoor@email.com<div class="sub">1 email on file</div></div>
                   <div>(847) 555-3092<div class="sub">1 phone on file</div></div>
                   <div>Judging<div class="sub">1 enrolled service</div></div>
-                  <div><b>Matched on name</b><div class="sub mono">ASC-2026-0058 · mismatch amount</div></div>
+                  <div><b>Matched on name</b><div class="sub mono">500058 · mismatch amount</div></div>
                   <div><button class="btn">360 view</button></div>
                 </div>
                 <div class="trow search-ledger-grid">
                   <div>
                     <button class="search-link" onclick="showFrame('search')">Anjali Mehta</button>
-                    <div class="sub">CUS-00002 · Intake complete</div>
+                    <div class="sub">100002 · Intake complete</div>
                   </div>
                   <div><span class="status good">Payment ready</span><div class="sub">Matched payment saved</div></div>
                   <div>anjali.mehta@email.com<div class="sub">2 emails on file</div></div>
                   <div>(312) 555-1180<div class="sub">1 phone on file</div></div>
                   <div>Authorship<div class="sub">2 enrolled services</div></div>
-                  <div><b>Matched on invoice</b><div class="sub mono">ASC-2026-0086 · Zelle alias saved</div></div>
+                  <div><b>Matched on invoice</b><div class="sub mono">500086 · Zelle alias saved</div></div>
                   <div><button class="btn">360 view</button></div>
                 </div>
                 <div class="trow search-ledger-grid">
                   <div>
                     <button class="search-link" onclick="showFrame('search')">Karthik Pamaraju</button>
-                    <div class="sub">CUS-00008 · Intake complete</div>
+                    <div class="sub">100009 · Intake complete</div>
                   </div>
                   <div><span class="status">Awaiting payment</span><div class="sub">Open invoice sent</div></div>
                   <div>k.pamaraju@email.com<div class="sub">1 email on file</div></div>
                   <div>(773) 555-0124<div class="sub">1 phone on file</div></div>
                   <div>Authorship<div class="sub">3 enrolled services</div></div>
-                  <div><b>Invoice context</b><div class="sub mono">ASC-2026-0033 · referred by CUS-00001</div></div>
+                  <div><b>Invoice context</b><div class="sub mono">500033 · referred by 100001</div></div>
                   <div><button class="btn">360 view</button></div>
                 </div>
               </div>
@@ -1753,14 +1773,14 @@ Memo camping</div>
               <div class="service-grid">
                 <div class="detail-box">
                   <h3>Rahul Kapoor</h3>
-                  <div class="kv"><span class="k">Customer ID</span><span class="mono">CUS-00007</span></div>
+                  <div class="kv"><span class="k">Customer ID</span><span class="mono">100007</span></div>
                   <div class="kv"><span class="k">Signed up</span><span>May 23, 2026 · 12:00 PM</span></div>
                   <div class="kv"><span class="k">Preferred payment</span><span>Zelle first</span></div>
                   <div class="kv"><span class="k">Billing cadence</span><span>Per milestone</span></div>
                 </div>
                 <div class="detail-box">
                   <h3>Invoice ledger</h3>
-                  <div class="kv"><span class="k">ASC-2026-0058</span><span class="status">Sent</span></div>
+                  <div class="kv"><span class="k">500058</span><span class="status">Sent</span></div>
                   <div class="kv"><span class="k">Service</span><span>Judging · M1</span></div>
                   <div class="kv"><span class="k">Expected</span><span class="mono">$1,710</span></div>
                 </div>
@@ -1787,7 +1807,7 @@ Memo camping</div>
   <section class="footer-cards">
     <div class="footer-card">
       <h4>Workflow order</h4>
-      <p>Onboard client, capture service history, create invoice, capture transaction, review, apply, and send receipt.</p>
+      <p>Onboard client, capture service history, create invoice, capture transaction, review, apply, and send the receipt PDF from completed transactions.</p>
     </div>
     <div class="footer-card">
       <h4>Transaction safety</h4>

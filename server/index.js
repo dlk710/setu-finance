@@ -9,6 +9,7 @@ import {
   loadState,
   prepareStateStore,
   resolveExceptionRecord,
+  sendReceiptForPaymentRecord,
   sendQueuedInvoice,
   updateReferralProgramSettings,
 } from "./stateStore.js";
@@ -231,16 +232,7 @@ app.post("/api/admin/referral-program", async (request, response, next) => {
 
 app.post("/api/payments/:paymentId/confirm", async (request, response, next) => {
   try {
-    const result = await confirmPendingPaymentRecord(
-      request.params.paymentId,
-      ({ customer, payment, invoice, recipient }) =>
-        sendReceiptEmail({
-          customer,
-          payment,
-          invoice,
-          to: recipient,
-        }),
-    );
+    const result = await confirmPendingPaymentRecord(request.params.paymentId);
 
     response.json({
       message: result.message,
@@ -257,7 +249,7 @@ app.post("/api/payments/confirm-all", async (_request, response, next) => {
     if (!queue.length) {
       const state = await loadState();
       response.json({
-        message: "No pending payments were waiting for confirmation.",
+        message: "No pending payments were waiting to be applied.",
         state: formatApiState(state),
       });
       return;
@@ -268,16 +260,7 @@ app.post("/api/payments/confirm-all", async (_request, response, next) => {
     let blockedCount = 0;
 
     for (const paymentId of queue) {
-      const result = await confirmPendingPaymentRecord(
-        paymentId,
-        ({ customer, payment, invoice, recipient }) =>
-          sendReceiptEmail({
-            customer,
-            payment,
-            invoice,
-            to: recipient,
-          }),
-      );
+      const result = await confirmPendingPaymentRecord(paymentId);
       latestState = result.state;
       if (result.applied === false) {
         blockedCount += 1;
@@ -290,8 +273,30 @@ app.post("/api/payments/confirm-all", async (_request, response, next) => {
       message:
         blockedCount > 0
           ? `${appliedCount} payment${appliedCount === 1 ? "" : "s"} applied. ${blockedCount} moved to exceptions as possible duplicates.`
-          : "All pending payments were confirmed and receipt emails were sent.",
+          : "All pending payments were applied.",
       state: formatApiState(latestState ?? (await loadState())),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/payments/:paymentId/send-receipt", async (request, response, next) => {
+  try {
+    const result = await sendReceiptForPaymentRecord(
+      request.params.paymentId,
+      ({ customer, payment, invoice, recipient }) =>
+        sendReceiptEmail({
+          customer,
+          payment,
+          invoice,
+          to: recipient,
+        }),
+    );
+
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
     });
   } catch (error) {
     next(error);

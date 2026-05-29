@@ -3,7 +3,7 @@
 Local full-stack prototype for:
 
 - onboarding clients before billing starts
-- sending invoice and receipt emails through SMTP
+- sending invoice emails and PDF receipt emails through SMTP
 - polling a Gmail inbox for Zelle-like confirmation emails
 - matching parsed payments into `Payments to confirm` or `Exceptions`
 - giving finance a spreadsheet-style customer register with a full 360 customer view
@@ -99,7 +99,12 @@ The repo includes the current-state product artifacts alongside the live code:
 
 - updated wireframe: [files/phase1_prototype.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/phase1_prototype.html)
 - business requirements handoff: [files/setu_phase1_requirements.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_phase1_requirements.html)
+- business pitch deck notes: [docs/pitch-deck.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/pitch-deck.md)
+- business pitch deck slides: [files/setu_finance_pitch_deck.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_finance_pitch_deck.html)
+- PowerPoint deck: [files/setu_finance_pitch_deck.pptx](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_finance_pitch_deck.pptx)
+- pitch deck builder: [scripts/build-setu-pitch-deck.mjs](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/scripts/build-setu-pitch-deck.mjs) for Codex presentation-runtime rebuilds
 - simple process flow: [docs/process-flow.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/process-flow.md)
+- detailed feature list: [docs/feature-list.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/feature-list.md)
 - non-technical requirements: [docs/non-technical-requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/non-technical-requirements.md)
 - low-cost AWS solution architecture: [docs/aws-solution-architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/aws-solution-architecture.md)
 - design system notes: [docs/design-system.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/design-system.md)
@@ -113,12 +118,34 @@ Edit [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/.env
 - `SMTP_URL`
 - or `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`
 
+If you use Gmail for outbound sending, `SMTP_PASS` must be a Gmail `App Password`, not the normal Gmail sign-in password.
+
 Also set:
 
 - `ZELLE_PAY_TO`
 - `CARD_PAYMENT_BASE_URL` if you want a card link included in invoice emails
 
-Once SMTP is configured, the billing console chip changes from `Email not configured` to `Email ready`, and send / confirm actions will send real mail.
+If the same email account is used for:
+
+- sending invoices and receipts
+- receiving Zelle confirmation emails
+- receiving Zelle payments
+
+then you can keep them aligned like this:
+
+- `SMTP_USER=your_email@gmail.com`
+- `SMTP_FROM="Setu Billing <your_email@gmail.com>"`
+- `ZELLE_PAY_TO=your_email@gmail.com`
+
+If `ZELLE_PAY_TO` is left blank, invoice emails now fall back to `SMTP_USER`, then the email inside `SMTP_FROM`.
+
+Once SMTP is configured, the billing console chip changes from `Email not configured` to `Email ready`.
+
+Current receipt flow:
+
+- apply the transaction first
+- then send or re-send the receipt separately from `Completed transactions`
+- the receipt email includes a PDF attachment with the amount, transaction number, payment date, invoice reference if available, memo, and confirmation timestamp
 
 ## Configure Gmail inbox sync
 
@@ -129,9 +156,24 @@ Once SMTP is configured, the billing console chip changes from `Email not config
    `npm run gmail:authorize`
 4. After the token is stored, use `Sync Zelle inbox` in the billing console.
 
+If outbound email and inbox sync use the same Gmail account, sign in during the OAuth step with that same mailbox.
+
+Current recommended Gmail filter:
+
+- `GMAIL_QUERY='in:inbox subject:"You received money with Zelle"'`
+
+This keeps the sync focused on the exact Zelle confirmation subject and ignores other inbox traffic.
+
 The app stores Gmail authorization at:
 
 - `server/credentials/gmail-token.json`
+
+Sync behavior:
+
+- the first sync uses `GMAIL_INITIAL_LOOKBACK_DAYS`
+- later syncs run incrementally from the last successful sync time
+- each incremental run rechecks a short overlap window using `GMAIL_SYNC_OVERLAP_MINUTES`
+- already-seen Gmail message IDs are still deduplicated in the database, so overlap does not double-apply transactions
 
 ## Notes
 

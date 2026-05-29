@@ -450,7 +450,9 @@
 
       <h4>Receipts and communication</h4>
       <ul>
-        <li>Once a transaction is applied, the receipt must go to the customer’s primary email on file.</li>
+        <li>Once a transaction is applied, the system must prepare a receipt for the customer’s primary email on file.</li>
+        <li>Applying the transaction and sending the receipt should remain separate actions so finance can re-send receipts later without re-posting money.</li>
+        <li>Receipts should be sent as a simple PDF attachment with key payment references such as amount, transaction number, memo, and applied date.</li>
         <li>The system should keep enough transaction detail to explain later how and why the payment was applied.</li>
       </ul>
 
@@ -516,8 +518,8 @@
           </div>
           <div class="flow-step">
             <div class="num">8</div>
-            <div class="title">Receipt and downstream updates</div>
-            <div class="note">The invoice is marked paid, a receipt is sent, and referral progress or rewards are updated.</div>
+            <div class="title">Completed transactions and receipt</div>
+            <div class="note">The invoice is marked paid, the transaction moves into a completed ledger, and finance can send or re-send the PDF receipt while referral progress or rewards update safely.</div>
           </div>
         </div>
       </div>

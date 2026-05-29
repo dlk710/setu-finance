@@ -26,12 +26,19 @@ function matchName(senderName, candidateName) {
   return senderLast === candidateLast && senderFirst[0] === candidateFirst[0];
 }
 
+function exactNameMatch(senderName, candidateName) {
+  const sender = normalizeName(senderName);
+  const candidate = normalizeName(candidateName);
+  return Boolean(sender && candidate && sender === candidate);
+}
+
 function formatCurrency(value) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
 }
 
 function buildCandidateNote(customer, invoice) {
@@ -218,6 +225,9 @@ export function matchPaymentToState(payment, state) {
       const nameMatched =
         matchName(payment.senderNameRaw, customer.name) ||
         customer.aliases.some((alias) => matchName(payment.senderNameRaw, alias.name));
+      const exactNameMatched =
+        exactNameMatch(payment.senderNameRaw, customer.name) ||
+        customer.aliases.some((alias) => exactNameMatch(payment.senderNameRaw, alias.name));
       const emailMatched =
         Boolean(payment.senderEmail) &&
         (customer.emails.some(({ value }) => value.toLowerCase() === payment.senderEmail.toLowerCase()) ||
@@ -233,7 +243,7 @@ export function matchPaymentToState(payment, state) {
 
       const openInvoices = findOpenInvoices(state, customer.id);
       const exactAmountInvoices = openInvoices.filter(
-        (invoice) => Math.round(invoice.zelleAmount) === Math.round(payment.amountReceived),
+        (invoice) => roundMoney(invoice.zelleAmount) === roundMoney(payment.amountReceived),
       );
 
       const amountMatched = exactAmountInvoices.length === 1;
@@ -257,6 +267,7 @@ export function matchPaymentToState(payment, state) {
         customer,
         openInvoices,
         matchedInvoice,
+        exactNameMatched,
         score,
         matchedSignals: buildMatchedSignals({
           nameMatched,
@@ -345,6 +356,34 @@ export function matchPaymentToState(payment, state) {
         invoiceId: expectedInvoice.id,
         summary: "Identity matched, but the payment amount did not match the stored expected Zelle amount",
         sourceMessageId: payment.sourceMessageId,
+      },
+    };
+  }
+
+  if (topCandidate.score >= 50 && topCandidate.exactNameMatched && !topCandidate.matchedInvoice) {
+    return {
+      kind: "pending",
+      payment: {
+        id: `pay-${payment.sourceMessageId || crypto.randomUUID()}`,
+        customerId: topCandidate.customer.id,
+        customerName: topCandidate.customer.name,
+        customerCode: topCandidate.customer.customerCode ?? null,
+        matchedSignals: topCandidate.matchedSignals,
+        score: topCandidate.score,
+        amountReceived: payment.amountReceived,
+        invoiceId: null,
+        matchedInvoiceCode: null,
+        sourceMessageId: payment.sourceMessageId,
+        senderEmail: payment.senderEmail,
+        senderPhoneLast4: payment.senderPhoneLast4,
+        senderNameRaw: payment.senderNameRaw,
+        receivedAt: payment.receivedAt,
+        matchSummary: buildMatchSummary({
+          customer: topCandidate.customer,
+          invoice: null,
+          matchedSignals: topCandidate.matchedSignals,
+          score: topCandidate.score,
+        }),
       },
     };
   }

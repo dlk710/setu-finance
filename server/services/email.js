@@ -1,10 +1,41 @@
 import nodemailer from "nodemailer";
 import { renderInvoiceEmail, renderReceiptEmail } from "./templates.js";
+import { buildReceiptPdfFilename, generateReceiptPdf } from "./receiptPdf.js";
 
 let cachedTransporter;
 
 function hasValue(value) {
   return Boolean(value && String(value).trim());
+}
+
+function isGmailTransport() {
+  const host = String(process.env.SMTP_HOST || "").trim().toLowerCase();
+  const user = String(process.env.SMTP_USER || "").trim().toLowerCase();
+  return host === "smtp.gmail.com" || user.endsWith("@gmail.com");
+}
+
+function getNormalizedSmtpPassword() {
+  const raw = String(process.env.SMTP_PASS || "");
+  const trimmed = raw.trim();
+
+  if (isGmailTransport()) {
+    return trimmed.replace(/\s+/g, "");
+  }
+
+  return trimmed;
+}
+
+function explainEmailError(error) {
+  if (error?.code === "EAUTH" && isGmailTransport()) {
+    const username = process.env.SMTP_USER?.trim() || "your Gmail account";
+    const authError = new Error(
+      `Gmail rejected the outbound login for ${username}. Use a Gmail App Password in SMTP_PASS; a normal Gmail password will not work.`,
+    );
+    authError.statusCode = 400;
+    return authError;
+  }
+
+  return error;
 }
 
 export function getEmailIntegrationStatus() {
@@ -44,22 +75,27 @@ function getTransporter() {
     secure: String(process.env.SMTP_SECURE || "").toLowerCase() === "true",
     auth: {
       user: process.env.SMTP_USER.trim(),
-      pass: process.env.SMTP_PASS.trim(),
+      pass: getNormalizedSmtpPassword(),
     },
   });
 
   return cachedTransporter;
 }
 
-async function sendMessage({ to, subject, text, html }) {
-  const transporter = getTransporter();
-  return transporter.sendMail({
-    from: process.env.SMTP_FROM.trim(),
-    to,
-    subject,
-    text,
-    html,
-  });
+async function sendMessage({ to, subject, text, html, attachments = [] }) {
+  try {
+    const transporter = getTransporter();
+    return await transporter.sendMail({
+      from: process.env.SMTP_FROM.trim(),
+      to,
+      subject,
+      text,
+      html,
+      attachments,
+    });
+  } catch (error) {
+    throw explainEmailError(error);
+  }
 }
 
 export async function sendInvoiceEmail({ customer, invoice, to }) {
@@ -72,8 +108,21 @@ export async function sendInvoiceEmail({ customer, invoice, to }) {
 
 export async function sendReceiptEmail({ customer, payment, invoice, to }) {
   const payload = renderReceiptEmail({ customer, payment, invoice });
+  const receiptPdf = await generateReceiptPdf({
+    customer,
+    payment,
+    invoice,
+    recipient: to,
+  });
   return sendMessage({
     to,
     ...payload,
+    attachments: [
+      {
+        filename: buildReceiptPdfFilename({ invoice, payment }),
+        content: receiptPdf,
+        contentType: "application/pdf",
+      },
+    ],
   });
 }

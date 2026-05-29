@@ -1,0 +1,844 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Setu Finance Pitch Deck</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --paper: rgba(255, 250, 242, 0.92);
+      --ink: #1d1a17;
+      --muted: #6f655b;
+      --line: rgba(67, 53, 42, 0.14);
+      --accent: #bc6c25;
+      --accent-soft: rgba(188, 108, 37, 0.12);
+      --accent-2: #275d4e;
+      --accent-3: #8f2d56;
+      --shadow: 0 24px 70px rgba(56, 43, 31, 0.12);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Aptos", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(188, 108, 37, 0.16), transparent 28%),
+        radial-gradient(circle at 85% 15%, rgba(39, 93, 78, 0.14), transparent 24%),
+        linear-gradient(160deg, #f8f2e8 0%, #f1ece5 44%, #ece6de 100%);
+      padding: 28px;
+    }
+
+    .shell {
+      max-width: 1380px;
+      margin: 0 auto;
+      display: grid;
+      gap: 18px;
+    }
+
+    .topbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 0 4px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .logo {
+      width: 44px;
+      height: 44px;
+      border-radius: 14px;
+      background: linear-gradient(160deg, var(--accent), #e8a84e);
+      display: grid;
+      place-items: center;
+      color: white;
+      font-size: 22px;
+      font-weight: 700;
+      box-shadow: 0 14px 28px rgba(188, 108, 37, 0.22);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-family: "Aptos Display", "Segoe UI", sans-serif;
+      font-size: 26px;
+    }
+
+    .brand p,
+    .meta {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .deck {
+      position: relative;
+      overflow: hidden;
+      min-height: 760px;
+      border-radius: 30px;
+      background: var(--paper);
+      border: 1px solid rgba(255, 255, 255, 0.75);
+      box-shadow: var(--shadow);
+    }
+
+    .slide {
+      display: none;
+      min-height: 760px;
+      padding: 56px 64px;
+      grid-template-rows: auto 1fr auto;
+      gap: 26px;
+      background:
+        linear-gradient(140deg, rgba(255, 255, 255, 0.72), rgba(255, 249, 239, 0.94)),
+        linear-gradient(180deg, rgba(188, 108, 37, 0.03), transparent 38%);
+    }
+
+    .slide.active {
+      display: grid;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .eyebrow::before {
+      content: "";
+      width: 36px;
+      height: 2px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), transparent);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: 1.18fr 0.82fr;
+      gap: 34px;
+      align-items: center;
+    }
+
+    .hero h2,
+    .slide h2 {
+      margin: 0;
+      font-family: "Aptos Display", "Segoe UI", sans-serif;
+      font-size: 54px;
+      line-height: 1.04;
+      letter-spacing: -0.04em;
+    }
+
+    .slide h2 {
+      font-size: 42px;
+    }
+
+    .hero p,
+    .lede {
+      margin: 16px 0 0;
+      font-size: 20px;
+      line-height: 1.62;
+      color: #4d453f;
+      max-width: 820px;
+    }
+
+    .stat-panel,
+    .quote-panel,
+    .mini-card,
+    .feature-card,
+    .metric,
+    .flow-step,
+    .arch-card,
+    .value-card {
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      box-shadow: 0 12px 30px rgba(65, 52, 40, 0.05);
+    }
+
+    .stat-panel {
+      padding: 28px;
+      display: grid;
+      gap: 16px;
+      align-content: start;
+    }
+
+    .stat-grid,
+    .feature-grid,
+    .value-grid,
+    .metric-grid,
+    .arch-grid {
+      display: grid;
+      gap: 18px;
+    }
+
+    .stat-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .metric-grid,
+    .value-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .feature-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .metric,
+    .mini-card,
+    .feature-card,
+    .value-card,
+    .arch-card {
+      padding: 20px;
+    }
+
+    .metric strong,
+    .stat-number {
+      display: block;
+      font-size: 34px;
+      font-weight: 700;
+      color: var(--accent);
+      line-height: 1.05;
+    }
+
+    .metric span,
+    .mini-card p,
+    .feature-card p,
+    .arch-card p,
+    .value-card p {
+      color: var(--muted);
+      line-height: 1.55;
+      margin: 10px 0 0;
+      font-size: 15px;
+    }
+
+    .section {
+      display: grid;
+      gap: 22px;
+      align-content: start;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 0.9fr 1.1fr;
+      gap: 24px;
+    }
+
+    .big-list,
+    .number-list {
+      display: grid;
+      gap: 16px;
+      margin-top: 6px;
+    }
+
+    .big-list li,
+    .number-list li {
+      list-style: none;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 14px;
+      align-items: start;
+      padding: 16px 18px;
+      border-radius: 18px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.58);
+    }
+
+    .bullet,
+    .num {
+      width: 34px;
+      height: 34px;
+      border-radius: 12px;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      color: white;
+      background: linear-gradient(160deg, var(--accent), #d68439);
+      flex-shrink: 0;
+    }
+
+    .num {
+      border-radius: 50%;
+      background: linear-gradient(160deg, var(--accent-2), #459276);
+    }
+
+    .caption {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .quote-panel {
+      padding: 22px 24px;
+      border-left: 6px solid var(--accent-3);
+      font-size: 19px;
+      line-height: 1.6;
+      color: #382f29;
+    }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .flow-step {
+      padding: 18px;
+      display: grid;
+      gap: 12px;
+      align-content: start;
+    }
+
+    .flow-step h3,
+    .feature-card h3,
+    .value-card h3,
+    .arch-card h3,
+    .mini-card h3 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .flow-step p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .flow-step .num {
+      width: 40px;
+      height: 40px;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .tag {
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 14px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .controls {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding: 0 4px;
+    }
+
+    .dots {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(103, 91, 80, 0.2);
+      transition: transform 0.2s ease, background 0.2s ease;
+    }
+
+    .dot.active {
+      background: var(--accent);
+      transform: scale(1.2);
+    }
+
+    .btn-row {
+      display: flex;
+      gap: 12px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      background: white;
+      color: var(--ink);
+      font-weight: 700;
+      box-shadow: 0 10px 22px rgba(43, 35, 28, 0.08);
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: linear-gradient(160deg, var(--accent), #d68439);
+      color: white;
+    }
+
+    .accent-bar {
+      height: 10px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), #efb366, #f5d9a9);
+      margin-top: 12px;
+    }
+
+    @media (max-width: 1100px) {
+      .hero,
+      .split,
+      .flow,
+      .metric-grid,
+      .feature-grid,
+      .value-grid,
+      .arch-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .slide {
+        padding: 42px 28px;
+      }
+
+      .hero h2,
+      .slide h2 {
+        font-size: 34px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <div class="topbar">
+      <div class="brand">
+        <div class="logo">S</div>
+        <div>
+          <h1>Setu Finance</h1>
+          <p>Business pitch deck · current-state product story</p>
+        </div>
+      </div>
+      <div class="meta">10-slide deck · use arrow keys or buttons</div>
+    </div>
+
+    <div class="deck">
+      <section class="slide active">
+        <div class="eyebrow">Slide 1 · Overview</div>
+        <div class="hero">
+          <div>
+            <h2>One finance operations system for onboarding, invoicing, payment review, and receipts.</h2>
+            <p>Setu Finance turns a fragmented workflow into one controlled operating path with queue-based review, structured Zelle capture, customer-level visibility, and receipt delivery from a single portal.</p>
+            <div class="tag-row" style="margin-top: 22px;">
+              <span class="tag">Postgres-backed</span>
+              <span class="tag">Gmail sync enabled</span>
+              <span class="tag">PDF receipts live</span>
+              <span class="tag">Business-ready prototype</span>
+            </div>
+          </div>
+          <div class="stat-panel">
+            <div class="caption">Current product state</div>
+            <div class="stat-grid">
+              <div class="metric">
+                <strong>360</strong>
+                <span>Customer view with signup date, invoices, payments, referrals, and billing context</span>
+              </div>
+              <div class="metric">
+                <strong>1 click</strong>
+                <span>Human apply action after the portal prepares a reviewable transaction record</span>
+              </div>
+              <div class="metric">
+                <strong>PDF</strong>
+                <span>Receipts can be sent or re-sent from completed transactions without changing the ledger</span>
+              </div>
+              <div class="metric">
+                <strong>AWS-ready</strong>
+                <span>Low-cost path already mapped for S3, App Runner, RDS, SQS, Lambda, and SES</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Setu Finance business story</span>
+          <span>Finance operations foundation, not just an invoice screen</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 2 · Problem</div>
+        <div class="section">
+          <h2>Finance teams are stitching together customer data, invoices, inbox threads, and memory.</h2>
+          <div class="split">
+            <div>
+              <ul class="big-list">
+                <li><span class="bullet">1</span><div><strong>Onboarding is disconnected.</strong><br />Customer details, services, and billing intent are often not captured once in a durable way.</div></li>
+                <li><span class="bullet">2</span><div><strong>Payment evidence lives in email.</strong><br />Zelle confirmations arrive in inboxes, not in a structured operations system.</div></li>
+                <li><span class="bullet">3</span><div><strong>Receipts and follow-up are manual.</strong><br />Finance teams re-open threads, re-check amounts, and risk inconsistent customer communication.</div></li>
+              </ul>
+            </div>
+            <div class="quote-panel">
+              The cost is not just time. It is also audit risk, duplicate handling risk, and weak visibility into who has paid, who needs follow-up, and where exceptions are getting stuck.
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Business pain today</span>
+          <span>High manual effort + high risk of operational drift</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 3 · Solution</div>
+        <div class="section">
+          <h2>Setu Finance creates one operating path from client signup to confirmed receipt.</h2>
+          <p class="lede">The product keeps the finance team in control while still automating the expensive and repetitive parts of the work.</p>
+          <div class="feature-grid">
+            <div class="feature-card">
+              <h3>Structured client onboarding</h3>
+              <p>Required identity details, optional address, referral source, and dated service enrollments become the finance record from day one.</p>
+            </div>
+            <div class="feature-card">
+              <h3>Invoice flow tied to the customer record</h3>
+              <p>Invoices reuse enrolled services and saved contacts instead of re-keying basic information every time.</p>
+            </div>
+            <div class="feature-card">
+              <h3>Zelle email capture</h3>
+              <p>Inbox sync saves amount, date, memo, transaction number, payer hints, and raw extract into one transaction record.</p>
+            </div>
+            <div class="feature-card">
+              <h3>Human-controlled payment apply</h3>
+              <p>The matching engine prepares the transaction, but finance still decides when to post it into the ledger.</p>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Design principle</span>
+          <span>Automate the preparation, not the financial judgment</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 4 · Process Flow</div>
+        <div class="section">
+          <h2>Simple business flow</h2>
+          <div class="flow">
+            <div class="flow-step">
+              <div class="num">1</div>
+              <h3>Onboard client</h3>
+              <p>Create the customer record with required contact details, services, referral source, and home address when available.</p>
+            </div>
+            <div class="flow-step">
+              <div class="num">2</div>
+              <h3>Create invoice</h3>
+              <p>Build the invoice from enrolled services and saved customer data, then send it by email.</p>
+            </div>
+            <div class="flow-step">
+              <div class="num">3</div>
+              <h3>Sync or save transaction</h3>
+              <p>Bring Zelle confirmation details into the portal as a structured transaction record.</p>
+            </div>
+            <div class="flow-step">
+              <div class="num">4</div>
+              <h3>Match and queue</h3>
+              <p>Clear matches go to payments to confirm. Mismatches, duplicates, and ambiguity go to exceptions.</p>
+            </div>
+            <div class="flow-step">
+              <div class="num">5</div>
+              <h3>Apply transaction</h3>
+              <p>A finance user completes the final ledger action with one click after reviewing the prepared record.</p>
+            </div>
+            <div class="flow-step">
+              <div class="num">6</div>
+              <h3>Completed transactions</h3>
+              <p>The transaction remains visible after apply so finance can send or re-send the receipt later.</p>
+            </div>
+            <div class="flow-step">
+              <div class="num">7</div>
+              <h3>Send PDF receipt</h3>
+              <p>Receipt goes to the customer’s primary email with amount, transaction number, memo, dates, and invoice reference when available.</p>
+            </div>
+            <div class="flow-step">
+              <div class="num">8</div>
+              <h3>Update visibility</h3>
+              <p>Dashboard totals, activity history, invoice status, and referral progress update from the applied record.</p>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Simple explanation for business teams</span>
+          <span>Capture → review → apply → communicate</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 5 · Feature Set</div>
+        <div class="section">
+          <h2>The product already spans more than billing.</h2>
+          <div class="metric-grid">
+            <div class="mini-card">
+              <div class="caption">Onboarding</div>
+              <h3>Customer creation first</h3>
+              <p>Mandatory first name, last name, email, phone, and services. Optional address, payment preferences, referral source, and notes.</p>
+            </div>
+            <div class="mini-card">
+              <div class="caption">Customer register</div>
+              <h3>Excel-like search</h3>
+              <p>Search by customer ID, name, email, or phone with clear account status and a 360 customer drill-down.</p>
+            </div>
+            <div class="mini-card">
+              <div class="caption">Invoicing</div>
+              <h3>Service-aware creation</h3>
+              <p>Numeric invoice IDs, service defaults, draft or send flow, and email delivery from the configured mailbox.</p>
+            </div>
+            <div class="mini-card">
+              <div class="caption">Transactions</div>
+              <h3>Inbox-backed capture</h3>
+              <p>Syncs emails with subject line <em>You received money with Zelle</em> and stores the full structured transaction record.</p>
+            </div>
+            <div class="mini-card">
+              <div class="caption">Controls</div>
+              <h3>Exceptions and duplicates</h3>
+              <p>Duplicate protection, exception reassignment, raw extract review, and manual customer matching keep the ledger safe.</p>
+            </div>
+            <div class="mini-card">
+              <div class="caption">Communication</div>
+              <h3>PDF receipts</h3>
+              <p>Apply the transaction first, then send or re-send the PDF receipt separately from completed transactions.</p>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Feature philosophy</span>
+          <span>Build the finance operating system, not a point workflow</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 6 · Controls</div>
+        <div class="section">
+          <h2>Checks and balances are built into the operating model.</h2>
+          <div class="split">
+            <div>
+              <ul class="big-list">
+                <li><span class="bullet">A</span><div><strong>Saved before applied.</strong><br />Every synced transaction is captured as a durable record before finance posts it.</div></li>
+                <li><span class="bullet">B</span><div><strong>Duplicates do not recount.</strong><br />Message ID, transaction reference, and invoice-level checks keep the same payment from being counted twice.</div></li>
+                <li><span class="bullet">C</span><div><strong>Exceptions remain actionable.</strong><br />Finance can manually match a transaction to an existing customer and move it forward safely.</div></li>
+              </ul>
+            </div>
+            <div>
+              <div class="value-grid">
+                <div class="value-card">
+                  <h3>Audit trail</h3>
+                  <p>Activity history shows when a payment was captured, applied, and when the receipt was sent.</p>
+                </div>
+                <div class="value-card">
+                  <h3>Separated actions</h3>
+                  <p>Receipt send is a distinct button, which prevents accidental re-posting of money.</p>
+                </div>
+                <div class="value-card">
+                  <h3>Historical integrity</h3>
+                  <p>Service enrollments and referral rules are append-only or snapshot-based for reliable backtracking.</p>
+                </div>
+              </div>
+              <div class="accent-bar"></div>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Control model</span>
+          <span>Operational speed with explainable financial decisions</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 7 · Current State</div>
+        <div class="section">
+          <h2>What is already live in the current product</h2>
+          <div class="value-grid">
+            <div class="value-card">
+              <h3>Authenticated portal</h3>
+              <p>Username/password gate protects access before finance data loads.</p>
+            </div>
+            <div class="value-card">
+              <h3>Postgres system of record</h3>
+              <p>Customers, invoices, payments, exceptions, referral logic, and activity history persist in a normalized database.</p>
+            </div>
+            <div class="value-card">
+              <h3>Gmail sync</h3>
+              <p>The portal already reads the authorized mailbox and filters on the Zelle confirmation subject line.</p>
+            </div>
+            <div class="value-card">
+              <h3>Completed transaction ledger</h3>
+              <p>Applied payments remain visible with separate receipt-send status and timestamps.</p>
+            </div>
+            <div class="value-card">
+              <h3>Customer 360 view</h3>
+              <p>Operators can open one record and see signup date, contacts, services, invoice ledger, transaction history, referrals, and contract notes.</p>
+            </div>
+            <div class="value-card">
+              <h3>Dashboard trends</h3>
+              <p>Received amounts can be summarized by day, week, month, or year from saved applied transactions.</p>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Status</span>
+          <span>Working prototype with real sync, real DB, and real outbound receipt delivery</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 8 · Value</div>
+        <div class="section">
+          <h2>Business value comes from compression of workflow, visibility, and control.</h2>
+          <div class="metric-grid">
+            <div class="metric">
+              <strong>Lower effort</strong>
+              <span>One portal replaces handoffs between spreadsheets, inbox searches, and scattered notes.</span>
+            </div>
+            <div class="metric">
+              <strong>Lower risk</strong>
+              <span>Human review, duplicate protection, and explainable transaction records reduce posting errors.</span>
+            </div>
+            <div class="metric">
+              <strong>Better experience</strong>
+              <span>Customers get faster confirmation through a structured invoice and receipt workflow.</span>
+            </div>
+          </div>
+          <div class="quote-panel">
+            The strongest business case is not just “faster invoicing.” It is a controlled finance operations system that can scale with more customers, more products, and more payment volume without increasing chaos.
+          </div>
+        </div>
+        <div class="footer">
+          <span>Value lens</span>
+          <span>Efficiency + trust + scalability</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 9 · Architecture</div>
+        <div class="section">
+          <h2>Low-cost AWS path without losing product behavior</h2>
+          <div class="arch-grid">
+            <div class="arch-card">
+              <h3>Frontend</h3>
+              <p>Host the portal on Amazon S3 with CloudFront for low fixed cost and simple HTTPS delivery.</p>
+            </div>
+            <div class="arch-card">
+              <h3>API layer</h3>
+              <p>Move the current Node/Express backend to AWS App Runner for a low-ops managed runtime.</p>
+            </div>
+            <div class="arch-card">
+              <h3>System of record</h3>
+              <p>Use Amazon RDS for PostgreSQL as the managed operational database.</p>
+            </div>
+            <div class="arch-card">
+              <h3>Jobs and sync</h3>
+              <p>Use EventBridge, SQS, and Lambda for scheduled inbox sync, retryable processing, and async email jobs.</p>
+            </div>
+            <div class="arch-card">
+              <h3>Email</h3>
+              <p>Use Amazon SES for lower-cost invoice and receipt sending once the product moves off Gmail SMTP.</p>
+            </div>
+            <div class="arch-card">
+              <h3>Security and monitoring</h3>
+              <p>Keep secrets in Parameter Store or Secrets Manager and use CloudWatch for logs and alarms.</p>
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Deployment posture</span>
+          <span>Managed, usage-aware, and ready for broader suite growth</span>
+        </div>
+      </section>
+
+      <section class="slide">
+        <div class="eyebrow">Slide 10 · Ask</div>
+        <div class="hero">
+          <div>
+            <h2>Use Setu Finance as the finance operations foundation for the next phase.</h2>
+            <p>It already demonstrates the critical workflow: onboard the customer, create and send the invoice, capture and review the payment, apply it safely, and send the receipt from one system of record.</p>
+            <div class="number-list" style="margin-top: 26px;">
+              <li><span class="num">1</span><div><strong>Approve the operating model.</strong><br />Use the current portal as the blueprint for finance workflow design.</div></li>
+              <li><span class="num">2</span><div><strong>Prioritize production hardening.</strong><br />Focus next on deployment, admin tooling, and broader payment-source integrations.</div></li>
+              <li><span class="num">3</span><div><strong>Expand from portal to suite.</strong><br />Use the customer, invoice, and transaction foundation to support adjacent products later.</div></li>
+            </div>
+          </div>
+          <div class="stat-panel">
+            <div class="caption">Final takeaway</div>
+            <div class="quote-panel" style="border-left-color: var(--accent);">
+              Setu Finance is already more than a mockup. It is a working finance operations product with the right controls to become the backbone for a larger product suite.
+            </div>
+          </div>
+        </div>
+        <div class="footer">
+          <span>Decision frame</span>
+          <span>Adopt the workflow now, industrialize the stack next</span>
+        </div>
+      </section>
+    </div>
+
+    <div class="controls">
+      <div class="dots" id="dots"></div>
+      <div class="btn-row">
+        <button id="prevBtn">Previous</button>
+        <button id="nextBtn" class="primary">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const slides = Array.from(document.querySelectorAll(".slide"));
+    const dotsContainer = document.getElementById("dots");
+    const dots = slides.map((_, index) => {
+      const dot = document.createElement("button");
+      dot.className = "dot";
+      dot.type = "button";
+      dot.setAttribute("aria-label", "Go to slide " + (index + 1));
+      dot.addEventListener("click", () => showSlide(index));
+      dotsContainer.appendChild(dot);
+      return dot;
+    });
+
+    let activeIndex = 0;
+
+    function showSlide(index) {
+      activeIndex = (index + slides.length) % slides.length;
+      slides.forEach((slide, slideIndex) => {
+        slide.classList.toggle("active", slideIndex === activeIndex);
+      });
+      dots.forEach((dot, dotIndex) => {
+        dot.classList.toggle("active", dotIndex === activeIndex);
+      });
+    }
+
+    document.getElementById("prevBtn").addEventListener("click", () => showSlide(activeIndex - 1));
+    document.getElementById("nextBtn").addEventListener("click", () => showSlide(activeIndex + 1));
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowRight" || event.key === "PageDown") showSlide(activeIndex + 1);
+      if (event.key === "ArrowLeft" || event.key === "PageUp") showSlide(activeIndex - 1);
+    });
+
+    showSlide(0);
+  </script>
+</body>
+</html>

@@ -1,5 +1,101 @@
+const CUSTOMER_CODE_BASE = 100000;
+const INVOICE_CODE_BASE = 500000;
+const LEGACY_CUSTOMER_CODE_BASE = 1000000000;
+const LEGACY_INVOICE_CODE_BASE = 7000000000;
+
+function makeFixedLengthNumericCode(base, sequence, width) {
+  const numeric = Number(base) + Number(sequence || 0);
+  return String(numeric).padStart(width, "0");
+}
+
+function extractTrailingDigits(value) {
+  const match = String(value || "").trim().match(/(\d+)(?!.*\d)/);
+  if (!match) {
+    return null;
+  }
+
+  const numeric = Number(match[1]);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+export function extractCustomerSequence(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^\d{6}$/.test(raw)) {
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) ? numeric - CUSTOMER_CODE_BASE : null;
+  }
+
+  if (/^\d{10}$/.test(raw)) {
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) ? numeric - LEGACY_CUSTOMER_CODE_BASE : null;
+  }
+
+  return extractTrailingDigits(raw);
+}
+
+export function extractInvoiceSequence(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^\d{6}$/.test(raw)) {
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) ? numeric - INVOICE_CODE_BASE : null;
+  }
+
+  if (/^\d{10}$/.test(raw)) {
+    const numeric = Number(raw);
+    return Number.isFinite(numeric) ? numeric - LEGACY_INVOICE_CODE_BASE : null;
+  }
+
+  return extractTrailingDigits(raw);
+}
+
+export function makeCustomerCode(sequence) {
+  return makeFixedLengthNumericCode(CUSTOMER_CODE_BASE, sequence, 6);
+}
+
 function makeInvoiceCode(sequence) {
-  return `ASC-2026-${String(sequence).padStart(4, "0")}`;
+  return makeFixedLengthNumericCode(INVOICE_CODE_BASE, sequence, 6);
+}
+
+export function normalizeCustomerCode(value, fallbackSequence = null) {
+  const raw = String(value || "").trim();
+  if (/^\d{6}$/.test(raw)) {
+    return raw;
+  }
+
+  const sequence = extractCustomerSequence(raw) ?? fallbackSequence;
+  return Number.isFinite(sequence) && sequence > 0 ? makeCustomerCode(sequence) : null;
+}
+
+export function normalizeInvoiceCode(value, fallbackSequence = null) {
+  const raw = String(value || "").trim();
+  if (/^\d{6}$/.test(raw)) {
+    return raw;
+  }
+
+  const sequence = extractInvoiceSequence(raw) ?? fallbackSequence;
+  return Number.isFinite(sequence) && sequence > 0 ? makeInvoiceCode(sequence) : null;
+}
+
+function replaceIdentifierText(text, replacements) {
+  if (!text) {
+    return text;
+  }
+
+  return replacements.reduce((result, [from, to]) => {
+    if (!from || !to || from === to) {
+      return result;
+    }
+
+    return result.split(from).join(to);
+  }, String(text));
 }
 
 function buildServiceHistory(seedPrefix, services, startedAt) {
@@ -681,26 +777,149 @@ const seedAdmin = {
 
 const seedAllPayments = [...seedPendingPayments, ...seedPayments];
 
-export function createInitialState() {
-  return structuredClone({
-    customers: seedCustomers,
-    dashboard: seedDashboard,
-    dueInvoices: seedDueInvoices,
-    pendingPayments: seedPendingPayments,
-    exceptions: seedExceptions,
-    invoices: seedInvoices,
-    payments: seedAllPayments,
-    processedMessageIds: [],
-    activity: seedActivity,
-    nextInvoiceSequence: 91,
-    integrations: {
-      gmail: {
-        lastSyncAt: null,
-        lastSyncSummary: null,
-      },
-    },
-    admin: seedAdmin,
+export function normalizeSeedIdentifiers(state) {
+  const customerCodeMap = new Map();
+  const invoiceCodeMap = new Map();
+
+  state.customers = (state.customers ?? []).map((customer, index) => {
+    const normalizedCustomerCode = normalizeCustomerCode(customer.customerCode, index + 1);
+    if (customer.customerCode) {
+      customerCodeMap.set(customer.customerCode, normalizedCustomerCode);
+    }
+
+    const normalizedInvoices = (customer.invoices ?? []).map((invoiceCode) => {
+      const normalizedInvoiceCode = normalizeInvoiceCode(invoiceCode);
+      if (invoiceCode) {
+        invoiceCodeMap.set(invoiceCode, normalizedInvoiceCode);
+      }
+      return normalizedInvoiceCode;
+    });
+
+    return {
+      ...customer,
+      customerCode: normalizedCustomerCode,
+      invoices: normalizedInvoices,
+    };
   });
+
+  state.dueInvoices = (state.dueInvoices ?? []).map((invoice) => {
+    const normalizedInvoiceCode = normalizeInvoiceCode(invoice.invoiceCode);
+    if (invoice.invoiceCode) {
+      invoiceCodeMap.set(invoice.invoiceCode, normalizedInvoiceCode);
+    }
+
+    return {
+      ...invoice,
+      invoiceCode: normalizedInvoiceCode,
+    };
+  });
+
+  state.invoices = (state.invoices ?? []).map((invoice) => {
+    const normalizedInvoiceCode = normalizeInvoiceCode(invoice.invoiceCode);
+    if (invoice.invoiceCode) {
+      invoiceCodeMap.set(invoice.invoiceCode, normalizedInvoiceCode);
+    }
+
+    return {
+      ...invoice,
+      invoiceCode: normalizedInvoiceCode,
+    };
+  });
+
+  const textReplacements = [
+    ...[...customerCodeMap.entries()].filter(([, normalized]) => normalized),
+    ...[...invoiceCodeMap.entries()].filter(([, normalized]) => normalized),
+  ];
+
+  const normalizePaymentRecord = (payment) => ({
+    ...payment,
+    customerCode: normalizeCustomerCode(payment.customerCode) ?? payment.customerCode ?? null,
+    matchedInvoiceCode:
+      invoiceCodeMap.get(payment.matchedInvoiceCode) ??
+      normalizeInvoiceCode(payment.matchedInvoiceCode) ??
+      payment.matchedInvoiceCode ??
+      null,
+    matchSummary: replaceIdentifierText(payment.matchSummary, textReplacements),
+  });
+
+  state.pendingPayments = (state.pendingPayments ?? []).map(normalizePaymentRecord);
+  state.payments = (state.payments ?? []).map(normalizePaymentRecord);
+
+  state.exceptions = (state.exceptions ?? []).map((exception) => ({
+    ...exception,
+    customerCode: normalizeCustomerCode(exception.customerCode) ?? exception.customerCode ?? null,
+    matchedInvoiceCode:
+      invoiceCodeMap.get(exception.matchedInvoiceCode) ??
+      normalizeInvoiceCode(exception.matchedInvoiceCode) ??
+      exception.matchedInvoiceCode ??
+      null,
+    summary: replaceIdentifierText(exception.summary, textReplacements),
+    candidates: (exception.candidates ?? []).map((candidate) => ({
+      ...candidate,
+      note: replaceIdentifierText(candidate.note, textReplacements),
+    })),
+  }));
+
+  state.admin = {
+    ...(state.admin ?? {}),
+    referrals: (state.admin?.referrals ?? []).map((referral) => ({
+      ...referral,
+      referrerCustomerCode:
+        customerCodeMap.get(referral.referrerCustomerCode) ??
+        normalizeCustomerCode(referral.referrerCustomerCode) ??
+        referral.referrerCustomerCode ??
+        null,
+      referredCustomerCode:
+        customerCodeMap.get(referral.referredCustomerCode) ??
+        normalizeCustomerCode(referral.referredCustomerCode) ??
+        referral.referredCustomerCode ??
+        null,
+    })),
+    rewards: (state.admin?.rewards ?? []).map((reward) => ({
+      ...reward,
+      customerCode:
+        customerCodeMap.get(reward.customerCode) ??
+        normalizeCustomerCode(reward.customerCode) ??
+        reward.customerCode ??
+        null,
+    })),
+  };
+
+  const derivedNextInvoiceSequence = [
+    ...(state.invoices ?? []).map((invoice) => extractInvoiceSequence(invoice.invoiceCode)),
+    ...(state.dueInvoices ?? []).map((invoice) => extractInvoiceSequence(invoice.invoiceCode)),
+    ...(state.customers ?? []).flatMap((customer) =>
+      (customer.invoices ?? []).map((invoiceCode) => extractInvoiceSequence(invoiceCode)),
+    ),
+  ].reduce((max, numeric) => (Number.isFinite(numeric) ? Math.max(max, numeric) : max), 0);
+
+  state.nextInvoiceSequence = Math.max(Number(state.nextInvoiceSequence || 1), derivedNextInvoiceSequence + 1);
+
+  return state;
+}
+
+export function createInitialState() {
+  return normalizeSeedIdentifiers(
+    structuredClone({
+      customers: seedCustomers,
+      dashboard: seedDashboard,
+      dueInvoices: seedDueInvoices,
+      pendingPayments: seedPendingPayments,
+      exceptions: seedExceptions,
+      invoices: seedInvoices,
+      payments: seedAllPayments,
+      processedMessageIds: [],
+      activity: seedActivity,
+      nextInvoiceSequence: 91,
+      integrations: {
+        gmail: {
+          lastSyncAt: null,
+          lastSyncSummary: null,
+        },
+      },
+      admin: seedAdmin,
+    }),
+  );
 }
 
 export function createInvoiceRefPreview(sequence) {

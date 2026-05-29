@@ -2,6 +2,10 @@ import { google } from "googleapis";
 import { authorizeGmail, getGmailIntegrationStatus } from "./gmailAuth.js";
 import { matchPaymentToState } from "./matching.js";
 
+const DEFAULT_GMAIL_QUERY = '(zelle OR "sent you money" OR "payment from" OR "paid you")';
+const DEFAULT_INITIAL_LOOKBACK_DAYS = 14;
+const DEFAULT_SYNC_OVERLAP_MINUTES = 15;
+
 function decodeBase64Url(value) {
   if (!value) {
     return "";
@@ -295,12 +299,62 @@ function buildSyncMessage(summary) {
   return pieces.join(" · ");
 }
 
+function parsePositiveInteger(value, fallback) {
+  const numeric = Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
+}
+
+function stripTemporalFilters(query) {
+  return String(query || "")
+    .replace(/\bnewer_than:\S+/gi, " ")
+    .replace(/\bolder_than:\S+/gi, " ")
+    .replace(/\bafter:\S+/gi, " ")
+    .replace(/\bbefore:\S+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function deriveIncrementalWindow(state) {
+  const now = new Date();
+  const overlapMinutes = parsePositiveInteger(
+    process.env.GMAIL_SYNC_OVERLAP_MINUTES,
+    DEFAULT_SYNC_OVERLAP_MINUTES,
+  );
+  const initialLookbackDays = parsePositiveInteger(
+    process.env.GMAIL_INITIAL_LOOKBACK_DAYS,
+    DEFAULT_INITIAL_LOOKBACK_DAYS,
+  );
+  const lastSyncAtRaw = state.integrations?.gmail?.lastSyncAt ?? null;
+  const lastSyncAt = lastSyncAtRaw ? new Date(lastSyncAtRaw) : null;
+  const hasValidLastSync = lastSyncAt && !Number.isNaN(lastSyncAt.getTime());
+
+  const windowStart = hasValidLastSync
+    ? new Date(lastSyncAt.getTime() - overlapMinutes * 60 * 1000)
+    : new Date(now.getTime() - initialLookbackDays * 24 * 60 * 60 * 1000);
+
+  return {
+    mode: hasValidLastSync ? "incremental" : "bootstrap",
+    overlapMinutes,
+    initialLookbackDays,
+    startedAfter: windowStart.toISOString(),
+    startedAfterEpochSeconds: Math.floor(windowStart.getTime() / 1000),
+  };
+}
+
+function buildIncrementalQuery(state) {
+  const baseQuery = stripTemporalFilters(process.env.GMAIL_QUERY?.trim() || DEFAULT_GMAIL_QUERY);
+  const window = deriveIncrementalWindow(state);
+  const query = `${baseQuery} after:${window.startedAfterEpochSeconds}`.trim();
+  return {
+    query,
+    window,
+  };
+}
+
 export async function syncGmailInbox(state) {
   const auth = await authorizeGmail();
   const gmail = google.gmail({ version: "v1", auth });
-  const query =
-    process.env.GMAIL_QUERY?.trim() ||
-    '(zelle OR "sent you money" OR "payment from" OR "paid you") newer_than:14d';
+  const { query, window } = buildIncrementalQuery(state);
   const maxResults = Number(process.env.GMAIL_MAX_RESULTS || 20);
 
   const listResponse = await gmail.users.messages.list({
@@ -453,6 +507,7 @@ export async function syncGmailInbox(state) {
     paymentsToInsert,
     exceptionsToInsert,
     syncedAt,
+    syncWindow: window,
     summary,
     message: buildSyncMessage(summary),
   };
@@ -460,9 +515,13 @@ export async function syncGmailInbox(state) {
 
 export function buildGmailClientStatus(state) {
   const base = getGmailIntegrationStatus();
+  const window = deriveIncrementalWindow(state);
   return {
     ...base,
     lastSyncAt: state.integrations?.gmail?.lastSyncAt ?? null,
     lastSyncSummary: state.integrations?.gmail?.lastSyncSummary ?? null,
+    syncMode: window.mode,
+    nextWindowStartsAfter: window.startedAfter,
+    overlapMinutes: window.overlapMinutes,
   };
 }

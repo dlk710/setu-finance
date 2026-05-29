@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createInitialState } from "../../shared/seedState.js";
+import {
+  createInitialState,
+  extractCustomerSequence,
+  extractInvoiceSequence,
+  normalizeSeedIdentifiers,
+} from "../../shared/seedState.js";
 import { runMigrations } from "./migrations.js";
 import { normalizeDigits, normalizeEmail, normalizeName } from "./normalizers.js";
 import { withTransaction } from "./pool.js";
@@ -89,7 +94,7 @@ function enrichSeedState(state) {
   const fallbackState = createInitialState();
   const fallbackCustomers = new Map(fallbackState.customers.map((customer) => [customer.id, customer]));
 
-  return {
+  return normalizeSeedIdentifiers({
     ...state,
     customers: (state.customers ?? []).map((customer) => {
       const fallbackCustomer = fallbackCustomers.get(customer.id);
@@ -111,7 +116,7 @@ function enrichSeedState(state) {
       ...(fallbackState.admin ?? {}),
       ...(state.admin ?? {}),
     },
-  };
+  });
 }
 
 export async function loadSeedState() {
@@ -593,7 +598,18 @@ export async function replaceStateInDatabase(client, state) {
       INSERT INTO app_sequences (sequence_name, next_value)
       VALUES ('invoice', $1)
     `,
-    [Number(state.nextInvoiceSequence || 1)],
+    [
+      Math.max(
+        Number(state.nextInvoiceSequence || 1),
+        [
+          ...(state.invoices ?? []).map((invoice) => extractInvoiceSequence(invoice.invoiceCode)),
+          ...(state.dueInvoices ?? []).map((invoice) => extractInvoiceSequence(invoice.invoiceCode)),
+          ...(state.customers ?? []).flatMap((customer) =>
+            (customer.invoices ?? []).map((invoiceCode) => extractInvoiceSequence(invoiceCode)),
+          ),
+        ].reduce((max, numeric) => (Number.isFinite(numeric) ? Math.max(max, numeric + 1) : max), 1),
+      ),
+    ],
   );
 
   await client.query(
@@ -606,7 +622,7 @@ export async function replaceStateInDatabase(client, state) {
     `,
     [
       (state.customers ?? []).reduce((max, customer) => {
-        const numeric = Number(String(customer.customerCode ?? "").replace(/\D/g, ""));
+        const numeric = extractCustomerSequence(customer.customerCode);
         return Number.isFinite(numeric) ? Math.max(max, numeric + 1) : max;
       }, 1),
     ],

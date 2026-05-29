@@ -344,6 +344,15 @@ function formatDateTimeValue(value) {
   return parsed.toLocaleString();
 }
 
+function createPreviewSnippet(value, maxLength = 220) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "No email text was extracted.";
+  }
+
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
 function formatCustomerReference(customer) {
   return customer?.customerCode ?? customer?.id ?? "Unassigned";
 }
@@ -505,6 +514,7 @@ function App() {
   const [savingReferralProgram, setSavingReferralProgram] = useState(false);
   const [saveAlias, setSaveAlias] = useState(true);
   const [syncingInbox, setSyncingInbox] = useState(false);
+  const [sendingReceiptId, setSendingReceiptId] = useState("");
   const [referralProgramForm, setReferralProgramForm] = useState(() =>
     createReferralProgramForm(createInitialState().admin?.referralProgram),
   );
@@ -577,10 +587,8 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (!(modal.type === "exception-review" && modal.payload?.kind === "ambiguous")) {
-      setSaveAlias(true);
-    }
-  }, [modal.type, modal.payload?.kind]);
+    setSaveAlias(true);
+  }, [modal.type, modal.payload?.id]);
 
   function resetPortalUi() {
     setView("onboarding");
@@ -595,6 +603,7 @@ function App() {
     setSavingReferralProgram(false);
     setSaveAlias(true);
     setSyncingInbox(false);
+    setSendingReceiptId("");
   }
 
   function applyAuthSnapshot(snapshot) {
@@ -830,6 +839,24 @@ function App() {
     }
   }
 
+  async function sendReceipt(paymentId) {
+    setSendingReceiptId(paymentId);
+    try {
+      const data = await apiRequest(`/api/payments/${paymentId}/send-receipt`, {
+        method: "POST",
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setSendingReceiptId("");
+    }
+  }
+
   async function confirmAllPayments() {
     if (!state.pendingPayments.length) {
       return;
@@ -866,7 +893,7 @@ function App() {
     }
   }
 
-  async function resolveAmbiguous(exceptionId, candidate) {
+  async function resolveExceptionCustomer(exceptionId, candidate) {
     try {
       const data = await apiRequest(`/api/exceptions/${exceptionId}/resolve`, {
         method: "POST",
@@ -880,8 +907,8 @@ function App() {
       closeModal();
       pushToast(
         saveAlias
-          ? `Matched to ${candidate.name}. Alias saved for future payments`
-          : `Matched to ${candidate.name}`,
+          ? `${candidate.name} selected. Alias saved and transaction moved forward`
+          : `${candidate.name} selected and transaction moved forward`,
       );
     } catch (error) {
       if (handleUnauthorized(error)) {
@@ -1343,16 +1370,19 @@ function App() {
             dueInvoices={state.dueInvoices}
             integrationStatus={state.integrationStatus}
             pendingPayments={state.pendingPayments}
+            payments={state.payments}
             exceptions={state.exceptions}
             onOpenNewInvoice={openNewInvoice}
             onSendAll={sendAllInvoices}
             onPreviewInvoice={openSendPreview}
             onConfirmPayment={confirmPayment}
             onConfirmAll={confirmAllPayments}
+            onSendReceipt={sendReceipt}
             onSyncInbox={syncInbox}
             onOpenPayment={(payment) => setModal({ type: "payment-review", payload: payment })}
             onOpenMismatch={(exception) => setModal({ type: "mismatch", payload: exception })}
             onOpenExceptionReview={(exception) => setModal({ type: "exception-review", payload: exception })}
+            sendingReceiptId={sendingReceiptId}
             syncingInbox={syncingInbox}
           />
         )}
@@ -1437,11 +1467,12 @@ function App() {
 
       <ModalShell show={modal.type === "exception-review"} onClose={closeModal} size="wide">
         <ExceptionReviewModal
+          customers={state.customers}
           exception={modal.payload}
           saveAlias={saveAlias}
           onChangeSaveAlias={setSaveAlias}
           onClose={closeModal}
-          onResolve={(candidate) => resolveAmbiguous(modal.payload?.id, candidate)}
+          onResolveCustomer={(candidate) => resolveExceptionCustomer(modal.payload?.id, candidate)}
           onArchiveDuplicate={() =>
             resolveMismatch(
               modal.payload?.id,
@@ -2498,6 +2529,7 @@ function ConsoleView({
   dueInvoices,
   integrationStatus,
   pendingPayments,
+  payments,
   exceptions,
   onOpenPayment,
   onOpenNewInvoice,
@@ -2505,15 +2537,24 @@ function ConsoleView({
   onPreviewInvoice,
   onConfirmPayment,
   onConfirmAll,
+  onSendReceipt,
   onSyncInbox,
   onOpenMismatch,
   onOpenExceptionReview,
+  sendingReceiptId,
   syncingInbox,
 }) {
   const emailConfigured = integrationStatus?.email?.configured ?? false;
   const gmailConfigured = integrationStatus?.gmail?.configured ?? false;
   const gmailAuthorized = integrationStatus?.gmail?.authorized ?? false;
   const gmailSyncAt = integrationStatus?.gmail?.lastSyncAt;
+  const completedPayments = [...payments]
+    .filter((payment) => payment.appliedAt)
+    .sort(
+      (left, right) =>
+        getComparableTime(right.appliedAt, right.transactionDate, right.receivedAt) -
+        getComparableTime(left.appliedAt, left.transactionDate, left.receivedAt),
+    );
 
   return (
     <div>
@@ -2614,8 +2655,8 @@ function ConsoleView({
             </button>
           </div>
           <div className="section-desc">
-            Matched against customer records and saved as durable transaction records. Applying also
-            sends the receipt to the customer's primary email.
+            Matched against customer records and saved as durable transaction records. Apply the
+            money first, then send or re-send receipts separately from completed transactions.
             {gmailSyncAt ? ` Last inbox sync: ${new Date(gmailSyncAt).toLocaleString()}.` : ""}
           </div>
           <div className="tcard">
@@ -2663,6 +2704,84 @@ function ConsoleView({
               <div className="empty">
                 <IconCheck size={14} />
                 No payments waiting
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Completed transactions</h2>
+          </div>
+          <div className="section-desc">
+            Applied transactions stay in the ledger here. Send or re-send a receipt to the
+            customer&apos;s primary email whenever you are ready.
+          </div>
+          <div className="tcard">
+            <div className="trow head completed-grid">
+              <div>Customer / invoice</div>
+              <div>Transaction</div>
+              <div>Applied</div>
+              <div>Receipt status</div>
+              <div />
+            </div>
+            {completedPayments.map((payment) => (
+              <div className="trow completed-grid" key={payment.id}>
+                <div className="signals">
+                  <div className="cust">{payment.customerName}</div>
+                  <div className="sub">
+                    Customer ID {payment.customerCode ?? payment.customerId} ·{" "}
+                    {payment.matchedInvoiceCode ?? "Invoice pending"}
+                  </div>
+                </div>
+                <div>
+                  <div className="sub mono">{payment.transactionReference ?? "No transaction ref"}</div>
+                  <div className="sub">{payment.memo ?? payment.matchSummary ?? "Applied transaction record"}</div>
+                  <div className="mono">{formatCurrency(payment.amountReceived ?? 0)}</div>
+                </div>
+                <div>
+                  <div className="mono">{formatDateTimeValue(payment.appliedAt)}</div>
+                  <div className="sub">
+                    {payment.transactionDate
+                      ? `Paid ${formatTransactionDate(payment.transactionDate)}`
+                      : formatDateTimeValue(payment.receivedAt)}
+                  </div>
+                </div>
+                <div>
+                  <span
+                    className={`search-status-chip tone-${
+                      payment.receiptSentAt ? "success" : emailConfigured ? "warn" : "neutral"
+                    }`}
+                  >
+                    {payment.receiptSentAt ? "Sent" : emailConfigured ? "Ready to send" : "Email setup needed"}
+                  </span>
+                  <div className="sub">
+                    {payment.receiptSentAt
+                      ? `${formatDateTimeValue(payment.receiptSentAt)}${
+                          payment.receiptSentToEmail ? ` · ${payment.receiptSentToEmail}` : ""
+                        }`
+                      : "No receipt has been sent yet"}
+                  </div>
+                </div>
+                <div>
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => onSendReceipt(payment.id)}
+                    disabled={!emailConfigured || sendingReceiptId === payment.id}
+                  >
+                    {sendingReceiptId === payment.id
+                      ? "Sending…"
+                      : payment.receiptSentAt
+                        ? "Re-send receipt"
+                        : "Send receipt"}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!completedPayments.length && (
+              <div className="empty">
+                <IconCheck size={14} />
+                No completed transactions yet
               </div>
             )}
           </div>
@@ -2992,7 +3111,7 @@ function SearchView({
               className="search-input"
               value={query}
               onChange={(event) => onQueryChange(event.target.value)}
-              placeholder="Try: CUS-00004, 4471, sharma, or an email…"
+              placeholder="Try: 100004, 4471, sharma, or an email…"
             />
           </div>
           <div className="search-status-legend">
@@ -3908,66 +4027,106 @@ function TransactionDetailsPanel({
   transactionReference,
   summary,
 }) {
+  const [showRawExtract, setShowRawExtract] = useState(false);
+  const rawTextPreview = createPreviewSnippet(rawText);
+
   return (
-    <div className="transaction-panel">
-      <div className="detail-banner">
-        <div>
-          <div className="detail-label">Saved transaction record</div>
-          <div className="detail-title">
-            {senderName || customerName || "Unknown sender"} · {formatCurrency(amount || 0)}
+    <>
+      <div className="transaction-panel">
+        <div className="detail-banner">
+          <div>
+            <div className="detail-label">Saved transaction record</div>
+            <div className="detail-title">
+              {senderName || customerName || "Unknown sender"} · {formatCurrency(amount || 0)}
+            </div>
+            <div className="sub">
+              {transactionReference ?? "No transaction reference"} · {memo ?? "No memo captured"}
+            </div>
           </div>
-          <div className="sub">
-            {transactionReference ?? "No transaction reference"} · {memo ?? "No memo captured"}
+          <div className="detail-score-wrap">
+            <div className="score hi">{score ?? 0}</div>
+            <div className="sub">{matchedSignals?.length ? matchedSignals.join(" · ") : "Awaiting review"}</div>
           </div>
         </div>
-        <div className="detail-score-wrap">
-          <div className="score hi">{score ?? 0}</div>
-          <div className="sub">{matchedSignals?.length ? matchedSignals.join(" · ") : "Awaiting review"}</div>
+
+        <div className="detail-grid">
+          <div className="detail-card">
+            <div className="detail-label">Matching snapshot</div>
+            <div className="detail-kv"><span>Customer</span><strong>{customerName ?? "Not assigned"}</strong></div>
+            <div className="detail-kv"><span>Customer ID</span><strong>{customerCode ?? "Not assigned"}</strong></div>
+            <div className="detail-kv"><span>Invoice</span><strong>{matchedInvoiceCode ?? "Not assigned"}</strong></div>
+            <div className="detail-kv"><span>Summary</span><strong>{summary ?? "No match summary yet"}</strong></div>
+            {reviewNotes ? <div className="detail-note">{reviewNotes}</div> : null}
+          </div>
+
+          <div className="detail-card">
+            <div className="detail-label">Zelle email capture</div>
+            <div className="detail-kv"><span>Transaction ref</span><strong>{transactionReference ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Memo</span><strong>{memo ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Transaction date</span><strong>{transactionDate ? formatTransactionDate(transactionDate) : dateLabel ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Inbox received</span><strong>{formatDateTimeValue(receivedAt)}</strong></div>
+            <div className="detail-kv"><span>Email header date</span><strong>{messageDateHeader ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Subject</span><strong>{subject ?? "Not captured"}</strong></div>
+          </div>
+
+          <div className="detail-card">
+            <div className="detail-label">Identity fields</div>
+            <div className="detail-kv"><span>Payer name</span><strong>{senderName ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Payer email</span><strong>{senderEmail ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Payer phone</span><strong>{senderPhoneLast4 ? `••••${senderPhoneLast4}` : "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Bank sender</span><strong>{messageFromEmail ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Inbox destination</span><strong>{messageToEmail ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Provider</span><strong>{sourceProvider ?? "gmail"}</strong></div>
+          </div>
+
+          <div className="detail-card">
+            <div className="detail-label">Trace fields</div>
+            <div className="detail-kv"><span>Source message ID</span><strong>{sourceMessageId ?? "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Thread ID</span><strong>{sourceThreadId ?? "Not captured"}</strong></div>
+          </div>
+        </div>
+
+        <div className="detail-card detail-card-wide">
+          <div className="detail-inline-head">
+            <div>
+              <div className="detail-label">Raw extracted email text</div>
+              <div className="sub">Hidden by default for faster review. Open the full extract only when needed.</div>
+            </div>
+            <button className="btn btn-sm" type="button" onClick={() => setShowRawExtract(true)}>
+              Open raw extract
+            </button>
+          </div>
+          <div className="detail-collapsed-box">
+            <div className="detail-pre-preview">{rawTextPreview}</div>
+          </div>
         </div>
       </div>
-
-      <div className="detail-grid">
-        <div className="detail-card">
-          <div className="detail-label">Matching snapshot</div>
-          <div className="detail-kv"><span>Customer</span><strong>{customerName ?? "Not assigned"}</strong></div>
-          <div className="detail-kv"><span>Customer ID</span><strong>{customerCode ?? "Not assigned"}</strong></div>
-          <div className="detail-kv"><span>Invoice</span><strong>{matchedInvoiceCode ?? "Not assigned"}</strong></div>
-          <div className="detail-kv"><span>Summary</span><strong>{summary ?? "No match summary yet"}</strong></div>
-          {reviewNotes ? <div className="detail-note">{reviewNotes}</div> : null}
-        </div>
-
-        <div className="detail-card">
-          <div className="detail-label">Zelle email capture</div>
-          <div className="detail-kv"><span>Transaction ref</span><strong>{transactionReference ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Memo</span><strong>{memo ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Transaction date</span><strong>{transactionDate ? formatTransactionDate(transactionDate) : dateLabel ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Inbox received</span><strong>{formatDateTimeValue(receivedAt)}</strong></div>
-          <div className="detail-kv"><span>Email header date</span><strong>{messageDateHeader ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Subject</span><strong>{subject ?? "Not captured"}</strong></div>
-        </div>
-
-        <div className="detail-card">
-          <div className="detail-label">Identity fields</div>
-          <div className="detail-kv"><span>Payer name</span><strong>{senderName ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Payer email</span><strong>{senderEmail ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Payer phone</span><strong>{senderPhoneLast4 ? `••••${senderPhoneLast4}` : "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Bank sender</span><strong>{messageFromEmail ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Inbox destination</span><strong>{messageToEmail ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Provider</span><strong>{sourceProvider ?? "gmail"}</strong></div>
-        </div>
-
-        <div className="detail-card">
-          <div className="detail-label">Trace fields</div>
-          <div className="detail-kv"><span>Source message ID</span><strong>{sourceMessageId ?? "Not captured"}</strong></div>
-          <div className="detail-kv"><span>Thread ID</span><strong>{sourceThreadId ?? "Not captured"}</strong></div>
-        </div>
-      </div>
-
-      <div className="detail-card detail-card-wide">
-        <div className="detail-label">Raw extracted email text</div>
-        <pre className="detail-pre">{rawText || "No email text was extracted."}</pre>
-      </div>
-    </div>
+      <ModalShell show={showRawExtract} onClose={() => setShowRawExtract(false)} size="wide">
+        <>
+          <div className="modal-head">
+            <div>
+              <h3>Raw email extract</h3>
+              <div className="sub modal-sub">
+                Full extracted text captured from the synced email for manual verification.
+              </div>
+            </div>
+            <button className="x" onClick={() => setShowRawExtract(false)}>
+              <IconX size={18} />
+            </button>
+          </div>
+          <div className="modal-body">
+            <div className="detail-card detail-card-wide">
+              <pre className="detail-pre detail-pre-popout">{rawText || "No email text was extracted."}</pre>
+            </div>
+          </div>
+          <div className="modal-foot">
+            <button className="btn" type="button" onClick={() => setShowRawExtract(false)}>
+              Close
+            </button>
+          </div>
+        </>
+      </ModalShell>
+    </>
   );
 }
 
@@ -3982,8 +4141,8 @@ function PaymentReviewModal({ onApply, onClose, payment }) {
         <div>
           <h3>Review transaction before apply</h3>
           <div className="sub modal-sub">
-            One click will apply the payment, mark the invoice paid, and email the receipt to the
-            primary customer email.
+            One click will apply the payment and mark the invoice paid. Send the customer receipt
+            separately from completed transactions when you are ready.
           </div>
         </div>
         <button className="x" onClick={onClose}>
@@ -4137,19 +4296,30 @@ function MismatchModal({ exception, onAccept, onCredit, onClose }) {
 }
 
 function ExceptionReviewModal({
+  customers,
   exception,
   saveAlias,
   onChangeSaveAlias,
   onClose,
-  onResolve,
+  onResolveCustomer,
   onArchiveDuplicate,
 }) {
+  const [customerQuery, setCustomerQuery] = useState("");
+
+  useEffect(() => {
+    setCustomerQuery(exception?.customerName ?? exception?.senderName ?? "");
+  }, [exception?.id, exception?.customerName, exception?.senderName]);
+
   if (!exception) {
     return null;
   }
 
   const isAmbiguous = exception.kind === "ambiguous";
   const isDuplicate = exception.kind === "duplicate";
+  const allowManualCustomerMatch = !isDuplicate;
+  const manualCustomerResults = customerQuery.trim()
+    ? searchCustomersByIdentity(customers, customerQuery)
+    : [];
 
   return (
     <>
@@ -4205,20 +4375,12 @@ function ExceptionReviewModal({
                 <div className="meta">{candidate.note}</div>
                 <button
                   className={`btn btn-sm ${candidate.primary ? "btn-primary" : ""}`}
-                  onClick={() => onResolve(candidate)}
+                  onClick={() => onResolveCustomer(candidate)}
                 >
                   Match this
                 </button>
               </div>
             ))}
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={saveAlias}
-                onChange={(event) => onChangeSaveAlias(event.target.checked)}
-              />
-              Save this sender as an alias so future payments auto-match
-            </label>
           </>
         ) : isDuplicate ? (
           <div className="note warn">
@@ -4238,6 +4400,55 @@ function ExceptionReviewModal({
             </div>
           </div>
         )}
+        {allowManualCustomerMatch ? (
+          <div className="field">
+            <label>Match to existing customer</label>
+            <div className="search-wrap modal-search">
+              <IconSearch size={18} />
+              <input
+                className="search-input"
+                value={customerQuery}
+                onChange={(event) => setCustomerQuery(event.target.value)}
+                placeholder="Search by customer ID, phone, email, first name, or last name"
+              />
+            </div>
+            <div className="autofill-note">
+              Assigning a customer moves this transaction into Payments to confirm so finance can
+              review and apply it.
+            </div>
+            {customerQuery.trim() ? (
+              <div className="picker-results">
+                {manualCustomerResults.length ? (
+                  manualCustomerResults.map((customer) => (
+                    <div className="candidate" key={customer.id}>
+                      <div className="name">{customer.name}</div>
+                      <div className="meta">
+                        Customer ID {formatCustomerReference(customer)} · {describeCustomerMatch(customer)} ·{" "}
+                        {summarizeContacts(customer)}
+                      </div>
+                      <button
+                        className="btn btn-sm btn-primary"
+                        onClick={() => onResolveCustomer(customer)}
+                      >
+                        Assign &amp; move forward
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="picker-empty">No existing customer matches that search.</div>
+                )}
+              </div>
+            ) : null}
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={saveAlias}
+                onChange={(event) => onChangeSaveAlias(event.target.checked)}
+              />
+              Save this sender as a Zelle identity alias so future payments auto-match
+            </label>
+          </div>
+        ) : null}
       </div>
       <div className="modal-foot">
         {isDuplicate && (

@@ -1,4 +1,9 @@
-import { createInvoiceRefPreview } from "../shared/seedState.js";
+import {
+  createInvoiceRefPreview,
+  makeCustomerCode,
+  normalizeCustomerCode,
+  normalizeInvoiceCode,
+} from "../shared/seedState.js";
 import { prepareDatabase } from "./db/seed.js";
 import { buildInitials, normalizeDigits, normalizeEmail, normalizeName } from "./db/normalizers.js";
 import { withTransaction } from "./db/pool.js";
@@ -13,19 +18,32 @@ const DEFAULT_REFERRAL_PROGRAM = {
 };
 
 function calculateZelleAmount(amount, discountPct) {
-  return Math.round(Number(amount || 0) * (1 - Number(discountPct || 0) / 100));
+  return Math.round(Number(amount || 0) * (1 - Number(discountPct || 0) / 100) * 100) / 100;
 }
 
 function formatCurrency(value) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
 }
 
 function createCustomerCodePreview(sequence) {
-  return `CUS-${String(sequence).padStart(5, "0")}`;
+  return makeCustomerCode(sequence);
+}
+
+function normalizeLegacyIdentifierText(text) {
+  if (!text) {
+    return text;
+  }
+
+  return String(text)
+    .replace(/\bCUS-(\d+)\b/g, (_, digits) => normalizeCustomerCode(`CUS-${digits}`) ?? `CUS-${digits}`)
+    .replace(/\bASC-\d{4}-(\d+)\b/g, (_, digits) =>
+      normalizeInvoiceCode(`ASC-2026-${digits}`) ?? `ASC-2026-${digits}`,
+    );
 }
 
 function formatTimestamp(value) {
@@ -43,7 +61,7 @@ function formatTimestamp(value) {
 function mapInvoiceRow(row) {
   return {
     id: row.id,
-    invoiceCode: row.invoice_code,
+    invoiceCode: normalizeInvoiceCode(row.invoice_code) ?? row.invoice_code,
     customerId: row.customer_id,
     customerName: row.customer_name,
     email: row.delivery_email,
@@ -64,12 +82,16 @@ function mapPaymentRow(row) {
     id: row.id,
     customerId: row.customer_id ?? null,
     customerName: row.customer_name ?? row.resolved_customer_name ?? null,
-    customerCode: row.customer_code ?? row.resolved_customer_code ?? null,
+    customerCode:
+      normalizeCustomerCode(row.customer_code ?? row.resolved_customer_code ?? null) ??
+      row.customer_code ??
+      row.resolved_customer_code ??
+      null,
     matchedSignals: row.matched_signals ?? [],
     score: Number(row.score || 0),
     amountReceived: Number(row.amount_received || 0),
     invoiceId: row.invoice_id ?? null,
-    matchedInvoiceCode: row.matched_invoice_code ?? null,
+    matchedInvoiceCode: normalizeInvoiceCode(row.matched_invoice_code) ?? row.matched_invoice_code ?? null,
     sourceMessageId: row.source_message_id ?? null,
     sourceProvider: row.source_provider ?? "gmail",
     sourceThreadId: row.source_thread_id ?? null,
@@ -85,7 +107,7 @@ function mapPaymentRow(row) {
     memo: row.memo ?? null,
     parsedPayload: row.parsed_payload ?? {},
     matchStatus: row.match_status ?? "pending_review",
-    matchSummary: row.match_summary ?? null,
+    matchSummary: normalizeLegacyIdentifierText(row.match_summary ?? null),
     reviewNotes: row.review_notes ?? null,
     dateLabel: row.date_label ?? null,
     rawText: row.raw_text ?? null,
@@ -985,7 +1007,7 @@ async function hydratePortalState(client) {
 
   const customers = customersResult.rows.map((row) => ({
     id: row.id,
-    customerCode: row.customer_code,
+    customerCode: normalizeCustomerCode(row.customer_code) ?? row.customer_code,
     initials: row.initials,
     name: row.full_name,
     services: [],
@@ -1337,7 +1359,7 @@ async function fetchCustomerAggregate(client, customerId) {
 
   return {
     id: row.id,
-    customerCode: row.customer_code,
+    customerCode: normalizeCustomerCode(row.customer_code) ?? row.customer_code,
     initials: row.initials,
     name: row.full_name,
     services: Array.from(
@@ -1360,7 +1382,7 @@ async function fetchCustomerAggregate(client, customerId) {
       email: item.email,
       phoneLast4: item.phone_last4,
     })),
-    invoices: invoicesResult.rows.map((item) => item.invoice_code),
+    invoices: invoicesResult.rows.map((item) => normalizeInvoiceCode(item.invoice_code) ?? item.invoice_code),
     profile: profileResult.rows[0]
       ? {
           ...mapCustomerProfileRow(profileResult.rows[0]),
@@ -1441,6 +1463,21 @@ async function fetchPendingPaymentForUpdate(client, paymentId) {
       FROM payments
       WHERE payments.id = $1
         AND payments.review_status = 'pending'
+      FOR UPDATE OF payments
+    `,
+    [paymentId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function fetchConfirmedPaymentForUpdate(client, paymentId) {
+  const result = await client.query(
+    `
+      SELECT payments.*
+      FROM payments
+      WHERE payments.id = $1
+        AND payments.review_status = 'confirmed'
       FOR UPDATE OF payments
     `,
     [paymentId],
@@ -1615,7 +1652,7 @@ async function resolveInvoiceForPayment(client, paymentRow) {
       JOIN customers ON customers.id = invoices.customer_id
       WHERE invoices.customer_id = $1
         AND invoices.status IN ('sent', 'overdue')
-        AND ROUND(invoices.zelle_amount) = ROUND($2::numeric)
+        AND ROUND(invoices.zelle_amount, 2) = ROUND($2::numeric, 2)
       ORDER BY invoices.due_date DESC, invoices.created_at DESC
       LIMIT 1
     `,
@@ -1777,6 +1814,10 @@ async function reconcileOpenTransactions(client) {
 
   for (const row of transactionsResult.rows) {
     if (!row.source_message_id) {
+      continue;
+    }
+
+    if ((row.matched_signals ?? []).includes("manual_selection") || (row.matched_signals ?? []).includes("manual_override")) {
       continue;
     }
 
@@ -2245,7 +2286,7 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
   });
 }
 
-export async function confirmPendingPaymentRecord(paymentId, deliverReceipt) {
+export async function confirmPendingPaymentRecord(paymentId) {
   return withTransaction(async (client) => {
     const paymentRow = await fetchPendingPaymentForUpdate(client, paymentId);
     if (!paymentRow) {
@@ -2267,14 +2308,6 @@ export async function confirmPendingPaymentRecord(paymentId, deliverReceipt) {
     }
 
     const invoice = await resolveInvoiceForPayment(client, paymentRow);
-    const payment = mapPaymentRow(paymentRow);
-    const recipient = findPrimaryEmail(customer);
-
-    if (!recipient) {
-      throw new Error("No primary customer email is available for this receipt.");
-    }
-
-    await deliverReceipt({ customer, payment, invoice, recipient });
 
     if (invoice) {
       await client.query(
@@ -2294,16 +2327,14 @@ export async function confirmPendingPaymentRecord(paymentId, deliverReceipt) {
         SET review_status = 'confirmed',
             match_status = 'applied',
             applied_at = NOW(),
-            receipt_sent_to_email = $2,
-            receipt_sent_at = NOW(),
             updated_at = NOW()
         WHERE id = $1
       `,
-      [paymentId, recipient],
+      [paymentId],
     );
 
     const awardedRewards = await awardReferralRewardsForCustomer(client, customer.id);
-    await insertActivity(client, `Payment confirmed for ${customer.name}`);
+    await insertActivity(client, `Transaction applied for ${customer.name}`);
     for (const reward of awardedRewards) {
       await insertActivity(
         client,
@@ -2314,7 +2345,61 @@ export async function confirmPendingPaymentRecord(paymentId, deliverReceipt) {
     return {
       applied: true,
       state: await hydratePortalState(client),
-      message: `Transaction applied. Receipt emailed to ${recipient}`,
+      message: `Transaction applied for ${customer.name}. Receipt can be sent separately.`,
+    };
+  });
+}
+
+export async function sendReceiptForPaymentRecord(paymentId, deliverReceipt) {
+  return withTransaction(async (client) => {
+    const paymentRow = await fetchConfirmedPaymentForUpdate(client, paymentId);
+    if (!paymentRow) {
+      throw new Error("Completed transaction not found.");
+    }
+
+    if (!paymentRow.customer_id) {
+      throw new Error("Customer record not found for this payment.");
+    }
+
+    const customer = await fetchCustomerAggregate(client, paymentRow.customer_id);
+    if (!customer) {
+      throw new Error("Customer record not found for this payment.");
+    }
+
+    const recipient = findPrimaryEmail(customer);
+    if (!recipient) {
+      throw new Error("No primary customer email is available for this receipt.");
+    }
+
+    const invoice = await resolveInvoiceForPayment(client, paymentRow);
+    const payment = mapPaymentRow(paymentRow);
+    const wasAlreadySent = Boolean(paymentRow.receipt_sent_at);
+
+    await deliverReceipt({ customer, payment, invoice, recipient });
+
+    await client.query(
+      `
+        UPDATE payments
+        SET receipt_sent_to_email = $2,
+            receipt_sent_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [paymentId, recipient],
+    );
+
+    await insertActivity(
+      client,
+      wasAlreadySent
+        ? `Receipt re-sent to ${customer.name}`
+        : `Receipt emailed to ${customer.name}`,
+    );
+
+    return {
+      state: await hydratePortalState(client),
+      message: wasAlreadySent
+        ? `Receipt re-sent to ${recipient}`
+        : `Receipt emailed to ${recipient}`,
     };
   });
 }
@@ -2330,6 +2415,8 @@ export async function resolveExceptionRecord({
     if (!exception) {
       throw new Error("Exception item not found.");
     }
+
+    let resolutionMessage = "Exception resolved.";
 
     if (exception.kind === "duplicate" && actionType === "mark_duplicate") {
       if (exception.source_message_id) {
@@ -2364,62 +2451,32 @@ export async function resolveExceptionRecord({
       };
     }
 
-    if (
-      exception.kind === "ambiguous" &&
-      candidateCustomerId &&
-      saveAlias &&
-      exception.alias_name
-    ) {
-      const aliasCheck = await client.query(
-        `
-          SELECT 1
-          FROM customer_aliases
-          WHERE customer_id = $1
-            AND normalized_name = $2
-          LIMIT 1
-        `,
-        [candidateCustomerId, normalizeName(exception.alias_name)],
-      );
+    if (actionType === "matched_customer" && candidateCustomerId && exception.source_message_id) {
+      const candidate = await fetchCustomerAggregate(client, candidateCustomerId);
+      if (!candidate) {
+        throw new Error("Selected customer record was not found.");
+      }
 
-      if (!aliasCheck.rowCount) {
-        await client.query(
-          `
-            INSERT INTO customer_aliases (
-              id,
-              customer_id,
-              alias_name,
-              normalized_name,
-              relation,
-              email,
-              normalized_email,
-              phone_last4,
-              created_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-          `,
-          [
-            `alias-${candidateCustomerId}-${crypto.randomUUID()}`,
-            candidateCustomerId,
-            exception.alias_name,
-            normalizeName(exception.alias_name),
-            "other",
-            exception.sender_email ?? null,
-            exception.sender_email ? normalizeEmail(exception.sender_email) : null,
-            exception.sender_phone_last4 ?? null,
-          ],
+      if (saveAlias) {
+        await upsertZelleAlias(
+          client,
+          candidateCustomerId,
+          {
+            name: exception.alias_name ?? exception.sender_name ?? candidate.name,
+            email: exception.sender_email ?? null,
+            phoneLast4: exception.sender_phone_last4 ?? null,
+          },
+          candidate.name,
         );
       }
-    }
 
-    if (exception.kind === "ambiguous" && candidateCustomerId && exception.source_message_id) {
-      const candidate = await fetchCustomerAggregate(client, candidateCustomerId);
       const invoiceResult = await client.query(
         `
           SELECT id
           FROM invoices
           WHERE customer_id = $1
             AND status IN ('sent', 'overdue')
-            AND ROUND(zelle_amount) = ROUND($2::numeric)
+            AND ROUND(zelle_amount, 2) = ROUND($2::numeric, 2)
           ORDER BY due_date DESC, created_at DESC, id DESC
           LIMIT 1
         `,
@@ -2432,11 +2489,11 @@ export async function resolveExceptionRecord({
           SET customer_id = $2,
               customer_name = $3,
               invoice_id = $4,
-              matched_signals = ARRAY['manual_selection']::text[],
+              matched_signals = $5::text[],
               score = 100,
-              review_status = $5,
-              match_status = $6,
-              match_summary = $7,
+              review_status = 'pending',
+              match_status = 'matched',
+              match_summary = $6,
               updated_at = NOW()
           WHERE source_message_id = $1
         `,
@@ -2445,13 +2502,16 @@ export async function resolveExceptionRecord({
           candidateCustomerId,
           candidate?.name ?? null,
           invoiceResult.rows[0]?.id ?? null,
-          invoiceResult.rowCount ? "pending" : "exception",
-          invoiceResult.rowCount ? "matched" : "ambiguous",
+          invoiceResult.rowCount ? ["manual_selection", "amount"] : ["manual_selection"],
           invoiceResult.rowCount
             ? "Customer selected manually and transaction is ready to apply."
-            : "Customer selected manually, but no matching open invoice was found.",
+            : "Customer selected manually. Review and apply the transaction.",
         ],
       );
+
+      resolutionMessage = invoiceResult.rowCount
+        ? `Matched to ${candidate.name} and moved to Payments to confirm.`
+        : `Assigned to ${candidate.name} and moved to Payments to confirm.`;
     }
 
     if (exception.kind === "mismatch" && exception.invoice_id && actionType === "accept_full") {
@@ -2518,7 +2578,7 @@ export async function resolveExceptionRecord({
 
     return {
       state: await hydratePortalState(client),
-      message: "Exception resolved.",
+      message: resolutionMessage,
     };
   });
 }

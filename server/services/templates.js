@@ -7,12 +7,18 @@ function escapeHtml(value) {
     .replaceAll("'", "&#39;");
 }
 
+function extractEmailAddress(value) {
+  const match = String(value || "").match(/[A-Z0-9._%*+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return match?.[0] ?? null;
+}
+
 function formatCurrency(value) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0,
-  }).format(value);
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
 }
 
 function formatLongDate(value) {
@@ -33,8 +39,17 @@ function buildCardPaymentUrl(invoice) {
   return `${baseUrl}${separator}invoice=${encodeURIComponent(invoice.invoiceCode)}`;
 }
 
+function resolveZellePayTarget() {
+  return (
+    process.env.ZELLE_PAY_TO?.trim() ||
+    process.env.SMTP_USER?.trim() ||
+    extractEmailAddress(process.env.SMTP_FROM?.trim()) ||
+    "Configure ZELLE_PAY_TO in the local .env file"
+  );
+}
+
 export function renderInvoiceEmail({ customer, invoice }) {
-  const zellePayTo = process.env.ZELLE_PAY_TO?.trim() || "Configure ZELLE_PAY_TO in the local .env file";
+  const zellePayTo = resolveZellePayTarget();
   const cardUrl = buildCardPaymentUrl(invoice);
   const serviceLabel = `${invoice.service}${invoice.milestone ? ` — ${invoice.milestone}` : ""}`;
 
@@ -95,6 +110,7 @@ export function renderReceiptEmail({ customer, payment, invoice }) {
       `Hi ${customer.name},`,
       "",
       `We have confirmed your payment of ${formatCurrency(amount)} for ${serviceLabel}.`,
+      "A PDF receipt is attached for your records.",
       invoice ? `Invoice ref: ${invoice.invoiceCode}` : null,
       transactionDate ? `Transaction date: ${transactionDate}` : null,
       transactionReference ? `Transaction ref: ${transactionReference}` : null,
@@ -109,6 +125,7 @@ export function renderReceiptEmail({ customer, payment, invoice }) {
       <div style="font-family: Arial, sans-serif; color: #1a1a1f; line-height: 1.6;">
         <p>Hi ${escapeHtml(customer.name)},</p>
         <p>We have confirmed your payment of <strong>${escapeHtml(formatCurrency(amount))}</strong> for ${escapeHtml(serviceLabel)}.</p>
+        <p>A PDF receipt is attached for your records.</p>
         ${invoice ? `<p><strong>Invoice ref:</strong> ${escapeHtml(invoice.invoiceCode)}</p>` : ""}
         ${transactionDate ? `<p><strong>Transaction date:</strong> ${escapeHtml(transactionDate)}</p>` : ""}
         ${transactionReference ? `<p><strong>Transaction ref:</strong> ${escapeHtml(transactionReference)}</p>` : ""}
