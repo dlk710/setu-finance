@@ -344,6 +344,17 @@ function formatDateTimeValue(value) {
   return parsed.toLocaleString();
 }
 
+function formatExceptionResolutionAction(action) {
+  const labels = {
+    matched_customer: "Matched to customer",
+    accept_full: "Accepted as full payment",
+    apply_credit: "Marked for future credit",
+    mark_duplicate: "Archived duplicate",
+  };
+
+  return labels[action] ?? action?.replaceAll("_", " ") ?? "Resolved";
+}
+
 function createPreviewSnippet(value, maxLength = 220) {
   const normalized = String(value || "").replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -899,7 +910,7 @@ function App() {
         method: "POST",
         body: {
           actionType: "matched_customer",
-          candidateCustomerId: candidate.customerId,
+          candidateCustomerId: candidate.customerId ?? candidate.id,
           saveAlias,
         },
       });
@@ -1372,6 +1383,7 @@ function App() {
             pendingPayments={state.pendingPayments}
             payments={state.payments}
             exceptions={state.exceptions}
+            exceptionHistory={state.exceptionHistory ?? []}
             onOpenNewInvoice={openNewInvoice}
             onSendAll={sendAllInvoices}
             onPreviewInvoice={openSendPreview}
@@ -1491,6 +1503,7 @@ function App() {
           payments={state.payments}
           pendingPayments={state.pendingPayments}
           exceptions={state.exceptions}
+          exceptionHistory={state.exceptionHistory ?? []}
           referrals={state.admin?.referrals ?? []}
           rewards={state.admin?.rewards ?? []}
           onClose={closeModal}
@@ -2531,6 +2544,7 @@ function ConsoleView({
   pendingPayments,
   payments,
   exceptions,
+  exceptionHistory,
   onOpenPayment,
   onOpenNewInvoice,
   onSendAll,
@@ -2555,6 +2569,9 @@ function ConsoleView({
         getComparableTime(right.appliedAt, right.transactionDate, right.receivedAt) -
         getComparableTime(left.appliedAt, left.transactionDate, left.receivedAt),
     );
+  const recentExceptionHistory = [...(exceptionHistory ?? [])]
+    .sort((left, right) => getComparableTime(right.resolvedAt) - getComparableTime(left.resolvedAt))
+    .slice(0, 8);
 
   return (
     <div>
@@ -2855,6 +2872,52 @@ function ConsoleView({
               <div className="empty">
                 <IconCheck size={14} />
                 No exceptions
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Exception history</h2>
+          </div>
+          <div className="section-desc">
+            Resolved exceptions stay on record with the action taken, who resolved them, and which
+            customer record they were moved against.
+          </div>
+          <div className="tcard">
+            <div className="trow head exception-history-grid">
+              <div>Resolved</div>
+              <div>Sender / transaction</div>
+              <div>Action</div>
+              <div>Resolved for</div>
+              <div>By</div>
+            </div>
+            {recentExceptionHistory.map((item) => (
+              <div className="trow exception-history-grid" key={item.id}>
+                <div className="mono">{formatDateTimeValue(item.resolvedAt)}</div>
+                <div>
+                  <div className="cust">{item.senderName}</div>
+                  <div className="sub mono">
+                    {formatCurrency(item.amount ?? 0)} · {item.transactionReference ?? "No ref"}
+                  </div>
+                </div>
+                <div>
+                  <div className="cust">{formatExceptionResolutionAction(item.resolutionAction)}</div>
+                  <div className="sub">{item.resolutionMessage ?? item.summary}</div>
+                </div>
+                <div className="sub">
+                  {item.resolvedCustomerName
+                    ? `${item.resolvedCustomerName} · ${item.resolvedCustomerCode ?? item.resolvedCustomerId}`
+                    : "No customer linked"}
+                </div>
+                <div className="sub">{item.resolvedByUsername ?? "Unknown user"}</div>
+              </div>
+            ))}
+            {!recentExceptionHistory.length && (
+              <div className="empty">
+                <IconCheck size={14} />
+                No resolved exception history yet
               </div>
             )}
           </div>
@@ -3614,6 +3677,7 @@ function Customer360Modal({
   payments,
   pendingPayments,
   exceptions,
+  exceptionHistory,
   referrals,
   rewards,
   onClose,
@@ -3646,6 +3710,9 @@ function Customer360Modal({
     (exception) =>
       exception.customerId === customer.id ||
       exception.candidates?.some((candidate) => candidate.customerId === customer.id),
+  );
+  const customerExceptionHistory = (exceptionHistory ?? []).filter(
+    (item) => item.resolvedCustomerId === customer.id,
   );
   const referralSourceRecord =
     referrals.find((referral) => referral.referredCustomerId === customer.id) ?? null;
@@ -3927,6 +3994,30 @@ function Customer360Modal({
                   <div className="mono">
                     {formatCurrency(exception.amount ?? 0)} · {exception.transactionReference ?? "No transaction ref"}
                   </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {customerExceptionHistory.length ? (
+            <div className="tcard customer360-review-card">
+              <div className="trow head customer-history-grid">
+                <div>Resolved</div>
+                <div>Action</div>
+                <div>Transaction</div>
+                <div>By</div>
+              </div>
+              {customerExceptionHistory.map((item) => (
+                <div className="trow customer-history-grid" key={item.id}>
+                  <div className="mono">{formatDateTimeValue(item.resolvedAt)}</div>
+                  <div>
+                    <div className="cust">{formatExceptionResolutionAction(item.resolutionAction)}</div>
+                    <div className="sub">{item.resolutionMessage ?? item.summary}</div>
+                  </div>
+                  <div className="mono">
+                    {formatCurrency(item.amount ?? 0)} · {item.transactionReference ?? "No transaction ref"}
+                  </div>
+                  <div className="sub">{item.resolvedByUsername ?? "Unknown user"}</div>
                 </div>
               ))}
             </div>

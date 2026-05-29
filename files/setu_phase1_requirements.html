@@ -445,6 +445,8 @@
         <li>A transaction record should capture date, transaction number, amount, memo, source message details, and raw extracted content whenever available.</li>
         <li>The matching engine should identify likely customer and invoice matches using saved customer information.</li>
         <li>Clear matches go to a confirmation queue. Unclear cases go to an exceptions queue.</li>
+        <li>When a finance user resolves an exception, the system must preserve that decision as history, including the action taken, the resolving user, and the time of resolution.</li>
+        <li>When an existing customer is selected from an exception review, the saved transaction must immediately attach to that customer’s record before the final apply step.</li>
         <li>A human must complete the final apply action.</li>
       </ul>
 

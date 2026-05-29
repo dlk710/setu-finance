@@ -59,10 +59,15 @@ This is the current end-to-end feature inventory for Setu Finance.
 - `Payments to confirm` queue for clear matches
 - `Exceptions` queue for mismatches, ambiguous payers, and duplicates
 - Duplicate protection so one payment is not counted twice
+- Immutable exception history after resolution, including:
+  - action taken
+  - resolved customer record
+  - resolving portal user
+  - timestamp of the decision
 - Manual exception resolution to:
   - select the correct existing customer
   - save a Zelle alias for future matching
-  - move the transaction forward for apply
+  - move the transaction forward for apply while attaching it to the selected customer history immediately
 
 ## 6. Payment Application And Receipts
 
@@ -102,6 +107,7 @@ This is the current end-to-end feature inventory for Setu Finance.
 
 - Portal login required before finance data is visible
 - Activity log for major actions
+- Exception resolution trail with actor attribution
 - Durable transaction history
 - Human approval before final payment apply
 - Customer primary email as the source of truth for receipt delivery

@@ -132,6 +132,7 @@ export async function databaseHasCoreData(client) {
 async function truncatePortalTables(client) {
   await client.query(`
     TRUNCATE TABLE
+      exception_resolution_history,
       exception_candidates,
       exceptions,
       payments,
@@ -576,10 +577,78 @@ export async function replaceStateInDatabase(client, state) {
   for (const activity of state.activity ?? []) {
     await client.query(
       `
-        INSERT INTO activity_events (id, label, created_at)
-        VALUES ($1, $2, NOW())
+        INSERT INTO activity_events (id, label, actor_username, created_at)
+        VALUES ($1, $2, $3, NOW())
       `,
-      [activity.id, activity.label],
+      [activity.id, activity.label, activity.actorUsername ?? null],
+    );
+  }
+
+  for (const item of state.exceptionHistory ?? []) {
+    await client.query(
+      `
+        INSERT INTO exception_resolution_history (
+          id,
+          exception_id,
+          exception_kind,
+          sender_name,
+          amount,
+          expected_amount,
+          date_label,
+          sender_email,
+          sender_phone_last4,
+          service_name,
+          milestone,
+          invoice_id,
+          summary,
+          alias_name,
+          source_message_id,
+          source_provider,
+          transaction_reference,
+          memo,
+          matched_signals,
+          score,
+          resolution_action,
+          resolution_message,
+          resolved_by_username,
+          resolved_customer_id,
+          resolved_payment_id,
+          original_exception_created_at,
+          resolved_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::text[], $20, $21, $22, $23, $24, $25, $26, $27
+        )
+      `,
+      [
+        item.id,
+        item.exceptionId,
+        item.kind,
+        item.senderName,
+        Number(item.amount || 0),
+        hasData(item.expectedAmount) ? Number(item.expectedAmount) : null,
+        item.dateLabel ?? "",
+        item.senderEmail ?? null,
+        item.senderPhoneLast4 ?? null,
+        item.service ?? null,
+        item.milestone ?? null,
+        item.invoiceId ?? null,
+        item.summary,
+        item.aliasName ?? null,
+        item.sourceMessageId ?? null,
+        item.sourceProvider ?? "gmail",
+        item.transactionReference ?? null,
+        item.memo ?? null,
+        item.matchedSignals ?? [],
+        Number(item.score || 0),
+        item.resolutionAction,
+        item.resolutionMessage ?? null,
+        item.resolvedByUsername ?? "seed",
+        item.resolvedCustomerId ?? null,
+        item.resolvedPaymentId ?? null,
+        item.originalExceptionCreatedAt ?? null,
+        item.resolvedAt ?? new Date().toISOString(),
+      ],
     );
   }
 

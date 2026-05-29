@@ -6,6 +6,7 @@ Local full-stack prototype for:
 - sending invoice emails and PDF receipt emails through SMTP
 - polling a Gmail inbox for Zelle-like confirmation emails
 - matching parsed payments into `Payments to confirm` or `Exceptions`
+- preserving resolved exception history with action, actor, and timestamp
 - giving finance a spreadsheet-style customer register with a full 360 customer view
 - summarizing saved received amounts on the dashboard by day, week, month, or year
 - persisting the operational backend in PostgreSQL instead of a file store
@@ -146,6 +147,12 @@ Current receipt flow:
 - apply the transaction first
 - then send or re-send the receipt separately from `Completed transactions`
 - the receipt email includes a PDF attachment with the amount, transaction number, payment date, invoice reference if available, memo, and confirmation timestamp
+
+Current exception-review flow:
+
+- unresolved items stay in `Exceptions`
+- manual customer assignment immediately attaches the transaction to that customer record and moves it into `Payments to confirm`
+- resolved exceptions stay in history with the action taken, the resolving user, and the resolution timestamp
 
 ## Configure Gmail inbox sync
 

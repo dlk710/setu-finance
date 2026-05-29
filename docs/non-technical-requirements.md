@@ -60,6 +60,8 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - The matching engine should identify the most likely customer and invoice using saved customer information and invoice context.
 - Clear matches should appear in a `Payments to confirm` queue.
 - Unclear or mismatched transactions should appear in an `Exceptions` queue.
+- When an exception is resolved, the system must keep a durable history of that decision, including the action taken, the user who took it, and when it happened.
+- When a finance user manually selects the right customer from an exception, the transaction must immediately attach to that customer’s history before the final apply step.
 - A finance user must be able to complete the final apply step with one click.
 - Applying a transaction must update the account, invoice state, and activity history together.
 

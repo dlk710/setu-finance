@@ -120,6 +120,45 @@ function mapPaymentRow(row) {
   };
 }
 
+function mapExceptionHistoryRow(row) {
+  return {
+    id: row.id,
+    exceptionId: row.exception_id,
+    kind: row.exception_kind,
+    senderName: row.sender_name,
+    amount: Number(row.amount || 0),
+    expectedAmount:
+      row.expected_amount === null || row.expected_amount === undefined
+        ? null
+        : Number(row.expected_amount),
+    dateLabel: row.date_label,
+    senderEmail: row.sender_email ?? null,
+    senderPhoneLast4: row.sender_phone_last4 ?? null,
+    service: row.service_name ?? null,
+    milestone: row.milestone ?? null,
+    invoiceId: row.invoice_id ?? null,
+    matchedInvoiceCode: normalizeInvoiceCode(row.invoice_code) ?? row.invoice_code ?? null,
+    summary: row.summary,
+    aliasName: row.alias_name ?? null,
+    sourceMessageId: row.source_message_id ?? null,
+    sourceProvider: row.source_provider ?? "gmail",
+    transactionReference: row.transaction_reference ?? null,
+    memo: row.memo ?? null,
+    matchedSignals: row.matched_signals ?? [],
+    score: Number(row.score || 0),
+    resolutionAction: row.resolution_action,
+    resolutionMessage: row.resolution_message ?? null,
+    resolvedByUsername: row.resolved_by_username ?? null,
+    resolvedCustomerId: row.resolved_customer_id ?? null,
+    resolvedCustomerName: row.resolved_customer_name ?? null,
+    resolvedCustomerCode:
+      normalizeCustomerCode(row.resolved_customer_code) ?? row.resolved_customer_code ?? null,
+    resolvedPaymentId: row.resolved_payment_id ?? null,
+    resolvedAt: formatTimestamp(row.resolved_at),
+    originalExceptionCreatedAt: formatTimestamp(row.original_exception_created_at),
+  };
+}
+
 function normalizeReferralProgramConfig(config = {}) {
   const bonusAmount = Number(config.bonusAmount ?? DEFAULT_REFERRAL_PROGRAM.bonusAmount);
   const qualifyingPaidAmount = Number(
@@ -943,8 +982,21 @@ async function hydratePortalState(client) {
     FROM exception_candidates
     ORDER BY exception_id, sort_order ASC
   `);
+  const exceptionHistoryResult = await client.query(`
+    SELECT
+      exception_resolution_history.*,
+      customers.full_name AS resolved_customer_name,
+      customers.customer_code AS resolved_customer_code,
+      invoices.invoice_code
+    FROM exception_resolution_history
+    LEFT JOIN customers
+      ON customers.id = exception_resolution_history.resolved_customer_id
+    LEFT JOIN invoices
+      ON invoices.id = exception_resolution_history.invoice_id
+    ORDER BY resolved_at DESC, id DESC
+  `);
   const activityResult = await client.query(`
-    SELECT id, label
+    SELECT id, label, actor_username
     FROM activity_events
     ORDER BY created_at DESC, id DESC
   `);
@@ -1126,6 +1178,7 @@ async function hydratePortalState(client) {
     duplicateOfPaymentId: row.payment_duplicate_of_payment_id ?? null,
     candidates: exceptionCandidates.get(row.id) ?? [],
   }));
+  const exceptionHistory = exceptionHistoryResult.rows.map(mapExceptionHistoryRow);
 
   const currentDashboard = dashboardResult.rows[0];
   const gmailState = gmailIntegrationResult.rows[0]?.state_json ?? {
@@ -1232,12 +1285,14 @@ async function hydratePortalState(client) {
       })),
     pendingPayments,
     exceptions,
+    exceptionHistory,
     invoices,
     payments,
     processedMessageIds: processedMessagesResult.rows.map((row) => row.message_id),
     activity: activityResult.rows.map((row) => ({
       id: row.id,
       label: row.label,
+      actorUsername: row.actor_username ?? null,
     })),
     nextInvoiceSequence: sequenceResult.rows[0]?.next_value ?? 1,
     integrations: {
@@ -1254,13 +1309,13 @@ async function hydratePortalState(client) {
   };
 }
 
-async function insertActivity(client, label) {
+async function insertActivity(client, label, actorUsername = null) {
   await client.query(
     `
-      INSERT INTO activity_events (id, label, created_at)
-      VALUES ($1, $2, NOW())
+      INSERT INTO activity_events (id, label, actor_username, created_at)
+      VALUES ($1, $2, $3, NOW())
     `,
-    [crypto.randomUUID(), label],
+    [crypto.randomUUID(), label, actorUsername],
   );
 }
 
@@ -1466,6 +1521,24 @@ async function fetchPendingPaymentForUpdate(client, paymentId) {
       FOR UPDATE OF payments
     `,
     [paymentId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function fetchPaymentBySourceMessage(client, sourceMessageId) {
+  if (!sourceMessageId) {
+    return null;
+  }
+
+  const result = await client.query(
+    `
+      SELECT *
+      FROM payments
+      WHERE source_message_id = $1
+      LIMIT 1
+    `,
+    [sourceMessageId],
   );
 
   return result.rows[0] ?? null;
@@ -1691,6 +1764,85 @@ async function resolveOpenExceptionsForMessage(client, sourceMessageId, action =
         AND status = 'open'
     `,
     [sourceMessageId, action],
+  );
+}
+
+async function insertExceptionResolutionHistory(
+  client,
+  {
+    exception,
+    paymentRow,
+    resolutionAction,
+    resolutionMessage,
+    resolvedByUsername,
+    resolvedCustomerId = null,
+  },
+) {
+  await client.query(
+    `
+      INSERT INTO exception_resolution_history (
+        id,
+        exception_id,
+        exception_kind,
+        sender_name,
+        amount,
+        expected_amount,
+        date_label,
+        sender_email,
+        sender_phone_last4,
+        service_name,
+        milestone,
+        invoice_id,
+        summary,
+        alias_name,
+        source_message_id,
+        source_provider,
+        transaction_reference,
+        memo,
+        matched_signals,
+        score,
+        resolution_action,
+        resolution_message,
+        resolved_by_username,
+        resolved_customer_id,
+        resolved_payment_id,
+        original_exception_created_at,
+        resolved_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19::text[], $20, $21, $22, $23, $24, $25, $26, NOW()
+      )
+    `,
+    [
+      crypto.randomUUID(),
+      exception.id,
+      exception.kind,
+      exception.sender_name,
+      Number(exception.amount || 0),
+      exception.expected_amount === null || exception.expected_amount === undefined
+        ? null
+        : Number(exception.expected_amount),
+      exception.date_label ?? "",
+      exception.sender_email ?? null,
+      exception.sender_phone_last4 ?? null,
+      exception.service_name ?? null,
+      exception.milestone ?? null,
+      exception.invoice_id ?? null,
+      exception.summary,
+      exception.alias_name ?? null,
+      exception.source_message_id ?? null,
+      paymentRow?.source_provider ?? "gmail",
+      paymentRow?.transaction_reference ?? null,
+      paymentRow?.memo ?? null,
+      paymentRow?.matched_signals ?? [],
+      Number(paymentRow?.score || 0),
+      resolutionAction,
+      resolutionMessage ?? null,
+      resolvedByUsername ?? "unknown",
+      resolvedCustomerId ?? paymentRow?.customer_id ?? null,
+      paymentRow?.id ?? null,
+      exception.created_at ?? null,
+    ],
   );
 }
 
@@ -2409,6 +2561,7 @@ export async function resolveExceptionRecord({
   actionType,
   candidateCustomerId,
   saveAlias = false,
+  actingUsername = "unknown",
 }) {
   return withTransaction(async (client) => {
     const exception = await fetchExceptionForUpdate(client, exceptionId);
@@ -2416,7 +2569,20 @@ export async function resolveExceptionRecord({
       throw new Error("Exception item not found.");
     }
 
+    const allowedActionsByKind = {
+      ambiguous: new Set(["matched_customer"]),
+      unmatched: new Set(["matched_customer"]),
+      mismatch: new Set(["accept_full", "apply_credit"]),
+      duplicate: new Set(["mark_duplicate"]),
+    };
+
+    if (!allowedActionsByKind[exception.kind]?.has(actionType)) {
+      throw new Error("This exception action is not supported for the current review state.");
+    }
+
     let resolutionMessage = "Exception resolved.";
+    let resolvedCustomerId = null;
+    let resolvedPaymentRow = null;
 
     if (exception.kind === "duplicate" && actionType === "mark_duplicate") {
       if (exception.source_message_id) {
@@ -2431,6 +2597,7 @@ export async function resolveExceptionRecord({
           `,
           [exception.source_message_id],
         );
+        resolvedPaymentRow = await fetchPaymentBySourceMessage(client, exception.source_message_id);
       }
 
       await client.query(
@@ -2444,11 +2611,26 @@ export async function resolveExceptionRecord({
         [exceptionId, actionType],
       );
 
-      await insertActivity(client, `${exception.sender_name} resolved: ${actionType}`);
+      await insertExceptionResolutionHistory(client, {
+        exception,
+        paymentRow: resolvedPaymentRow,
+        resolutionAction: actionType,
+        resolutionMessage: "Duplicate transaction archived.",
+        resolvedByUsername: actingUsername,
+      });
+      await insertActivity(client, `${exception.sender_name} resolved: ${actionType}`, actingUsername);
       return {
         state: await hydratePortalState(client),
         message: "Duplicate transaction archived.",
       };
+    }
+
+    if (actionType === "matched_customer" && !candidateCustomerId) {
+      throw new Error("Choose an existing customer before resolving this exception.");
+    }
+
+    if (actionType === "matched_customer" && !exception.source_message_id) {
+      throw new Error("This exception is missing its source transaction reference.");
     }
 
     if (actionType === "matched_customer" && candidateCustomerId && exception.source_message_id) {
@@ -2483,7 +2665,7 @@ export async function resolveExceptionRecord({
         [candidateCustomerId, Number(exception.amount || 0)],
       );
 
-      await client.query(
+      const paymentUpdateResult = await client.query(
         `
           UPDATE payments
           SET customer_id = $2,
@@ -2496,6 +2678,7 @@ export async function resolveExceptionRecord({
               match_summary = $6,
               updated_at = NOW()
           WHERE source_message_id = $1
+          RETURNING *
         `,
         [
           exception.source_message_id,
@@ -2508,6 +2691,13 @@ export async function resolveExceptionRecord({
             : "Customer selected manually. Review and apply the transaction.",
         ],
       );
+
+      if (!paymentUpdateResult.rowCount) {
+        throw new Error("The linked transaction could not be updated for this customer.");
+      }
+
+      resolvedCustomerId = candidateCustomerId;
+      resolvedPaymentRow = paymentUpdateResult.rows[0];
 
       resolutionMessage = invoiceResult.rowCount
         ? `Matched to ${candidate.name} and moved to Payments to confirm.`
@@ -2526,8 +2716,11 @@ export async function resolveExceptionRecord({
         [exception.invoice_id],
       );
 
-      if (invoiceResult.rowCount && exception.source_message_id) {
-        await client.query(
+      if (!invoiceResult.rowCount || !exception.source_message_id) {
+        throw new Error("This mismatch no longer has a linked invoice transaction to prepare.");
+      }
+
+      const paymentUpdateResult = await client.query(
           `
             UPDATE payments
             SET customer_id = $2,
@@ -2540,27 +2733,44 @@ export async function resolveExceptionRecord({
                 match_summary = 'Prepared as a manual full-payment override. Apply the transaction to complete.',
                 updated_at = NOW()
             WHERE source_message_id = $1
+            RETURNING *
           `,
-          [
-            exception.source_message_id,
-            invoiceResult.rows[0].customer_id,
-            invoiceResult.rows[0].customer_name,
-            exception.invoice_id,
-          ],
-        );
+        [
+          exception.source_message_id,
+          invoiceResult.rows[0].customer_id,
+          invoiceResult.rows[0].customer_name,
+          exception.invoice_id,
+        ],
+      );
+
+      if (!paymentUpdateResult.rowCount) {
+        throw new Error("The linked transaction could not be prepared from this mismatch.");
       }
+
+      resolvedCustomerId = invoiceResult.rows[0].customer_id;
+      resolvedPaymentRow = paymentUpdateResult.rows[0];
+      resolutionMessage = "Mismatch accepted and moved to Payments to confirm.";
     }
 
     if (exception.kind === "mismatch" && actionType === "apply_credit" && exception.source_message_id) {
-      await client.query(
+      const paymentUpdateResult = await client.query(
         `
           UPDATE payments
           SET review_notes = 'Operator chose to apply overpayment as future credit.',
               updated_at = NOW()
           WHERE source_message_id = $1
+          RETURNING *
         `,
         [exception.source_message_id],
       );
+
+      if (!paymentUpdateResult.rowCount) {
+        throw new Error("The linked transaction could not be updated for credit handling.");
+      }
+
+      resolvedPaymentRow = paymentUpdateResult.rows[0];
+      resolvedCustomerId = paymentUpdateResult.rows[0].customer_id ?? null;
+      resolutionMessage = "Transaction left on record for future credit handling.";
     }
 
     await client.query(
@@ -2574,7 +2784,19 @@ export async function resolveExceptionRecord({
       [exceptionId, actionType],
     );
 
-    await insertActivity(client, `${exception.sender_name} resolved: ${actionType}`);
+    if (!resolvedPaymentRow && exception.source_message_id) {
+      resolvedPaymentRow = await fetchPaymentBySourceMessage(client, exception.source_message_id);
+    }
+
+    await insertExceptionResolutionHistory(client, {
+      exception,
+      paymentRow: resolvedPaymentRow,
+      resolutionAction: actionType,
+      resolutionMessage,
+      resolvedByUsername: actingUsername,
+      resolvedCustomerId,
+    });
+    await insertActivity(client, `${exception.sender_name} resolved: ${actionType}`, actingUsername);
 
     return {
       state: await hydratePortalState(client),

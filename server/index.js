@@ -311,6 +311,7 @@ app.post("/api/exceptions/:exceptionId/resolve", async (request, response, next)
       actionType,
       candidateCustomerId,
       saveAlias,
+      actingUsername: request.portalUser?.username ?? "unknown",
     });
 
     response.json({

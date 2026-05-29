@@ -800,12 +800,20 @@ button {
   grid-template-columns: 1.3fr 1.7fr 104px 96px;
 }
 
+.exception-history-grid {
+  grid-template-columns: 138px 1.15fr 1.45fr 1.1fr 104px;
+}
+
 .admin-grid {
   grid-template-columns: 1.1fr 1.1fr 1.2fr 92px;
 }
 
 .reward-grid {
   grid-template-columns: 1.1fr 1fr 92px 1.2fr;
+}
+
+.customer-history-grid {
+  grid-template-columns: 138px 1.35fr 1fr 96px;
 }
 
 .trow.attn {
@@ -2046,8 +2054,13 @@ button {
   .confirm-grid,
   .completed-grid,
   .exception-grid,
+  .exception-history-grid,
   .admin-grid,
-  .reward-grid {
+  .reward-grid,
+  .customer-invoice-grid,
+  .customer-payment-grid,
+  .customer-review-grid,
+  .customer-history-grid {
     grid-template-columns: 1fr;
   }
 

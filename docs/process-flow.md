@@ -43,5 +43,6 @@ flowchart LR
 - If the payer identity is unclear, the transaction goes to `Exceptions`.
 - If the amount does not match the expected invoice amount, the transaction goes to `Exceptions`.
 - If the same payment appears twice, duplicate controls prevent it from being counted or applied twice.
+- When finance resolves an exception, that decision stays in exception history with the resolution action, user, and timestamp.
 - If no invoice exists yet, the payment can still be saved, reviewed, and linked later.
 - If a client enrolls in more services later, onboarding adds new dated history instead of overwriting the original record.
