@@ -404,8 +404,8 @@
           </tr>
           <tr>
             <td>Leadership</td>
-            <td>See collections, outstanding receivables, queue health, and referral status</td>
-            <td>They can assess finance health without asking for manual reporting</td>
+            <td>See collections, outstanding receivables, queue health, referral status, and received-amount trends</td>
+            <td>They can assess finance health and cash movement without asking for manual reporting</td>
           </tr>
         </tbody>
       </table>
@@ -422,6 +422,13 @@
         <li>Home address should be available as an optional field.</li>
         <li>Every client must receive a stable customer ID.</li>
         <li>Service history must preserve the date and time when each service was enrolled.</li>
+      </ul>
+
+      <h4>Customer search and record view</h4>
+      <ul>
+        <li>The customer register should feel dense and operational, similar to a finance worksheet rather than a loose card list.</li>
+        <li>Each customer row should show a clear status so finance can see whether the record is active, awaiting payment, overdue, or needs review.</li>
+        <li>Clicking a customer should open a 360 view with signup date, contacts, service history, invoices, payments, referrals, rewards, and working contract or billing information.</li>
       </ul>
 
       <h4>Invoices and billing</h4>
@@ -445,6 +452,14 @@
       <ul>
         <li>Once a transaction is applied, the receipt must go to the customer’s primary email on file.</li>
         <li>The system should keep enough transaction detail to explain later how and why the payment was applied.</li>
+      </ul>
+
+      <h4>Dashboard visibility</h4>
+      <ul>
+        <li>The dashboard should show received amounts over time in one simple chart.</li>
+        <li>Users should be able to switch that chart between day, week, month, and year views.</li>
+        <li>The x-axis should show date periods and the y-axis should show summed received amounts.</li>
+        <li>Duplicate-blocked transactions should stay out of the received totals.</li>
       </ul>
 
       <h4>Referral program</h4>

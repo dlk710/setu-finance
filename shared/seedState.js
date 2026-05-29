@@ -679,6 +679,8 @@ const seedAdmin = {
   rewards: [],
 };
 
+const seedAllPayments = [...seedPendingPayments, ...seedPayments];
+
 export function createInitialState() {
   return structuredClone({
     customers: seedCustomers,
@@ -687,7 +689,7 @@ export function createInitialState() {
     pendingPayments: seedPendingPayments,
     exceptions: seedExceptions,
     invoices: seedInvoices,
-    payments: seedPayments,
+    payments: seedAllPayments,
     processedMessageIds: [],
     activity: seedActivity,
     nextInvoiceSequence: 91,

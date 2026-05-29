@@ -37,6 +37,9 @@ The build evolved through these concrete asks:
 11. Capture complete Zelle transaction details in one place for human review and one-click apply.
 12. Add stable customer IDs plus a configurable referral bonus mechanism with admin controls.
 13. Package the repo with updated wireframes, non-technical requirements, process flow, and AWS deployment design.
+14. Add a simpler dashboard chart that shows time-series sums of amounts received with day, week, month, and year drill controls, defaulting to month.
+15. Redesign customer search to feel more like an Excel-style register, with clearly defined customer status.
+16. Open a full 360 customer view when a finance user clicks a customer, including signup date, transaction history, referrals, and contract context.
 
 ## Current interpretation of the requirements
 
@@ -57,6 +60,9 @@ The codebase now implements the following current-state requirements:
 - exception routing for mismatch and ambiguity cases
 - referral program configuration, tracking, and reward ledger
 - customer search across identity fields and invoice code
+- spreadsheet-style customer register with explicit customer-status visibility
+- customer 360 view with onboarding, billing, payments, referrals, and working contract context
+- dashboard received-amount trend drill-down by day, week, month, and year
 
 ## Requirements that are still intentionally deferred
 

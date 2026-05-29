@@ -32,6 +32,8 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - Every client must have a stable customer ID that can be used across finance and future product modules.
 - The client record must support multiple contact details and payment identity hints.
 - Search must work across name, email, phone, aliases, and invoice references.
+- The customer register should show a clearly defined status for each customer so finance can tell at a glance whether the record is active, awaiting payment, overdue, or needs review.
+- Clicking a customer should open a full 360 view with signup date, contact details, service history, invoices, transaction history, referrals, rewards, and current billing or contract context.
 
 ### 3. Invoicing must be fast and controlled
 
@@ -66,7 +68,14 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - Once a payment is applied, the system must send the receipt to the customer’s primary email from the database.
 - Receipt communication must include the payment details that matter to the client and the operations team.
 
-### 7. Referral program rules must be configurable
+### 7. Dashboard visibility must support simple finance review
+
+- Leadership and finance users should be able to see amounts received over time in one dashboard view.
+- The dashboard should let users switch the received-amount chart between day, week, month, and year ranges.
+- The chart must use date or period on the x-axis and summed received amounts on the y-axis.
+- Duplicate-blocked transactions must not be counted in those received totals.
+
+### 8. Referral program rules must be configurable
 
 - The system must support referral relationships between existing and newly onboarded clients.
 - Referral bonuses should default to `$500`, but the amount must be configurable by admins.
@@ -74,7 +83,7 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - Admins must be able to disable the referral program for new enrollments without deleting historical referral records.
 - Historical referral records must preserve the rule snapshot active when the referral was created.
 
-### 8. The portal must be safe for internal finance work
+### 9. The portal must be safe for internal finance work
 
 - The portal must require login before finance data is visible.
 - Payment application must stay human-controlled.
@@ -99,4 +108,4 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 
 - A finance team member can onboard a client, send an invoice, review a synced Zelle transaction, apply it, and send a receipt without leaving the portal.
 - A referred client can be linked to a referrer during onboarding and tracked until the reward becomes available.
-- Leadership can see outstanding invoices, pending confirmations, exceptions, and referral progress in one system.
+- Leadership can see outstanding invoices, pending confirmations, exceptions, referral progress, and received-amount trends in one system.

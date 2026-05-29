@@ -21,7 +21,9 @@ import {
 } from "@tabler/icons-react";
 import { createInitialState, createInvoiceRefPreview } from "./data/mockData";
 import {
+  buildTransactionTrend,
   calculateZelleAmount,
+  formatCompactCurrency,
   formatCurrency,
   formatLongDate,
   formatShortDate,
@@ -297,6 +299,13 @@ const BILLING_CADENCE_OPTIONS = [
   { value: "custom", label: "Custom cadence" },
 ];
 
+const DASHBOARD_TRANSACTION_FILTERS = [
+  { key: "day", label: "Day" },
+  { key: "week", label: "Week" },
+  { key: "month", label: "Month" },
+  { key: "year", label: "Year" },
+];
+
 function createReferralProgramForm(config = {}) {
   return {
     enabled: config.enabled !== false,
@@ -337,6 +346,149 @@ function formatDateTimeValue(value) {
 
 function formatCustomerReference(customer) {
   return customer?.customerCode ?? customer?.id ?? "Unassigned";
+}
+
+function getPrimaryCustomerEmail(customer) {
+  return customer?.emails?.find((email) => email.isPrimary)?.value ?? customer?.emails?.[0]?.value ?? "No email on file";
+}
+
+function getPrimaryCustomerPhone(customer) {
+  return customer?.phones?.find((phone) => phone.isPrimary)?.value ?? customer?.phones?.[0]?.value ?? "No phone on file";
+}
+
+function summarizeCustomerServices(customer) {
+  const services = customer?.services ?? [];
+  if (!services.length) {
+    return {
+      primary: "No enrolled services yet",
+      detail: "Add services during onboarding or later intake updates",
+    };
+  }
+
+  return {
+    primary: services[0],
+    detail:
+      services.length === 1
+        ? "1 enrolled service"
+        : `${services.length} enrolled services · +${services.length - 1} more`,
+  };
+}
+
+function summarizeInvoiceReferences(customer) {
+  const references = customer?.invoices ?? [];
+  if (!references.length) {
+    return {
+      primary: "No invoice refs yet",
+      detail: "Customer has not entered the invoice ledger",
+    };
+  }
+
+  return {
+    primary: references.slice(0, 2).join(" · "),
+    detail:
+      references.length <= 2
+        ? `${references.length} invoice reference${references.length === 1 ? "" : "s"}`
+        : `${references.length} invoice references total`,
+  };
+}
+
+function formatCustomerAddress(customer) {
+  const profile = customer?.profile ?? {};
+  const parts = [
+    profile.homeAddressLine1,
+    profile.homeAddressLine2,
+    [profile.homeCity, profile.homeState].filter(Boolean).join(", "),
+    [profile.homePostalCode, profile.homeCountry].filter(Boolean).join(" "),
+  ]
+    .map((part) => String(part || "").trim())
+    .filter(Boolean);
+
+  return parts.length ? parts.join("\n") : "No home address captured";
+}
+
+function buildCustomerLedgerStatus(customer, { dueInvoices = [], invoices = [], pendingPayments = [], exceptions = [] }) {
+  const directException = exceptions.find((exception) => exception.customerId === customer.id);
+  if (directException) {
+    return {
+      label:
+        directException.kind === "duplicate"
+          ? "Duplicate review"
+          : directException.kind === "mismatch"
+            ? "Mismatch"
+            : "Needs review",
+      tone: "danger",
+      detail: directException.summary ?? "Customer has an open exception review",
+    };
+  }
+
+  const ambiguousCandidate = exceptions.find((exception) =>
+    exception.candidates?.some((candidate) => candidate.customerId === customer.id),
+  );
+  if (ambiguousCandidate) {
+    return {
+      label: "Possible match",
+      tone: "warn",
+      detail: ambiguousCandidate.summary ?? "Customer appears in an ambiguous payment review",
+    };
+  }
+
+  const pendingPayment = pendingPayments.find((payment) => payment.customerId === customer.id);
+  if (pendingPayment) {
+    return {
+      label: "Payment ready",
+      tone: "success",
+      detail: `${formatCurrency(pendingPayment.amountReceived || 0)} · ${
+        pendingPayment.matchedInvoiceCode ?? "Ready to apply"
+      }`,
+    };
+  }
+
+  const overdueInvoice = invoices.find(
+    (invoice) => invoice.customerId === customer.id && invoice.status === "overdue",
+  );
+  if (overdueInvoice) {
+    return {
+      label: "Overdue",
+      tone: "danger",
+      detail: `${overdueInvoice.invoiceCode} due ${formatShortDate(overdueInvoice.dueDate)}`,
+    };
+  }
+
+  const sentInvoice = invoices.find((invoice) => invoice.customerId === customer.id && invoice.status === "sent");
+  if (sentInvoice) {
+    return {
+      label: "Awaiting payment",
+      tone: "ink",
+      detail: `${sentInvoice.invoiceCode} due ${formatShortDate(sentInvoice.dueDate)}`,
+    };
+  }
+
+  const draftInvoice =
+    dueInvoices.find((invoice) => invoice.customerId === customer.id) ??
+    invoices.find((invoice) => invoice.customerId === customer.id && invoice.status === "draft");
+  if (draftInvoice) {
+    return {
+      label: "Draft queued",
+      tone: "neutral",
+      detail: `${draftInvoice.invoiceCode} ready to send`,
+    };
+  }
+
+  if (customer.profile?.onboardingStatus === "needs_follow_up") {
+    return {
+      label: "Needs follow-up",
+      tone: "warn",
+      detail: "Profile is missing some onboarding detail",
+    };
+  }
+
+  return {
+    label: "Active",
+    tone: "success",
+    detail: `${formatPaymentMethod(customer.profile?.preferredPaymentMethod)} · ${formatBillingCadence(
+      customer.profile?.billingCadence,
+    )}`,
+  };
 }
 
 function App() {
@@ -387,6 +539,10 @@ function App() {
   const serviceOptions = buildServiceOptions(selectedCustomer);
   const selectedOnboardingCustomer =
     state.customers.find((customer) => customer.id === onboardingForm.selectedCustomerId) ?? null;
+  const selectedCustomer360 =
+    modal.type === "customer-360"
+      ? state.customers.find((customer) => customer.id === modal.payload) ?? null
+      : null;
   const onboardingCustomerResults = onboardingCustomerQuery.trim()
     ? searchCustomersByIdentity(state.customers, onboardingCustomerQuery)
     : [];
@@ -1175,6 +1331,7 @@ function App() {
         {view === "dashboard" && (
           <DashboardView
             dashboard={state.dashboard}
+            payments={state.payments}
             needsAttention={needsAttention}
             onOpenOnboarding={() => setView("onboarding")}
             onOpenConsole={() => setView("console")}
@@ -1202,10 +1359,14 @@ function App() {
         {view === "search" && (
           <SearchView
             customers={state.customers}
+            dueInvoices={state.dueInvoices}
+            invoices={state.invoices}
+            pendingPayments={state.pendingPayments}
+            exceptions={state.exceptions}
             query={searchQuery}
             results={searchResults}
             onQueryChange={setSearchQuery}
-            onOpenCustomer={(name) => pushToast(`Customer detail for ${name} coming next`)}
+            onOpenCustomer={(customer) => setModal({ type: "customer-360", payload: customer.id })}
           />
         )}
         {view === "admin" && (
@@ -1288,6 +1449,20 @@ function App() {
               "Potential duplicate archived. It will not be counted or applied again.",
             )
           }
+        />
+      </ModalShell>
+
+      <ModalShell show={modal.type === "customer-360"} onClose={closeModal} size="wide">
+        <Customer360Modal
+          customer={selectedCustomer360}
+          customers={state.customers}
+          invoices={state.invoices}
+          payments={state.payments}
+          pendingPayments={state.pendingPayments}
+          exceptions={state.exceptions}
+          referrals={state.admin?.referrals ?? []}
+          rewards={state.admin?.rewards ?? []}
+          onClose={closeModal}
         />
       </ModalShell>
 
@@ -1992,7 +2167,157 @@ function OnboardingView({
   );
 }
 
-function DashboardView({ dashboard, needsAttention, onOpenConsole, onOpenOnboarding }) {
+function TransactionTrendSection({ payments }) {
+  const [filter, setFilter] = useState("month");
+  const trend = buildTransactionTrend(payments, filter);
+  const chartWidth = 680;
+  const chartHeight = 240;
+  const paddingLeft = 12;
+  const paddingRight = 12;
+  const paddingTop = 16;
+  const paddingBottom = 28;
+  const innerWidth = chartWidth - paddingLeft - paddingRight;
+  const innerHeight = chartHeight - paddingTop - paddingBottom;
+  const chartPoints = trend.buckets.map((bucket, index) => {
+    const ratio = trend.maxAmount <= 0 ? 0 : bucket.amount / trend.maxAmount;
+    const x =
+      trend.buckets.length === 1
+        ? paddingLeft + innerWidth / 2
+        : paddingLeft + (innerWidth * index) / (trend.buckets.length - 1);
+    const y = paddingTop + innerHeight - ratio * innerHeight;
+    return {
+      ...bucket,
+      x,
+      y,
+    };
+  });
+  const linePath = chartPoints
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`)
+    .join(" ");
+  const areaPath = chartPoints.length
+    ? `${linePath} L ${chartPoints.at(-1).x.toFixed(2)} ${(paddingTop + innerHeight).toFixed(2)} L ${
+        chartPoints[0].x
+      .toFixed(2)} ${(paddingTop + innerHeight).toFixed(2)} Z`
+    : "";
+  const gridValues = [trend.maxAmount, trend.maxAmount / 2, 0];
+  const transactionLabel = `${trend.totals.count} saved transaction${trend.totals.count === 1 ? "" : "s"} in view`;
+  const latestActivityLabel = trend.latestNonZeroBucket
+    ? `Latest activity: ${trend.latestNonZeroBucket.detailLabel} · ${formatCurrency(
+        trend.latestNonZeroBucket.amount,
+      )}`
+    : `No received amounts in this ${trend.rangeLabel.toLowerCase()} range yet`;
+
+  return (
+    <section className="section">
+      <div className="section-head">
+        <h2>Amounts received over time</h2>
+        <div className="trend-filter-row">
+          {DASHBOARD_TRANSACTION_FILTERS.map((option) => (
+            <button
+              className={`trend-filter ${option.key === filter ? "active" : ""}`}
+              key={option.key}
+              onClick={() => setFilter(option.key)}
+              type="button"
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="section-desc">
+        X-axis shows {trend.rangeLabel.toLowerCase()} periods. Y-axis shows the sum of saved
+        amounts received. Duplicate-blocked transactions stay out of these totals.
+      </div>
+      <div className="chart-card trend-card">
+        <div className="trend-summary-bar">
+          <div>
+            <div className="trend-summary-label">{trend.windowLabel}</div>
+            <div className="trend-summary-value">{formatCurrency(trend.totals.amount)}</div>
+          </div>
+          <div className="trend-summary-meta">
+            <div>{transactionLabel}</div>
+            <div>{latestActivityLabel}</div>
+          </div>
+        </div>
+
+        {trend.empty ? (
+          <div className="empty">
+            <IconCheck size={14} />
+            No transactions saved yet
+          </div>
+        ) : (
+          <div className="trend-chart">
+            <svg viewBox={`0 0 ${chartWidth} ${chartHeight}`} preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="trend-fill" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="#ba7517" stopOpacity="0.26" />
+                  <stop offset="100%" stopColor="#ba7517" stopOpacity="0" />
+                </linearGradient>
+              </defs>
+
+              {gridValues.map((value) => {
+                const y =
+                  paddingTop +
+                  innerHeight -
+                  (trend.maxAmount <= 0 ? 0 : (value / trend.maxAmount) * innerHeight);
+                return (
+                  <g key={value}>
+                    <line
+                      className="trend-grid-line"
+                      x1={paddingLeft}
+                      x2={chartWidth - paddingRight}
+                      y1={y}
+                      y2={y}
+                    />
+                    <text className="trend-grid-text" x={paddingLeft} y={y - 6}>
+                      {formatCompactCurrency(value)}
+                    </text>
+                  </g>
+                );
+              })}
+
+              <path className="trend-area" d={areaPath} />
+              <path className="trend-line" d={linePath} />
+
+              {chartPoints.map((point) => (
+                <circle
+                  className={`trend-point ${point.count ? "active" : ""}`}
+                  cx={point.x}
+                  cy={point.y}
+                  key={`${point.index}-${point.axisLabel}`}
+                  r={point.count ? 4 : 2.8}
+                />
+              ))}
+
+              {trend.labelIndices.map((index) => {
+                const point = chartPoints[index];
+                if (!point) {
+                  return null;
+                }
+
+                return (
+                  <text
+                    className="trend-axis-text"
+                    key={`axis-${index}`}
+                    x={point.x}
+                    y={chartHeight - 6}
+                    textAnchor={
+                      index === 0 ? "start" : index === chartPoints.length - 1 ? "end" : "middle"
+                    }
+                  >
+                    {trend.buckets[index].axisLabel}
+                  </text>
+                );
+              })}
+            </svg>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function DashboardView({ dashboard, payments, needsAttention, onOpenConsole, onOpenOnboarding }) {
   return (
     <div>
       <div className="topbar">
@@ -2042,6 +2367,8 @@ function DashboardView({ dashboard, needsAttention, onOpenConsole, onOpenOnboard
             deltaTone="up"
           />
         </div>
+
+        <TransactionTrendSection payments={payments} />
 
         <div className="two-col">
           <section className="section no-gap">
@@ -2607,60 +2934,152 @@ function AdminView({
   );
 }
 
-function SearchView({ customers, query, results, onQueryChange, onOpenCustomer }) {
+function SearchView({
+  customers,
+  dueInvoices,
+  invoices,
+  pendingPayments,
+  exceptions,
+  query,
+  results,
+  onQueryChange,
+  onOpenCustomer,
+}) {
   const showingAll = !query.trim();
   const hint = showingAll
-    ? "Showing all customers · type to filter across every field"
+    ? "Showing the full customer register. Search across ID, name, email, phone, alias, and invoice references."
     : `${results.length} match${results.length === 1 ? "" : "es"} for "${query.trim().toLowerCase()}"`;
+  const sheetRows = results.map((customer) => ({
+    customer,
+    status: buildCustomerLedgerStatus(customer, {
+      dueInvoices,
+      invoices,
+      pendingPayments,
+      exceptions,
+    }),
+    primaryEmail: getPrimaryCustomerEmail(customer),
+    primaryPhone: getPrimaryCustomerPhone(customer),
+    serviceSummary: summarizeCustomerServices(customer),
+    invoiceSummary: summarizeInvoiceReferences(customer),
+    matchLine: buildMatchLine(customer, query),
+  }));
 
   return (
     <div>
       <div className="topbar">
         <div>
           <h1>Customer search</h1>
-          <div className="sub">Search by customer ID, name, any email, any phone, alias, or invoice code</div>
+          <div className="sub">
+            Spreadsheet-style lookup for finance operations. Search by customer ID, name, any
+            email, any phone, alias, or invoice code.
+          </div>
         </div>
       </div>
       <div className="content search-content">
-        <div className="search-wrap">
-          <IconSearch size={18} />
-          <input
-            className="search-input"
-            value={query}
-            onChange={(event) => onQueryChange(event.target.value)}
-            placeholder="Try: 4471, sharma, or an email…"
-          />
+        <div className="chart-card search-toolbar-card">
+          <div className="search-toolbar-head">
+            <div>
+              <div className="search-toolbar-title">Customer register</div>
+              <div className="search-toolbar-copy">{hint}</div>
+            </div>
+            <div className="search-toolbar-count">
+              {results.length} row{results.length === 1 ? "" : "s"}
+            </div>
+          </div>
+          <div className="search-wrap search-register-input">
+            <IconSearch size={18} />
+            <input
+              className="search-input"
+              value={query}
+              onChange={(event) => onQueryChange(event.target.value)}
+              placeholder="Try: CUS-00004, 4471, sharma, or an email…"
+            />
+          </div>
+          <div className="search-status-legend">
+            <span className="search-status-chip tone-success">Active</span>
+            <span className="search-status-chip tone-success">Payment ready</span>
+            <span className="search-status-chip tone-ink">Awaiting payment</span>
+            <span className="search-status-chip tone-neutral">Draft queued</span>
+            <span className="search-status-chip tone-warn">Needs follow-up</span>
+            <span className="search-status-chip tone-danger">Needs review</span>
+          </div>
         </div>
-        <div className="section-desc">{hint}</div>
-        <div className="tcard">
-          {!results.length && <div className="empty">No customers match that search</div>}
-          {results.map((customer) => {
-            const matchLine = buildMatchLine(customer, query, customers);
-            return (
-              <div className="res-row" key={customer.id}>
-                <div className="avatar">{customer.initials}</div>
-                <div className="result-copy">
-                  <div className="cust">{customer.name}</div>
-                  <div
-                    className="sub"
-                    dangerouslySetInnerHTML={{ __html: matchLine }}
-                  />
-                  <div className="sub result-profile">
-                    Customer ID {formatCustomerReference(customer)} ·{" "}
-                    {formatOnboardingStatus(customer.profile?.onboardingStatus)} ·{" "}
-                    {formatPaymentMethod(customer.profile?.preferredPaymentMethod)} ·{" "}
-                    {formatBillingCadence(customer.profile?.billingCadence)}
-                  </div>
-                </div>
-                <div className="result-meta">
-                  <div className="sub">{summarizeContacts(customer)}</div>
-                  <button className="btn btn-sm" onClick={() => onOpenCustomer(customer.name)}>
-                    Open
-                  </button>
+
+        <div className="tcard search-sheet-wrap">
+          <div className="trow head search-sheet-grid search-sheet-head">
+            <div>Customer</div>
+            <div>Status</div>
+            <div>Primary email</div>
+            <div>Primary phone</div>
+            <div>Services</div>
+            <div>{showingAll ? "Invoice context" : "Search match"}</div>
+            <div />
+          </div>
+
+          {!sheetRows.length && <div className="empty">No customers match that search</div>}
+
+          {sheetRows.map(({ customer, status, primaryEmail, primaryPhone, serviceSummary, invoiceSummary, matchLine }) => (
+            <div className="trow search-sheet-grid search-sheet-row" key={customer.id}>
+              <div className="search-cell">
+                <button className="search-name-button" onClick={() => onOpenCustomer(customer)} type="button">
+                  {customer.name}
+                </button>
+                <div className="sub search-cell-sub">
+                  Customer ID {formatCustomerReference(customer)} · {formatOnboardingStatus(customer.profile?.onboardingStatus)}
                 </div>
               </div>
-            );
-          })}
+
+              <div className="search-cell">
+                <span className={`search-status-chip tone-${status.tone}`}>{status.label}</span>
+                <div className="sub search-cell-sub">{status.detail}</div>
+              </div>
+
+              <div className="search-cell">
+                <div>{primaryEmail}</div>
+                <div className="sub search-cell-sub">
+                  {customer.emails.length} email{customer.emails.length === 1 ? "" : "s"} on file
+                </div>
+              </div>
+
+              <div className="search-cell">
+                <div>{primaryPhone}</div>
+                <div className="sub search-cell-sub">
+                  {customer.phones.length} phone{customer.phones.length === 1 ? "" : "s"} on file
+                </div>
+              </div>
+
+              <div className="search-cell">
+                <div>{serviceSummary.primary}</div>
+                <div className="sub search-cell-sub">{serviceSummary.detail}</div>
+              </div>
+
+              <div className="search-cell">
+                {showingAll ? (
+                  <>
+                    <div className="mono">{invoiceSummary.primary}</div>
+                    <div className="sub search-cell-sub">{invoiceSummary.detail}</div>
+                  </>
+                ) : (
+                  <>
+                    <div
+                      className="sub search-match-copy"
+                      dangerouslySetInnerHTML={{ __html: matchLine }}
+                    />
+                    <div className="sub search-cell-sub">
+                      {formatPaymentMethod(customer.profile?.preferredPaymentMethod)} ·{" "}
+                      {formatBillingCadence(customer.profile?.billingCadence)}
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="search-cell search-open-cell">
+                <button className="btn btn-sm" onClick={() => onOpenCustomer(customer)}>
+                  360 view
+                </button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -3019,6 +3438,389 @@ function formatBillingCadence(value) {
   };
 
   return labels[value] ?? "Cadence pending";
+}
+
+function getComparableTime(...values) {
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.getTime();
+    }
+  }
+
+  return 0;
+}
+
+function formatInvoiceStatusLabel(value) {
+  const labels = {
+    draft: "Draft",
+    sent: "Sent",
+    overdue: "Overdue",
+    paid: "Paid",
+  };
+
+  return labels[value] ?? value ?? "Unknown";
+}
+
+function formatInvoiceStatusTone(value) {
+  const tones = {
+    draft: "neutral",
+    sent: "ink",
+    overdue: "danger",
+    paid: "success",
+  };
+
+  return tones[value] ?? "neutral";
+}
+
+function formatRewardStatusTone(value) {
+  const tones = {
+    available: "warn",
+    applied: "success",
+    active: "ink",
+    awarded: "success",
+  };
+
+  return tones[value] ?? "neutral";
+}
+
+function Customer360Modal({
+  customer,
+  customers,
+  invoices,
+  payments,
+  pendingPayments,
+  exceptions,
+  referrals,
+  rewards,
+  onClose,
+}) {
+  if (!customer) {
+    return null;
+  }
+
+  const status = buildCustomerLedgerStatus(customer, {
+    dueInvoices: invoices.filter((invoice) => invoice.status === "draft"),
+    invoices,
+    pendingPayments,
+    exceptions,
+  });
+  const customerInvoices = [...invoices]
+    .filter((invoice) => invoice.customerId === customer.id)
+    .sort(
+      (left, right) =>
+        getComparableTime(right.dueDate, right.updatedAt, right.createdAt) -
+        getComparableTime(left.dueDate, left.updatedAt, left.createdAt),
+    );
+  const customerPayments = [...payments]
+    .filter((payment) => payment.customerId === customer.id)
+    .sort(
+      (left, right) =>
+        getComparableTime(right.appliedAt, right.transactionDate, right.receivedAt) -
+        getComparableTime(left.appliedAt, left.transactionDate, left.receivedAt),
+    );
+  const customerExceptions = exceptions.filter(
+    (exception) =>
+      exception.customerId === customer.id ||
+      exception.candidates?.some((candidate) => candidate.customerId === customer.id),
+  );
+  const referralSourceRecord =
+    referrals.find((referral) => referral.referredCustomerId === customer.id) ?? null;
+  const referrerCustomer =
+    customers.find((item) => item.id === customer.profile?.referredByCustomerId) ??
+    customers.find((item) => item.id === referralSourceRecord?.referrerCustomerId) ??
+    null;
+  const referralsMade = referrals.filter((referral) => referral.referrerCustomerId === customer.id);
+  const relatedRewards = rewards.filter(
+    (reward) =>
+      reward.customerId === customer.id ||
+      reward.referrerCustomerId === customer.id ||
+      reward.referredCustomerId === customer.id,
+  );
+  const pendingPaymentIds = new Set(pendingPayments.map((payment) => payment.id));
+  const address = formatCustomerAddress(customer);
+  const serviceHistory = [...(customer.serviceHistory ?? [])].sort(
+    (left, right) => getComparableTime(right.enrolledAt) - getComparableTime(left.enrolledAt),
+  );
+  const financeSnapshot = {
+    openInvoices: customerInvoices.filter((invoice) => invoice.status === "sent" || invoice.status === "overdue")
+      .length,
+    savedTransactions: customerPayments.length,
+    openReviews: customerExceptions.length,
+    referralsMade: referralsMade.length,
+  };
+  const contractNote = customer.profile?.billingNotes?.trim();
+
+  return (
+    <>
+      <div className="modal-head">
+        <div>
+          <h3>Customer 360</h3>
+          <div className="sub modal-sub">
+            Full record view for onboarding, billing, payment history, referrals, and working
+            contract context.
+          </div>
+        </div>
+        <button className="x" onClick={onClose}>
+          <IconX size={18} />
+        </button>
+      </div>
+      <div className="modal-body customer360-layout">
+        <div className="customer360-hero">
+          <div>
+            <div className="detail-label">Customer snapshot</div>
+            <div className="customer360-title">{customer.name}</div>
+            <div className="sub">
+              Customer ID {formatCustomerReference(customer)} · signed up{" "}
+              {customer.profile?.onboardedAt ? formatDateTimeValue(customer.profile.onboardedAt) : "date not captured"}
+            </div>
+          </div>
+          <div className="customer360-chip-row">
+            <span className={`search-status-chip tone-${status.tone}`}>{status.label}</span>
+            <span className="search-status-chip tone-neutral">{formatOnboardingStatus(customer.profile?.onboardingStatus)}</span>
+            <span className="search-status-chip tone-ink">{formatPaymentMethod(customer.profile?.preferredPaymentMethod)}</span>
+          </div>
+        </div>
+
+        <div className="detail-grid">
+          <div className="detail-card">
+            <div className="detail-label">Identity and contacts</div>
+            <div className="detail-kv"><span>Primary email</span><strong>{getPrimaryCustomerEmail(customer)}</strong></div>
+            <div className="detail-kv"><span>Primary phone</span><strong>{getPrimaryCustomerPhone(customer)}</strong></div>
+            <div className="detail-kv"><span>All emails</span><strong>{customer.emails.map((item) => item.value).join(" · ") || "Not captured"}</strong></div>
+            <div className="detail-kv"><span>All phones</span><strong>{customer.phones.map((item) => item.value).join(" · ") || "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Zelle aliases</span><strong>{customer.aliases.length ? customer.aliases.map((alias) => alias.email || alias.name || alias.phoneLast4).join(" · ") : "None saved"}</strong></div>
+          </div>
+
+          <div className="detail-card">
+            <div className="detail-label">Address and signup</div>
+            <div className="detail-kv"><span>Signed up</span><strong>{customer.profile?.onboardedAt ? formatDateTimeValue(customer.profile.onboardedAt) : "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Referral source</span><strong>{customer.profile?.referralSource || "Direct / not captured"}</strong></div>
+            <div className="detail-kv"><span>Home address</span><strong className="customer360-prewrap">{address}</strong></div>
+          </div>
+
+          <div className="detail-card">
+            <div className="detail-label">Contract and billing setup</div>
+            <div className="detail-kv"><span>Billing cadence</span><strong>{formatBillingCadence(customer.profile?.billingCadence)}</strong></div>
+            <div className="detail-kv"><span>Preferred payment</span><strong>{formatPaymentMethod(customer.profile?.preferredPaymentMethod)}</strong></div>
+            <div className="detail-kv"><span>Enrolled services</span><strong>{customer.services.length ? customer.services.join(" · ") : "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Working contract record</span><strong>Onboarding profile + service history + invoice ledger</strong></div>
+            {contractNote ? <div className="detail-note">{contractNote}</div> : <div className="detail-note">No separate contract note is stored yet. This prototype currently uses onboarding and billing settings as the working contract context.</div>}
+          </div>
+
+          <div className="detail-card">
+            <div className="detail-label">Referral and finance snapshot</div>
+            <div className="detail-kv"><span>Referred by</span><strong>{referrerCustomer ? `${referrerCustomer.name} · ${formatCustomerReference(referrerCustomer)}` : "Not referred by another client"}</strong></div>
+            <div className="detail-kv"><span>Referrals made</span><strong>{String(financeSnapshot.referralsMade)}</strong></div>
+            <div className="detail-kv"><span>Open invoices</span><strong>{String(financeSnapshot.openInvoices)}</strong></div>
+            <div className="detail-kv"><span>Saved transactions</span><strong>{String(financeSnapshot.savedTransactions)}</strong></div>
+            <div className="detail-kv"><span>Open reviews</span><strong>{String(financeSnapshot.openReviews)}</strong></div>
+          </div>
+        </div>
+
+        <div className="customer360-section">
+          <div className="section-head">
+            <h2>Service history</h2>
+          </div>
+          <div className="section-desc">
+            Every enrollment is timestamped so later add-ons remain visible in the customer record.
+          </div>
+          <div className="tcard">
+            {serviceHistory.length ? (
+              serviceHistory.map((entry) => (
+                <div className="trow customer360-service-row" key={entry.id}>
+                  <div>
+                    <div className="cust">{entry.serviceName}</div>
+                    <div className="sub">{entry.isCustom ? "Custom service" : "EB1A criterion / standard service"}</div>
+                  </div>
+                  <div className="mono">{formatEnrollmentTimestamp(entry.enrolledAt)}</div>
+                </div>
+              ))
+            ) : (
+              <div className="empty">No service history captured yet.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="customer360-section">
+          <div className="section-head">
+            <h2>Invoice ledger</h2>
+          </div>
+          <div className="section-desc">
+            Current and historical invoice records linked to this customer.
+          </div>
+          <div className="tcard">
+            <div className="trow head customer-invoice-grid">
+              <div>Due</div>
+              <div>Service</div>
+              <div>Status</div>
+              <div>Amount</div>
+              <div>Reference</div>
+            </div>
+            {customerInvoices.length ? (
+              customerInvoices.map((invoice) => (
+                <div className="trow customer-invoice-grid" key={invoice.id}>
+                  <div className="mono">{formatShortDate(invoice.dueDate)}</div>
+                  <div>
+                    <div className="cust">{invoice.service}</div>
+                    <div className="sub">{invoice.milestone} · {invoice.source}</div>
+                  </div>
+                  <div>
+                    <span className={`search-status-chip tone-${formatInvoiceStatusTone(invoice.status)}`}>
+                      {formatInvoiceStatusLabel(invoice.status)}
+                    </span>
+                  </div>
+                  <div className="mono">{formatCurrency(invoice.zelleAmount ?? invoice.cardAmount ?? 0)}</div>
+                  <div className="mono">{invoice.invoiceCode}</div>
+                </div>
+              ))
+            ) : (
+              <div className="empty">No invoices linked to this customer yet.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="customer360-section">
+          <div className="section-head">
+            <h2>Transaction ledger</h2>
+          </div>
+          <div className="section-desc">
+            Saved payment history, including when transactions were received and when they were applied.
+          </div>
+          <div className="tcard">
+            <div className="trow head customer-payment-grid">
+              <div>Applied</div>
+              <div>Received</div>
+              <div>Status</div>
+              <div>Amount</div>
+              <div>Reference / memo</div>
+            </div>
+            {customerPayments.length ? (
+              customerPayments.map((payment) => {
+                const paymentHasException =
+                  payment.reviewStatus === "exception" ||
+                  exceptions.some((exception) => exception.sourceMessageId === payment.sourceMessageId);
+                const paymentStatus = payment.appliedAt
+                  ? { label: "Applied", tone: "success" }
+                  : paymentHasException
+                    ? { label: "Needs review", tone: "danger" }
+                    : pendingPaymentIds.has(payment.id)
+                      ? { label: "Ready to apply", tone: "ink" }
+                      : { label: "Saved", tone: "neutral" };
+
+                return (
+                  <div className="trow customer-payment-grid" key={payment.id}>
+                    <div className="mono">{payment.appliedAt ? formatDateTimeValue(payment.appliedAt) : "Not applied yet"}</div>
+                    <div className="mono">{payment.transactionDate ? formatTransactionDate(payment.transactionDate) : formatDateTimeValue(payment.receivedAt)}</div>
+                    <div>
+                      <span className={`search-status-chip tone-${paymentStatus.tone}`}>{paymentStatus.label}</span>
+                    </div>
+                    <div className="mono">{formatCurrency(payment.amountReceived ?? 0)}</div>
+                    <div>
+                      <div className="mono">{payment.transactionReference ?? "No transaction ref"}</div>
+                      <div className="sub">{payment.memo ?? payment.matchSummary ?? "Saved payment record"}</div>
+                    </div>
+                  </div>
+                );
+              })
+            ) : (
+              <div className="empty">No saved transactions linked to this customer yet.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="customer360-section">
+          <div className="section-head">
+            <h2>Referrals and open reviews</h2>
+          </div>
+          <div className="section-desc">
+            Referral relationships, earned rewards, and any transaction issues still waiting on human review.
+          </div>
+          <div className="detail-grid customer360-detail-grid">
+            <div className="detail-card">
+              <div className="detail-label">Referral relationships</div>
+              {referralsMade.length || referralSourceRecord ? (
+                <div className="customer360-stack">
+                  {referralSourceRecord ? (
+                    <div className="customer360-inline-card">
+                      <div className="cust">Referred into Setu</div>
+                      <div className="sub">
+                        {referrerCustomer ? `${referrerCustomer.name} · ${formatCustomerReference(referrerCustomer)}` : referralSourceRecord.referrerCustomerName}
+                      </div>
+                    </div>
+                  ) : null}
+                  {referralsMade.map((referral) => (
+                    <div className="customer360-inline-card" key={referral.id}>
+                      <div className="cust">{referral.referredCustomerName}</div>
+                      <div className="sub">
+                        {formatCurrency(referral.bonusAmount)} bonus · {formatCurrency(referral.qualifyingPaidAmount)} paid or{" "}
+                        {referral.qualifyingMonths} months
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty customer360-inline-empty">No referral relationships on this record yet.</div>
+              )}
+            </div>
+
+            <div className="detail-card">
+              <div className="detail-label">Reward ledger</div>
+              {relatedRewards.length ? (
+                <div className="customer360-stack">
+                  {relatedRewards.map((reward) => (
+                    <div className="customer360-inline-card" key={reward.id}>
+                      <div className="cust">{formatCurrency(reward.amount ?? 0)}</div>
+                      <div className="sub">
+                        {reward.description ?? reward.rewardType ?? "Referral reward"} ·{" "}
+                        <span className={`search-status-chip tone-${formatRewardStatusTone(reward.status)}`}>
+                          {reward.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty customer360-inline-empty">No rewards linked to this customer yet.</div>
+              )}
+            </div>
+          </div>
+
+          {customerExceptions.length ? (
+            <div className="tcard customer360-review-card">
+              <div className="trow head customer-review-grid">
+                <div>Review type</div>
+                <div>Summary</div>
+                <div>Transaction</div>
+              </div>
+              {customerExceptions.map((exception) => (
+                <div className="trow customer-review-grid" key={exception.id}>
+                  <div>
+                    <span className="search-status-chip tone-danger">
+                      {exception.kind === "ambiguous" ? "Ambiguous" : exception.kind === "duplicate" ? "Duplicate" : "Mismatch"}
+                    </span>
+                  </div>
+                  <div className="sub">{exception.summary}</div>
+                  <div className="mono">
+                    {formatCurrency(exception.amount ?? 0)} · {exception.transactionReference ?? "No transaction ref"}
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      </div>
+      <div className="modal-foot">
+        <button className="btn" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </>
+  );
 }
 
 function SendPreviewModal({ invoice, onClose, onSend }) {

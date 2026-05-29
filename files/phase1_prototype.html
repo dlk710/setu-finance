@@ -355,6 +355,107 @@
     font-size: 16px;
   }
 
+  .trend-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 14px;
+    margin-bottom: 14px;
+  }
+
+  .trend-controls {
+    display: inline-flex;
+    gap: 6px;
+    padding: 4px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--paper-3);
+  }
+
+  .trend-toggle {
+    padding: 7px 10px;
+    border-radius: 999px;
+    color: var(--text-2);
+    font-size: 12px;
+    font-family: var(--mono);
+    background: transparent;
+  }
+
+  .trend-toggle.active {
+    background: var(--paper);
+    color: var(--text-1);
+    font-weight: 700;
+  }
+
+  .trend-summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 14px;
+    padding: 15px 16px;
+    margin-bottom: 14px;
+    border: 1px solid var(--line-soft);
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(255,255,255,0.96), rgba(250,237,217,0.52));
+  }
+
+  .trend-kicker {
+    margin-bottom: 7px;
+    color: var(--text-3);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .trend-figure {
+    font-size: 30px;
+    font-family: var(--mono);
+    letter-spacing: -0.05em;
+  }
+
+  .trend-meta {
+    text-align: right;
+    color: var(--text-2);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+
+  .trend-chart {
+    width: 100%;
+    height: 260px;
+    display: block;
+  }
+
+  .trend-grid-line {
+    stroke: var(--line-soft);
+    stroke-width: 1;
+  }
+
+  .trend-grid-text,
+  .trend-axis-text {
+    fill: var(--text-3);
+    font-size: 11px;
+    font-family: var(--mono);
+  }
+
+  .trend-area {
+    fill: rgba(184, 116, 24, 0.14);
+  }
+
+  .trend-line {
+    fill: none;
+    stroke: var(--amber);
+    stroke-width: 3;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .trend-point {
+    fill: var(--paper);
+    stroke: var(--amber);
+    stroke-width: 2;
+  }
+
   .desc {
     color: var(--text-2);
     font-size: 12px;
@@ -531,8 +632,21 @@
   .payment-grid { grid-template-columns: 1.1fr 1.2fr 90px 120px; }
   .exception-grid { grid-template-columns: 1.1fr 1.5fr 120px 96px; }
   .search-grid { grid-template-columns: 46px 1fr 220px; }
+  .search-ledger-grid { grid-template-columns: 1.2fr 140px 1.15fr 1fr 1.15fr 1.35fr 92px; }
   .admin-grid { grid-template-columns: 1fr 1fr 1.2fr 120px; }
   .reward-grid { grid-template-columns: 1fr 1fr 120px 180px; }
+
+  .search-link {
+    border: 0;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    color: var(--ink);
+    font: inherit;
+    font-weight: 700;
+    text-align: left;
+    cursor: pointer;
+  }
 
   .cust {
     font-weight: 700;
@@ -811,6 +925,16 @@
     .admin-grid,
     .reward-grid {
       grid-template-columns: 1fr;
+    }
+
+    .trend-toolbar,
+    .trend-summary {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .trend-meta {
+      text-align: left;
     }
 
     .shell { padding: 16px; }
@@ -1551,40 +1675,108 @@ Memo camping</div>
         </div>
         <div class="content">
           <div class="panel" style="margin-bottom:18px;">
+            <div class="section-head">
+              <h3>Customer register</h3>
+              <span class="pill">7 rows</span>
+            </div>
             <div class="field">
               <label>Search</label>
-              <input class="search-input" value="4471">
+              <input class="search-input" value="rahul">
             </div>
-            <div class="hint">The built app highlights which field matched and keeps the result tied to the stable customer ID.</div>
+            <div class="desc">Spreadsheet-style search across customer ID, name, email, phone, aliases, and invoice references. Every row shows an operational customer status before finance even opens the record.</div>
+            <div class="mini-list">
+              <span class="chip">Active</span>
+              <span class="chip">Awaiting payment</span>
+              <span class="chip">Draft queued</span>
+              <span class="chip">Needs follow-up</span>
+              <span class="chip">Needs review</span>
+            </div>
           </div>
 
-          <div class="table">
-            <div class="trow search-grid">
-              <div class="avatar">RS</div>
-              <div>
-                <div class="cust">Rohan Sharma</div>
-                <div class="sub">CUS-00001 · rohan.sharma@gmail.com · (847) 555-4471</div>
-                <div class="sub">Services: Authorship, Judging</div>
+          <div class="grid-2">
+            <div class="panel">
+              <div class="table">
+                <div class="trow head search-ledger-grid">
+                  <div>Customer</div>
+                  <div>Status</div>
+                  <div>Primary email</div>
+                  <div>Primary phone</div>
+                  <div>Services</div>
+                  <div>Search / invoice context</div>
+                  <div>Action</div>
+                </div>
+                <div class="trow search-ledger-grid">
+                  <div>
+                    <button class="search-link" onclick="showFrame('search')">Rahul Kapoor</button>
+                    <div class="sub">CUS-00007 · Intake complete</div>
+                  </div>
+                  <div><span class="status danger">Mismatch</span><div class="sub">Open exception review</div></div>
+                  <div>r.kapoor@email.com<div class="sub">1 email on file</div></div>
+                  <div>(847) 555-3092<div class="sub">1 phone on file</div></div>
+                  <div>Judging<div class="sub">1 enrolled service</div></div>
+                  <div><b>Matched on name</b><div class="sub mono">ASC-2026-0058 · mismatch amount</div></div>
+                  <div><button class="btn">360 view</button></div>
+                </div>
+                <div class="trow search-ledger-grid">
+                  <div>
+                    <button class="search-link" onclick="showFrame('search')">Anjali Mehta</button>
+                    <div class="sub">CUS-00002 · Intake complete</div>
+                  </div>
+                  <div><span class="status good">Payment ready</span><div class="sub">Matched payment saved</div></div>
+                  <div>anjali.mehta@email.com<div class="sub">2 emails on file</div></div>
+                  <div>(312) 555-1180<div class="sub">1 phone on file</div></div>
+                  <div>Authorship<div class="sub">2 enrolled services</div></div>
+                  <div><b>Matched on invoice</b><div class="sub mono">ASC-2026-0086 · Zelle alias saved</div></div>
+                  <div><button class="btn">360 view</button></div>
+                </div>
+                <div class="trow search-ledger-grid">
+                  <div>
+                    <button class="search-link" onclick="showFrame('search')">Karthik Pamaraju</button>
+                    <div class="sub">CUS-00008 · Intake complete</div>
+                  </div>
+                  <div><span class="status">Awaiting payment</span><div class="sub">Open invoice sent</div></div>
+                  <div>k.pamaraju@email.com<div class="sub">1 email on file</div></div>
+                  <div>(773) 555-0124<div class="sub">1 phone on file</div></div>
+                  <div>Authorship<div class="sub">3 enrolled services</div></div>
+                  <div><b>Invoice context</b><div class="sub mono">ASC-2026-0033 · referred by CUS-00001</div></div>
+                  <div><button class="btn">360 view</button></div>
+                </div>
               </div>
-              <div class="match"><b>Matched on phone</b><br>last 4 = 4471</div>
             </div>
-            <div class="trow search-grid">
-              <div class="avatar">AM</div>
-              <div>
-                <div class="cust">Anjali Mehta</div>
-                <div class="sub">CUS-00002 · anjali.mehta@email.com · alias saved for Zelle</div>
-                <div class="sub">Latest invoice: ASC-2026-0061</div>
+
+            <div class="panel">
+              <div class="section-head">
+                <h3>Customer 360 preview</h3>
+                <span class="status danger">Mismatch</span>
               </div>
-              <div class="match"><b>Matched on invoice</b><br>ASC-2026-4471</div>
-            </div>
-            <div class="trow search-grid">
-              <div class="avatar">KP</div>
-              <div>
-                <div class="cust">Karthik Pamaraju</div>
-                <div class="sub">CUS-00008 · k.pamaraju@email.com · referred by CUS-00001</div>
-                <div class="sub">Custom service added Aug 17, 2026</div>
+              <div class="desc">Clicking a customer opens the full finance record without leaving the search context. This view brings onboarding, billing, payments, referrals, and contract context into one place.</div>
+              <div class="service-grid">
+                <div class="detail-box">
+                  <h3>Rahul Kapoor</h3>
+                  <div class="kv"><span class="k">Customer ID</span><span class="mono">CUS-00007</span></div>
+                  <div class="kv"><span class="k">Signed up</span><span>May 23, 2026 · 12:00 PM</span></div>
+                  <div class="kv"><span class="k">Preferred payment</span><span>Zelle first</span></div>
+                  <div class="kv"><span class="k">Billing cadence</span><span>Per milestone</span></div>
+                </div>
+                <div class="detail-box">
+                  <h3>Invoice ledger</h3>
+                  <div class="kv"><span class="k">ASC-2026-0058</span><span class="status">Sent</span></div>
+                  <div class="kv"><span class="k">Service</span><span>Judging · M1</span></div>
+                  <div class="kv"><span class="k">Expected</span><span class="mono">$1,710</span></div>
+                </div>
+                <div class="detail-box">
+                  <h3>Transaction history</h3>
+                  <div class="kv"><span class="k">Received</span><span>May 25, 2026</span></div>
+                  <div class="kv"><span class="k">Amount</span><span class="mono">$1,800</span></div>
+                  <div class="kv"><span class="k">Transaction #</span><span class="mono">ZELLE-RAH-20260525-0830</span></div>
+                </div>
+                <div class="detail-box">
+                  <h3>Referrals and contract</h3>
+                  <div class="kv"><span class="k">Referred by</span><span>Direct</span></div>
+                  <div class="kv"><span class="k">Billing notes</span><span>Milestone references required in memo</span></div>
+                  <div class="kv"><span class="k">Working contract</span><span>Onboarding + invoice ledger</span></div>
+                </div>
               </div>
-              <div class="match"><b>Matched on alias</b><br>Zelle phone last 4</div>
             </div>
           </div>
         </div>

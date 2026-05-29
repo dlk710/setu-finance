@@ -6,6 +6,8 @@ Local full-stack prototype for:
 - sending invoice and receipt emails through SMTP
 - polling a Gmail inbox for Zelle-like confirmation emails
 - matching parsed payments into `Payments to confirm` or `Exceptions`
+- giving finance a spreadsheet-style customer register with a full 360 customer view
+- summarizing saved received amounts on the dashboard by day, week, month, or year
 - persisting the operational backend in PostgreSQL instead of a file store
 
 ## Run locally
