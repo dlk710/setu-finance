@@ -421,10 +421,10 @@ function App() {
   ]);
 
   useEffect(() => {
-    if (modal.type !== "ambiguous") {
+    if (!(modal.type === "exception-review" && modal.payload?.kind === "ambiguous")) {
       setSaveAlias(true);
     }
-  }, [modal.type]);
+  }, [modal.type, modal.payload?.kind]);
 
   function resetPortalUi() {
     setView("onboarding");
@@ -1195,7 +1195,7 @@ function App() {
             onSyncInbox={syncInbox}
             onOpenPayment={(payment) => setModal({ type: "payment-review", payload: payment })}
             onOpenMismatch={(exception) => setModal({ type: "mismatch", payload: exception })}
-            onOpenAmbiguous={(exception) => setModal({ type: "ambiguous", payload: exception })}
+            onOpenExceptionReview={(exception) => setModal({ type: "exception-review", payload: exception })}
             syncingInbox={syncingInbox}
           />
         )}
@@ -1274,13 +1274,20 @@ function App() {
         />
       </ModalShell>
 
-      <ModalShell show={modal.type === "ambiguous"} onClose={closeModal} size="wide">
-        <AmbiguousModal
+      <ModalShell show={modal.type === "exception-review"} onClose={closeModal} size="wide">
+        <ExceptionReviewModal
           exception={modal.payload}
           saveAlias={saveAlias}
           onChangeSaveAlias={setSaveAlias}
           onClose={closeModal}
           onResolve={(candidate) => resolveAmbiguous(modal.payload?.id, candidate)}
+          onArchiveDuplicate={() =>
+            resolveMismatch(
+              modal.payload?.id,
+              "mark_duplicate",
+              "Potential duplicate archived. It will not be counted or applied again.",
+            )
+          }
         />
       </ModalShell>
 
@@ -2173,7 +2180,7 @@ function ConsoleView({
   onConfirmAll,
   onSyncInbox,
   onOpenMismatch,
-  onOpenAmbiguous,
+  onOpenExceptionReview,
   syncingInbox,
 }) {
   const emailConfigured = integrationStatus?.email?.configured ?? false;
@@ -2372,7 +2379,9 @@ function ConsoleView({
                       <IconUsers size={13} />
                       {exception.kind === "ambiguous"
                         ? "2 customers match name"
-                        : "Needs manual match"}
+                        : exception.kind === "duplicate"
+                          ? "Possible duplicate payment"
+                          : "Needs manual match"}
                     </span>
                   )}
                   <div className="sub exception-summary">{exception.summary}</div>
@@ -2388,7 +2397,7 @@ function ConsoleView({
                     onClick={() =>
                       exception.kind === "mismatch"
                         ? onOpenMismatch(exception)
-                        : onOpenAmbiguous(exception)
+                        : onOpenExceptionReview(exception)
                     }
                   >
                     Review
@@ -3325,16 +3334,27 @@ function MismatchModal({ exception, onAccept, onCredit, onClose }) {
   );
 }
 
-function AmbiguousModal({ exception, saveAlias, onChangeSaveAlias, onClose, onResolve }) {
+function ExceptionReviewModal({
+  exception,
+  saveAlias,
+  onChangeSaveAlias,
+  onClose,
+  onResolve,
+  onArchiveDuplicate,
+}) {
   if (!exception) {
     return null;
   }
+
+  const isAmbiguous = exception.kind === "ambiguous";
+  const isDuplicate = exception.kind === "duplicate";
 
   return (
     <>
       <div className="modal-head">
         <h3>
-          Resolve: "{exception.senderName}" · {formatCurrency(exception.amount)}
+          {isAmbiguous ? "Resolve" : "Review"}: "{exception.senderName}" ·{" "}
+          {formatCurrency(exception.amount)}
         </h3>
         <button className="x" onClick={onClose}>
           <IconX size={18} />
@@ -3368,37 +3388,63 @@ function AmbiguousModal({ exception, saveAlias, onChangeSaveAlias, onClose, onRe
           transactionDate={exception.transactionDate}
           transactionReference={exception.transactionReference}
         />
-        <div className="note warn">
-          <IconUsers size={16} />
-          <div>
-            Name matched two customers and the Zelle email had no phone or email to break the tie.
-            Choose the right record, then optionally save the alias for next time.
+        {isAmbiguous ? (
+          <>
+            <div className="note warn">
+              <IconUsers size={16} />
+              <div>
+                Name matched two customers and the Zelle email had no phone or email to break the
+                tie. Choose the right record, then optionally save the alias for next time.
+              </div>
+            </div>
+            {exception.candidates.map((candidate) => (
+              <div className="candidate" key={candidate.customerId}>
+                <div className="name">{candidate.name}</div>
+                <div className="meta">{candidate.note}</div>
+                <button
+                  className={`btn btn-sm ${candidate.primary ? "btn-primary" : ""}`}
+                  onClick={() => onResolve(candidate)}
+                >
+                  Match this
+                </button>
+              </div>
+            ))}
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={saveAlias}
+                onChange={(event) => onChangeSaveAlias(event.target.checked)}
+              />
+              Save this sender as an alias so future payments auto-match
+            </label>
+          </>
+        ) : isDuplicate ? (
+          <div className="note warn">
+            <IconAlertTriangle size={16} />
+            <div>
+              This transaction appears to match a payment that was already applied. The portal
+              blocked it from the apply queue so the invoice and referral totals are not counted
+              twice.
+            </div>
           </div>
-        </div>
-        {exception.candidates.map((candidate) => (
-          <div className="candidate" key={candidate.customerId}>
-            <div className="name">{candidate.name}</div>
-            <div className="meta">{candidate.note}</div>
-            <button
-              className={`btn btn-sm ${candidate.primary ? "btn-primary" : ""}`}
-              onClick={() => onResolve(candidate)}
-            >
-              Match this
-            </button>
+        ) : (
+          <div className="note warn">
+            <IconAlertCircle size={16} />
+            <div>
+              The parser saved the transaction, but there is not enough confidence to post it
+              safely yet. Keep it in exceptions until more identity detail is available.
+            </div>
           </div>
-        ))}
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={saveAlias}
-            onChange={(event) => onChangeSaveAlias(event.target.checked)}
-          />
-          Save this sender as an alias so future payments auto-match
-        </label>
+        )}
       </div>
       <div className="modal-foot">
+        {isDuplicate && (
+          <button className="btn btn-primary" onClick={onArchiveDuplicate}>
+            Archive duplicate
+          </button>
+        )}
         <button className="btn" onClick={onClose}>
-          Close for later
+          {isDuplicate ? "Close" : "Close for later"}
         </button>
       </div>
     </>
@@ -3433,13 +3479,24 @@ function buildAttentionItems(exceptions) {
 
   const mappedExceptions = exceptions.map((exception) => ({
     id: exception.id,
-    label: exception.kind === "mismatch" ? "Amount mismatch" : "Ambiguous payer",
+    label:
+      exception.kind === "mismatch"
+        ? "Amount mismatch"
+        : exception.kind === "duplicate"
+          ? "Possible duplicate"
+          : exception.kind === "ambiguous"
+            ? "Ambiguous payer"
+            : "Manual review",
     customer: exception.senderName,
     impact:
       exception.kind === "mismatch"
         ? `paid ${formatCurrency(exception.amount)} / exp ${formatCurrency(exception.expectedAmount)}`
-        : "2 customers match",
-    action: exception.kind === "mismatch" ? "Review" : "Resolve",
+        : exception.kind === "duplicate"
+          ? "already applied once"
+          : exception.kind === "ambiguous"
+            ? "2 customers match"
+            : "saved but not matched",
+    action: exception.kind === "duplicate" ? "Archive" : exception.kind === "mismatch" ? "Review" : "Resolve",
     attn: false,
     icon:
       exception.kind === "mismatch" ? (

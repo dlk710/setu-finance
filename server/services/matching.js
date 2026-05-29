@@ -1,4 +1,4 @@
-import { normalizeDigits, normalizeName } from "../db/normalizers.js";
+import { normalizeDigits, normalizeEmail, normalizeName } from "../db/normalizers.js";
 
 function matchName(senderName, candidateName) {
   const sender = normalizeName(senderName);
@@ -58,6 +58,86 @@ function buildMatchedSignals({ nameMatched, emailMatched, phoneMatched, amountMa
   return signals;
 }
 
+function roundMoney(value) {
+  return Math.round(Number(value || 0) * 100);
+}
+
+function normalizeDateOnly(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const raw = String(value);
+  if (raw.includes("T")) {
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+  }
+
+  const parsed = new Date(`${raw}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+function normalizeTransactionReference(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || null;
+}
+
+function sameProvider(left, right) {
+  return String(left || "gmail").trim().toLowerCase() === String(right || "gmail").trim().toLowerCase();
+}
+
+function sameSenderIdentity(existingPayment, incomingPayment) {
+  const existingEmail = normalizeEmail(existingPayment.senderEmail);
+  const incomingEmail = normalizeEmail(incomingPayment.senderEmail);
+  if (existingEmail && incomingEmail && existingEmail === incomingEmail) {
+    return true;
+  }
+
+  const existingPhone = String(existingPayment.senderPhoneLast4 || "").trim();
+  const incomingPhone = String(incomingPayment.senderPhoneLast4 || "").trim();
+  if (existingPhone && incomingPhone && existingPhone === incomingPhone) {
+    return true;
+  }
+
+  return matchName(existingPayment.senderNameRaw, incomingPayment.senderNameRaw);
+}
+
+function buildDuplicateSummary(existingPayment) {
+  const destination = existingPayment.matchedInvoiceCode
+    ? `${existingPayment.customerCode ?? existingPayment.customerId ?? "Customer"} · ${
+        existingPayment.matchedInvoiceCode
+      }`
+    : existingPayment.customerCode ?? existingPayment.customerId ?? existingPayment.customerName ?? "customer record";
+  const reference = existingPayment.transactionReference
+    ? ` Transaction ref ${existingPayment.transactionReference} was already applied.`
+    : "";
+  return `Potential duplicate payment blocked.${reference} Existing applied payment: ${destination}.`;
+}
+
+function buildDuplicateException({ payment, existingPayment, fallbackCustomer = null, fallbackInvoice = null }) {
+  return {
+    kind: "duplicate",
+    customerId: existingPayment.customerId ?? fallbackCustomer?.id ?? null,
+    customerName: existingPayment.customerName ?? fallbackCustomer?.name ?? null,
+    customerCode: existingPayment.customerCode ?? fallbackCustomer?.customerCode ?? null,
+    matchedSignals: [],
+    score: 100,
+    senderName: payment.senderNameRaw || existingPayment.senderNameRaw || "Unknown sender",
+    amount: payment.amountReceived || 0,
+    dateLabel: payment.dateLabel,
+    senderEmail: payment.senderEmail,
+    senderPhoneLast4: payment.senderPhoneLast4,
+    invoiceId: existingPayment.invoiceId ?? fallbackInvoice?.id ?? null,
+    summary: buildDuplicateSummary(existingPayment),
+    sourceMessageId: payment.sourceMessageId,
+    duplicateOfPaymentId: existingPayment.id,
+  };
+}
+
 function findOpenInvoices(state, customerId) {
   return state.invoices.filter(
     (invoice) =>
@@ -73,7 +153,66 @@ function buildMatchSummary({ customer, invoice, matchedSignals, score }) {
   return `${customer.customerCode ?? customer.id} · ${matchedSignals.join(" + ")} · score ${score} · ${invoiceLabel}`;
 }
 
+function findConfirmedDuplicatePayment(state, payment, { customerId = null, invoiceId = null } = {}) {
+  const confirmedPayments = state.payments.filter((entry) => entry.reviewStatus === "confirmed");
+  const incomingReference = normalizeTransactionReference(payment.transactionReference);
+
+  if (incomingReference) {
+    const referencedDuplicate = confirmedPayments.find(
+      (entry) =>
+        sameProvider(entry.sourceProvider, payment.sourceProvider) &&
+        normalizeTransactionReference(entry.transactionReference) === incomingReference,
+    );
+    if (referencedDuplicate) {
+      return referencedDuplicate;
+    }
+  }
+
+  if (invoiceId) {
+    const invoiceDuplicate = confirmedPayments.find((entry) => entry.invoiceId === invoiceId);
+    if (invoiceDuplicate) {
+      return invoiceDuplicate;
+    }
+  }
+
+  if (!customerId) {
+    return null;
+  }
+
+  const incomingAmount = roundMoney(payment.amountReceived);
+  const incomingDate = normalizeDateOnly(payment.transactionDate || payment.receivedAt);
+  return (
+    confirmedPayments.find((entry) => {
+      if (entry.customerId !== customerId) {
+        return false;
+      }
+
+      if (roundMoney(entry.amountReceived) !== incomingAmount) {
+        return false;
+      }
+
+      const existingDate = normalizeDateOnly(entry.transactionDate || entry.receivedAt);
+      if (incomingDate && existingDate && incomingDate !== existingDate) {
+        return false;
+      }
+
+      return sameSenderIdentity(entry, payment);
+    }) ?? null
+  );
+}
+
 export function matchPaymentToState(payment, state) {
+  const exactDuplicate = findConfirmedDuplicatePayment(state, payment);
+  if (exactDuplicate) {
+    return {
+      kind: "exception",
+      exception: buildDuplicateException({
+        payment,
+        existingPayment: exactDuplicate,
+      }),
+    };
+  }
+
   const candidates = state.customers
     .map((customer) => {
       const nameMatched =
@@ -211,6 +350,23 @@ export function matchPaymentToState(payment, state) {
   }
 
   if (topCandidate.score >= 50 && topCandidate.matchedInvoice) {
+    const duplicate = findConfirmedDuplicatePayment(state, payment, {
+      customerId: topCandidate.customer.id,
+      invoiceId: topCandidate.matchedInvoice.id,
+    });
+
+    if (duplicate) {
+      return {
+        kind: "exception",
+        exception: buildDuplicateException({
+          payment,
+          existingPayment: duplicate,
+          fallbackCustomer: topCandidate.customer,
+          fallbackInvoice: topCandidate.matchedInvoice,
+        }),
+      };
+    }
+
     return {
       kind: "pending",
       payment: {

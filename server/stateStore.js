@@ -91,6 +91,7 @@ function mapPaymentRow(row) {
     rawText: row.raw_text ?? null,
     receivedAt: formatTimestamp(row.received_at),
     appliedAt: formatTimestamp(row.applied_at),
+    duplicateOfPaymentId: row.duplicate_of_payment_id ?? null,
     receiptSentToEmail: row.receipt_sent_to_email ?? null,
     receiptSentAt: formatTimestamp(row.receipt_sent_at),
     reviewStatus: row.review_status,
@@ -126,6 +127,74 @@ function findPrimaryEmail(customer) {
     customer?.emails[0]?.value ??
     null
   );
+}
+
+function normalizeTransactionReference(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || null;
+}
+
+function normalizeDateOnly(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const raw = String(value);
+  if (raw.includes("T")) {
+    const parsed = new Date(raw);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+  }
+
+  const parsed = new Date(`${raw}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+}
+
+function sameSenderIdentity(left, right) {
+  const leftEmail = normalizeEmail(left.sender_email ?? left.senderEmail ?? null);
+  const rightEmail = normalizeEmail(right.sender_email ?? right.senderEmail ?? null);
+  if (leftEmail && rightEmail && leftEmail === rightEmail) {
+    return true;
+  }
+
+  const leftPhone = String(left.sender_phone_last4 ?? left.senderPhoneLast4 ?? "").trim();
+  const rightPhone = String(right.sender_phone_last4 ?? right.senderPhoneLast4 ?? "").trim();
+  if (leftPhone && rightPhone && leftPhone === rightPhone) {
+    return true;
+  }
+
+  const leftName = normalizeName(left.sender_name_raw ?? left.senderNameRaw ?? null);
+  const rightName = normalizeName(right.sender_name_raw ?? right.senderNameRaw ?? null);
+  if (!leftName || !rightName) {
+    return false;
+  }
+
+  if (leftName === rightName) {
+    return true;
+  }
+
+  const leftParts = leftName.split(" ").filter(Boolean);
+  const rightParts = rightName.split(" ").filter(Boolean);
+  if (leftParts.length < 2 || rightParts.length < 2) {
+    return false;
+  }
+
+  return leftParts.at(-1) === rightParts.at(-1) && leftParts[0][0] === rightParts[0][0];
+}
+
+function buildDuplicateSummary(existingPayment) {
+  const destination = existingPayment.matchedInvoiceCode
+    ? `${existingPayment.customerCode ?? existingPayment.customerId ?? "Customer"} · ${
+        existingPayment.matchedInvoiceCode
+      }`
+    : existingPayment.customerCode ?? existingPayment.customerId ?? existingPayment.customerName ?? "customer record";
+  const reference = existingPayment.transactionReference
+    ? ` Transaction ref ${existingPayment.transactionReference} was already applied.`
+    : "";
+  return `Potential duplicate payment blocked.${reference} Existing applied payment: ${destination}.`;
 }
 
 function createEmptyCustomerProfile(overrides = {}) {
@@ -837,6 +906,7 @@ async function hydratePortalState(client) {
       payments.message_date_header AS payment_message_date_header,
       payments.transaction_date AS payment_transaction_date,
       payments.parsed_payload AS payment_parsed_payload,
+      payments.duplicate_of_payment_id AS payment_duplicate_of_payment_id,
       payment_customers.customer_code AS payment_customer_code
     FROM exceptions
     LEFT JOIN payments
@@ -1031,6 +1101,7 @@ async function hydratePortalState(client) {
     messageDateHeader: row.payment_message_date_header ?? null,
     transactionDate: row.payment_transaction_date ?? null,
     parsedPayload: row.payment_parsed_payload ?? {},
+    duplicateOfPaymentId: row.payment_duplicate_of_payment_id ?? null,
     candidates: exceptionCandidates.get(row.id) ?? [],
   }));
 
@@ -1366,14 +1437,11 @@ async function fetchInvoiceForUpdate(client, invoiceId) {
 async function fetchPendingPaymentForUpdate(client, paymentId) {
   const result = await client.query(
     `
-      SELECT
-        payments.*,
-        customers.full_name AS resolved_customer_name
+      SELECT payments.*
       FROM payments
-      LEFT JOIN customers ON customers.id = payments.customer_id
       WHERE payments.id = $1
         AND payments.review_status = 'pending'
-      FOR UPDATE
+      FOR UPDATE OF payments
     `,
     [paymentId],
   );
@@ -1394,6 +1462,128 @@ async function fetchExceptionForUpdate(client, exceptionId) {
   );
 
   return result.rows[0] ?? null;
+}
+
+async function findConfirmedDuplicatePayment(client, paymentRow) {
+  const exactConflict = await client.query(
+    `
+      SELECT
+        payments.*,
+        customers.full_name AS resolved_customer_name,
+        customers.customer_code AS resolved_customer_code,
+        invoices.invoice_code AS matched_invoice_code
+      FROM payments
+      LEFT JOIN customers ON customers.id = payments.customer_id
+      LEFT JOIN invoices ON invoices.id = payments.invoice_id
+      WHERE payments.id <> $1
+        AND payments.review_status = 'confirmed'
+        AND (
+          ($2::text IS NOT NULL
+            AND payments.source_provider = $3
+            AND LOWER(payments.transaction_reference) = LOWER($2))
+          OR ($4::text IS NOT NULL AND payments.invoice_id = $4)
+        )
+      ORDER BY payments.applied_at DESC NULLS LAST, payments.created_at DESC, payments.id DESC
+      LIMIT 1
+    `,
+    [
+      paymentRow.id,
+      paymentRow.transaction_reference ?? null,
+      paymentRow.source_provider ?? "gmail",
+      paymentRow.invoice_id ?? null,
+    ],
+  );
+
+  if (exactConflict.rowCount) {
+    return mapPaymentRow(exactConflict.rows[0]);
+  }
+
+  if (!paymentRow.customer_id) {
+    return null;
+  }
+
+  const customerCandidates = await client.query(
+    `
+      SELECT
+        payments.*,
+        customers.full_name AS resolved_customer_name,
+        customers.customer_code AS resolved_customer_code,
+        invoices.invoice_code AS matched_invoice_code
+      FROM payments
+      LEFT JOIN customers ON customers.id = payments.customer_id
+      LEFT JOIN invoices ON invoices.id = payments.invoice_id
+      WHERE payments.id <> $1
+        AND payments.review_status = 'confirmed'
+        AND payments.customer_id = $2
+        AND payments.amount_received = $3::numeric
+      ORDER BY payments.applied_at DESC NULLS LAST, payments.created_at DESC, payments.id DESC
+    `,
+    [paymentRow.id, paymentRow.customer_id, Number(paymentRow.amount_received || 0)],
+  );
+
+  const incomingDate = normalizeDateOnly(paymentRow.transaction_date || paymentRow.received_at);
+  for (const row of customerCandidates.rows) {
+    const existingDate = normalizeDateOnly(row.transaction_date || row.received_at);
+    if (incomingDate && existingDate && incomingDate !== existingDate) {
+      continue;
+    }
+
+    if (!sameSenderIdentity(row, paymentRow)) {
+      continue;
+    }
+
+    return mapPaymentRow(row);
+  }
+
+  return null;
+}
+
+async function movePaymentToDuplicateException(client, paymentRow, duplicatePayment) {
+  const duplicateSummary = buildDuplicateSummary(duplicatePayment);
+
+  await client.query(
+    `
+      UPDATE payments
+      SET review_status = 'exception',
+          match_status = 'unmatched',
+          duplicate_of_payment_id = $2,
+          review_notes = $3,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [paymentRow.id, duplicatePayment.id, duplicateSummary],
+  );
+
+  await upsertExceptionFromMatch(client, {
+    id: `exc-${paymentRow.source_message_id ?? paymentRow.id}`,
+    kind: "duplicate",
+    customerId: paymentRow.customer_id ?? duplicatePayment.customerId ?? null,
+    customerName:
+      paymentRow.customer_name ?? paymentRow.resolved_customer_name ?? duplicatePayment.customerName ?? null,
+    customerCode: duplicatePayment.customerCode ?? null,
+    matchedSignals: [],
+    score: 100,
+    senderName: paymentRow.sender_name_raw ?? duplicatePayment.senderNameRaw ?? "Unknown sender",
+    amount: Number(paymentRow.amount_received || 0),
+    dateLabel: paymentRow.date_label ?? "",
+    senderEmail: paymentRow.sender_email ?? null,
+    senderPhoneLast4: paymentRow.sender_phone_last4 ?? null,
+    invoiceId: paymentRow.invoice_id ?? duplicatePayment.invoiceId ?? null,
+    summary: duplicateSummary,
+    sourceMessageId: paymentRow.source_message_id ?? null,
+    duplicateOfPaymentId: duplicatePayment.id,
+  });
+
+  await insertActivity(
+    client,
+    `Potential duplicate blocked for ${duplicatePayment.customerName ?? paymentRow.customer_name ?? "customer"}`,
+  );
+
+  return {
+    applied: false,
+    state: await hydratePortalState(client),
+    message: "Potential duplicate detected. Transaction was not applied and was moved to exceptions.",
+  };
 }
 
 async function resolveInvoiceForPayment(client, paymentRow) {
@@ -1602,9 +1792,11 @@ async function reconcileOpenTransactions(client) {
               customer_name = $4,
               matched_signals = $5::text[],
               score = $6,
+              duplicate_of_payment_id = NULL,
               review_status = 'pending',
               match_status = 'matched',
               match_summary = $7,
+              review_notes = NULL,
               updated_at = NOW()
           WHERE id = $1
         `,
@@ -1630,9 +1822,11 @@ async function reconcileOpenTransactions(client) {
             customer_name = $4,
             matched_signals = $5::text[],
             score = $6,
+            duplicate_of_payment_id = $9,
             review_status = 'exception',
             match_status = $7,
             match_summary = $8,
+            review_notes = $10,
             updated_at = NOW()
         WHERE id = $1
       `,
@@ -1643,8 +1837,10 @@ async function reconcileOpenTransactions(client) {
         matchResult.exception.customerName ?? null,
         matchResult.exception.matchedSignals ?? [],
         Number(matchResult.exception.score || 0),
-        matchResult.exception.kind,
+        matchResult.exception.kind === "duplicate" ? "unmatched" : matchResult.exception.kind,
         matchResult.exception.summary ?? "Needs human review.",
+        matchResult.exception.duplicateOfPaymentId ?? null,
+        matchResult.exception.kind === "duplicate" ? matchResult.exception.summary : null,
       ],
     );
 
@@ -2060,6 +2256,11 @@ export async function confirmPendingPaymentRecord(paymentId, deliverReceipt) {
       throw new Error("Customer record not found for this payment.");
     }
 
+    const duplicatePayment = await findConfirmedDuplicatePayment(client, paymentRow);
+    if (duplicatePayment) {
+      return movePaymentToDuplicateException(client, paymentRow, duplicatePayment);
+    }
+
     const customer = await fetchCustomerAggregate(client, paymentRow.customer_id);
     if (!customer) {
       throw new Error("Customer record not found for this payment.");
@@ -2111,6 +2312,7 @@ export async function confirmPendingPaymentRecord(paymentId, deliverReceipt) {
     }
 
     return {
+      applied: true,
       state: await hydratePortalState(client),
       message: `Transaction applied. Receipt emailed to ${recipient}`,
     };
@@ -2127,6 +2329,39 @@ export async function resolveExceptionRecord({
     const exception = await fetchExceptionForUpdate(client, exceptionId);
     if (!exception) {
       throw new Error("Exception item not found.");
+    }
+
+    if (exception.kind === "duplicate" && actionType === "mark_duplicate") {
+      if (exception.source_message_id) {
+        await client.query(
+          `
+            UPDATE payments
+            SET review_status = 'history',
+                match_status = 'unmatched',
+                review_notes = COALESCE(review_notes, 'Marked as duplicate by finance ops.'),
+                updated_at = NOW()
+            WHERE source_message_id = $1
+          `,
+          [exception.source_message_id],
+        );
+      }
+
+      await client.query(
+        `
+          UPDATE exceptions
+          SET status = 'resolved',
+              resolution_action = $2,
+              resolved_at = NOW()
+          WHERE id = $1
+        `,
+        [exceptionId, actionType],
+      );
+
+      await insertActivity(client, `${exception.sender_name} resolved: ${actionType}`);
+      return {
+        state: await hydratePortalState(client),
+        message: "Duplicate transaction archived.",
+      };
     }
 
     if (
@@ -2341,6 +2576,8 @@ export async function applyGmailSyncResult(syncResult) {
             parsed_payload,
             match_status,
             match_summary,
+            review_notes,
+            duplicate_of_payment_id,
             date_label,
             raw_text,
             received_at,
@@ -2349,7 +2586,7 @@ export async function applyGmailSyncResult(syncResult) {
             updated_at
           )
           VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23, $24, $25, $26, $27, NOW(), NOW()
+            $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23, $24, $25, $26, $27, $28, $29, NOW(), NOW()
           )
           ON CONFLICT (id)
           DO UPDATE
@@ -2375,6 +2612,8 @@ export async function applyGmailSyncResult(syncResult) {
               parsed_payload = EXCLUDED.parsed_payload,
               match_status = EXCLUDED.match_status,
               match_summary = EXCLUDED.match_summary,
+              review_notes = EXCLUDED.review_notes,
+              duplicate_of_payment_id = EXCLUDED.duplicate_of_payment_id,
               date_label = EXCLUDED.date_label,
               raw_text = EXCLUDED.raw_text,
               received_at = EXCLUDED.received_at,
@@ -2405,6 +2644,8 @@ export async function applyGmailSyncResult(syncResult) {
           JSON.stringify(payment.parsedPayload ?? {}),
           payment.matchStatus ?? (payment.reviewStatus === "pending" ? "matched" : "unmatched"),
           payment.matchSummary ?? null,
+          payment.reviewNotes ?? null,
+          payment.duplicateOfPaymentId ?? null,
           payment.dateLabel ?? null,
           payment.rawText ?? null,
           payment.receivedAt ?? null,

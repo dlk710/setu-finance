@@ -264,6 +264,8 @@ app.post("/api/payments/confirm-all", async (_request, response, next) => {
     }
 
     let latestState = null;
+    let appliedCount = 0;
+    let blockedCount = 0;
 
     for (const paymentId of queue) {
       const result = await confirmPendingPaymentRecord(
@@ -277,10 +279,18 @@ app.post("/api/payments/confirm-all", async (_request, response, next) => {
           }),
       );
       latestState = result.state;
+      if (result.applied === false) {
+        blockedCount += 1;
+      } else {
+        appliedCount += 1;
+      }
     }
 
     response.json({
-      message: "All pending payments were confirmed and receipt emails were sent.",
+      message:
+        blockedCount > 0
+          ? `${appliedCount} payment${appliedCount === 1 ? "" : "s"} applied. ${blockedCount} moved to exceptions as possible duplicates.`
+          : "All pending payments were confirmed and receipt emails were sent.",
       state: formatApiState(latestState ?? (await loadState())),
     });
   } catch (error) {
