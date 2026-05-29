@@ -85,6 +85,9 @@ export function renderReceiptEmail({ customer, payment, invoice }) {
   const serviceLabel = invoice
     ? `${invoice.service}${invoice.milestone ? ` — ${invoice.milestone}` : ""}`
     : "your invoice";
+  const transactionDate = payment.transactionDate ?? null;
+  const transactionReference = payment.transactionReference ?? null;
+  const memo = payment.memo ?? null;
 
   return {
     subject: `Receipt · ${invoice?.invoiceCode ?? "Payment confirmed"}`,
@@ -93,6 +96,9 @@ export function renderReceiptEmail({ customer, payment, invoice }) {
       "",
       `We have confirmed your payment of ${formatCurrency(amount)} for ${serviceLabel}.`,
       invoice ? `Invoice ref: ${invoice.invoiceCode}` : null,
+      transactionDate ? `Transaction date: ${transactionDate}` : null,
+      transactionReference ? `Transaction ref: ${transactionReference}` : null,
+      memo ? `Memo: ${memo}` : null,
       "",
       "Thank you,",
       "Setu billing",
@@ -104,6 +110,9 @@ export function renderReceiptEmail({ customer, payment, invoice }) {
         <p>Hi ${escapeHtml(customer.name)},</p>
         <p>We have confirmed your payment of <strong>${escapeHtml(formatCurrency(amount))}</strong> for ${escapeHtml(serviceLabel)}.</p>
         ${invoice ? `<p><strong>Invoice ref:</strong> ${escapeHtml(invoice.invoiceCode)}</p>` : ""}
+        ${transactionDate ? `<p><strong>Transaction date:</strong> ${escapeHtml(transactionDate)}</p>` : ""}
+        ${transactionReference ? `<p><strong>Transaction ref:</strong> ${escapeHtml(transactionReference)}</p>` : ""}
+        ${memo ? `<p><strong>Memo:</strong> ${escapeHtml(memo)}</p>` : ""}
         <p>Thank you,<br>Setu billing</p>
       </div>
     `,

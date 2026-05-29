@@ -2,11 +2,30 @@ import { createInvoiceRefPreview } from "../shared/seedState.js";
 import { prepareDatabase } from "./db/seed.js";
 import { buildInitials, normalizeDigits, normalizeEmail, normalizeName } from "./db/normalizers.js";
 import { withTransaction } from "./db/pool.js";
+import { matchPaymentToState } from "./services/matching.js";
 
 const DASHBOARD_PERIOD_KEY = "current";
+const DEFAULT_REFERRAL_PROGRAM = {
+  enabled: true,
+  bonusAmount: 500,
+  qualifyingPaidAmount: 3000,
+  qualificationMonths: 6,
+};
 
 function calculateZelleAmount(amount, discountPct) {
   return Math.round(Number(amount || 0) * (1 - Number(discountPct || 0) / 100));
+}
+
+function formatCurrency(value) {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    maximumFractionDigits: 0,
+  }).format(value);
+}
+
+function createCustomerCodePreview(sequence) {
+  return `CUS-${String(sequence).padStart(5, "0")}`;
 }
 
 function formatTimestamp(value) {
@@ -45,19 +64,59 @@ function mapPaymentRow(row) {
     id: row.id,
     customerId: row.customer_id ?? null,
     customerName: row.customer_name ?? row.resolved_customer_name ?? null,
+    customerCode: row.customer_code ?? row.resolved_customer_code ?? null,
     matchedSignals: row.matched_signals ?? [],
     score: Number(row.score || 0),
     amountReceived: Number(row.amount_received || 0),
     invoiceId: row.invoice_id ?? null,
+    matchedInvoiceCode: row.matched_invoice_code ?? null,
     sourceMessageId: row.source_message_id ?? null,
+    sourceProvider: row.source_provider ?? "gmail",
+    sourceThreadId: row.source_thread_id ?? null,
+    messageFromEmail: row.message_from_email ?? null,
+    messageToEmail: row.message_to_email ?? null,
+    messageDateHeader: row.message_date_header ?? null,
+    transactionDate: row.transaction_date ?? null,
     senderEmail: row.sender_email ?? null,
     senderPhoneLast4: row.sender_phone_last4 ?? null,
     senderNameRaw: row.sender_name_raw ?? null,
     subject: row.subject ?? null,
+    transactionReference: row.transaction_reference ?? null,
+    memo: row.memo ?? null,
+    parsedPayload: row.parsed_payload ?? {},
+    matchStatus: row.match_status ?? "pending_review",
+    matchSummary: row.match_summary ?? null,
+    reviewNotes: row.review_notes ?? null,
     dateLabel: row.date_label ?? null,
     rawText: row.raw_text ?? null,
     receivedAt: formatTimestamp(row.received_at),
+    appliedAt: formatTimestamp(row.applied_at),
+    receiptSentToEmail: row.receipt_sent_to_email ?? null,
+    receiptSentAt: formatTimestamp(row.receipt_sent_at),
     reviewStatus: row.review_status,
+  };
+}
+
+function normalizeReferralProgramConfig(config = {}) {
+  const bonusAmount = Number(config.bonusAmount ?? DEFAULT_REFERRAL_PROGRAM.bonusAmount);
+  const qualifyingPaidAmount = Number(
+    config.qualifyingPaidAmount ?? DEFAULT_REFERRAL_PROGRAM.qualifyingPaidAmount,
+  );
+  const qualificationMonths = Number(
+    config.qualificationMonths ?? DEFAULT_REFERRAL_PROGRAM.qualificationMonths,
+  );
+
+  return {
+    enabled: config.enabled !== false,
+    bonusAmount: Number.isFinite(bonusAmount)
+      ? Math.max(0, Math.round(bonusAmount * 100) / 100)
+      : DEFAULT_REFERRAL_PROGRAM.bonusAmount,
+    qualifyingPaidAmount: Number.isFinite(qualifyingPaidAmount)
+      ? Math.max(0, Math.round(qualifyingPaidAmount * 100) / 100)
+      : DEFAULT_REFERRAL_PROGRAM.qualifyingPaidAmount,
+    qualificationMonths: Number.isFinite(qualificationMonths)
+      ? Math.max(0, Math.round(qualificationMonths))
+      : DEFAULT_REFERRAL_PROGRAM.qualificationMonths,
   };
 }
 
@@ -69,16 +128,642 @@ function findPrimaryEmail(customer) {
   );
 }
 
+function createEmptyCustomerProfile(overrides = {}) {
+  return {
+    onboardingStatus: "needs_follow_up",
+    intakeSource: "invoice",
+    preferredPaymentMethod: "zelle",
+    billingCadence: "per_milestone",
+    referralSource: null,
+    billingNotes: null,
+    onboardedAt: null,
+    referredByCustomerId: null,
+    homeAddressLine1: null,
+    homeAddressLine2: null,
+    homeCity: null,
+    homeState: null,
+    homePostalCode: null,
+    homeCountry: null,
+    ...overrides,
+  };
+}
+
+function mapCustomerProfileRow(row) {
+  return createEmptyCustomerProfile({
+    onboardingStatus: row.onboarding_status,
+    intakeSource: row.intake_source,
+    preferredPaymentMethod: row.preferred_payment_method,
+    billingCadence: row.billing_cadence,
+    referralSource: row.referral_source ?? null,
+    billingNotes: row.billing_notes ?? null,
+    onboardedAt: formatTimestamp(row.onboarded_at),
+    homeAddressLine1: row.home_address_line1 ?? null,
+    homeAddressLine2: row.home_address_line2 ?? null,
+    homeCity: row.home_city ?? null,
+    homeState: row.home_state ?? null,
+    homePostalCode: row.home_postal_code ?? null,
+    homeCountry: row.home_country ?? null,
+  });
+}
+
+function normalizeServiceName(value) {
+  return String(value || "").replace(/\s+/g, " ").trim();
+}
+
+function normalizeServiceEntries(serviceEntries = [], fallbackService = null, fallbackEnrolledAt = null) {
+  const rawEntries = Array.isArray(serviceEntries) ? serviceEntries : [];
+  const normalized = rawEntries
+    .map((entry) => {
+      const name = normalizeServiceName(entry?.name);
+      if (!name) {
+        return null;
+      }
+
+      return {
+        name,
+        code: entry?.code ? String(entry.code).trim() : null,
+        isCustom: Boolean(entry?.isCustom),
+        enrolledAt: formatTimestamp(entry?.enrolledAt || fallbackEnrolledAt || new Date()),
+      };
+    })
+    .filter(Boolean);
+
+  if (!normalized.length && fallbackService) {
+    const name = normalizeServiceName(fallbackService);
+    if (name) {
+      normalized.push({
+        name,
+        code: null,
+        isCustom: false,
+        enrolledAt: formatTimestamp(fallbackEnrolledAt || new Date()),
+      });
+    }
+  }
+
+  return normalized;
+}
+
+function appendServiceSummary(customer, serviceName) {
+  if (!serviceName) {
+    return;
+  }
+
+  if (!customer.services.includes(serviceName)) {
+    customer.services.push(serviceName);
+  }
+}
+
+function mapServiceEnrollmentRow(row) {
+  return {
+    id: row.id,
+    name: row.service_name,
+    code: row.service_code ?? null,
+    isCustom: row.is_custom,
+    enrolledAt: formatTimestamp(row.enrolled_at),
+  };
+}
+
+async function ensureUniqueCustomerIdentity(client, { customerEmail, customerPhone, ignoreCustomerId = null }) {
+  const normalizedEmail = normalizeEmail(customerEmail || "");
+  if (normalizedEmail) {
+    const emailResult = await client.query(
+      `
+        SELECT customer_id
+        FROM customer_emails
+        WHERE normalized_email = $1
+          AND ($2::text IS NULL OR customer_id <> $2::text)
+        LIMIT 1
+      `,
+      [normalizedEmail, ignoreCustomerId],
+    );
+
+    if (emailResult.rowCount) {
+      throw new Error("A customer already exists with this primary email.");
+    }
+  }
+
+  const normalizedDigits = normalizeDigits(customerPhone || "");
+  if (normalizedDigits) {
+    const phoneResult = await client.query(
+      `
+        SELECT customer_id
+        FROM customer_phones
+        WHERE normalized_digits = $1
+          AND ($2::text IS NULL OR customer_id <> $2::text)
+        LIMIT 1
+      `,
+      [normalizedDigits, ignoreCustomerId],
+    );
+
+    if (phoneResult.rowCount) {
+      throw new Error("A customer already exists with this phone number.");
+    }
+  }
+}
+
+async function upsertCustomerProfile(client, customerId, profile) {
+  const normalizedProfile = createEmptyCustomerProfile(profile);
+
+  await client.query(
+    `
+      INSERT INTO customer_profiles (
+        customer_id,
+        onboarding_status,
+        intake_source,
+        preferred_payment_method,
+        billing_cadence,
+        referral_source,
+        billing_notes,
+        home_address_line1,
+        home_address_line2,
+        home_city,
+        home_state,
+        home_postal_code,
+        home_country,
+        onboarded_at,
+        updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+        COALESCE($14::timestamptz, NOW()),
+        NOW()
+      )
+      ON CONFLICT (customer_id)
+      DO UPDATE
+      SET onboarding_status = EXCLUDED.onboarding_status,
+          intake_source = EXCLUDED.intake_source,
+          preferred_payment_method = EXCLUDED.preferred_payment_method,
+          billing_cadence = EXCLUDED.billing_cadence,
+          referral_source = EXCLUDED.referral_source,
+          billing_notes = EXCLUDED.billing_notes,
+          home_address_line1 = EXCLUDED.home_address_line1,
+          home_address_line2 = EXCLUDED.home_address_line2,
+          home_city = EXCLUDED.home_city,
+          home_state = EXCLUDED.home_state,
+          home_postal_code = EXCLUDED.home_postal_code,
+          home_country = EXCLUDED.home_country,
+          onboarded_at = EXCLUDED.onboarded_at,
+          updated_at = NOW()
+    `,
+    [
+      customerId,
+      normalizedProfile.onboardingStatus,
+      normalizedProfile.intakeSource,
+      normalizedProfile.preferredPaymentMethod,
+      normalizedProfile.billingCadence,
+      normalizedProfile.referralSource,
+      normalizedProfile.billingNotes,
+      normalizedProfile.homeAddressLine1,
+      normalizedProfile.homeAddressLine2,
+      normalizedProfile.homeCity,
+      normalizedProfile.homeState,
+      normalizedProfile.homePostalCode,
+      normalizedProfile.homeCountry,
+      normalizedProfile.onboardedAt,
+    ],
+  );
+}
+
+async function upsertPrimaryEmail(client, customerId, email) {
+  const normalizedEmail = normalizeEmail(email || "");
+  if (!normalizedEmail) {
+    return;
+  }
+
+  const existingResult = await client.query(
+    `
+      SELECT id
+      FROM customer_emails
+      WHERE customer_id = $1
+        AND is_primary = TRUE
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    `,
+    [customerId],
+  );
+
+  if (existingResult.rowCount) {
+    await client.query(
+      `
+        UPDATE customer_emails
+        SET email = $2,
+            normalized_email = $3,
+            label = 'primary',
+            is_primary = TRUE
+        WHERE id = $1
+      `,
+      [existingResult.rows[0].id, email, normalizedEmail],
+    );
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO customer_emails (id, customer_id, email, normalized_email, label, is_primary)
+      VALUES ($1, $2, $3, $4, 'primary', TRUE)
+    `,
+    [`email-${customerId}-${crypto.randomUUID()}`, customerId, email, normalizedEmail],
+  );
+}
+
+async function upsertPrimaryPhone(client, customerId, phone) {
+  const normalizedDigits = normalizeDigits(phone || "");
+  if (!normalizedDigits) {
+    return;
+  }
+
+  const existingResult = await client.query(
+    `
+      SELECT id
+      FROM customer_phones
+      WHERE customer_id = $1
+        AND is_primary = TRUE
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    `,
+    [customerId],
+  );
+
+  if (existingResult.rowCount) {
+    await client.query(
+      `
+        UPDATE customer_phones
+        SET phone_value = $2,
+            normalized_digits = $3,
+            phone_last4 = $4,
+            label = 'mobile',
+            is_primary = TRUE
+        WHERE id = $1
+      `,
+      [existingResult.rows[0].id, phone, normalizedDigits, normalizedDigits.slice(-4) || "0000"],
+    );
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO customer_phones (id, customer_id, phone_value, normalized_digits, phone_last4, label, is_primary)
+      VALUES ($1, $2, $3, $4, $5, 'mobile', TRUE)
+    `,
+    [
+      `phone-${customerId}-${crypto.randomUUID()}`,
+      customerId,
+      phone,
+      normalizedDigits,
+      normalizedDigits.slice(-4) || "0000",
+    ],
+  );
+}
+
+async function insertServiceEnrollments(client, customerId, serviceEntries) {
+  const normalizedEntries = normalizeServiceEntries(serviceEntries);
+
+  for (const entry of normalizedEntries) {
+    await client.query(
+      `
+        INSERT INTO customer_service_enrollments (
+          id,
+          customer_id,
+          service_name,
+          service_code,
+          is_custom,
+          enrolled_at,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::timestamptz, NOW())
+      `,
+      [
+        `svc-${customerId}-${crypto.randomUUID()}`,
+        customerId,
+        entry.name,
+        entry.code,
+        entry.isCustom,
+        entry.enrolledAt,
+      ],
+    );
+  }
+}
+
+async function upsertZelleAlias(client, customerId, zelleAlias, customerName) {
+  const aliasName = zelleAlias?.name?.trim();
+  const aliasEmail = zelleAlias?.email?.trim();
+  const aliasPhoneLast4 = normalizeDigits(zelleAlias?.phoneLast4 || "").slice(-4);
+
+  if (!aliasName && !aliasEmail && !aliasPhoneLast4) {
+    return;
+  }
+
+  const normalizedAliasName = normalizeName(aliasName || customerName);
+  const normalizedAliasEmail = aliasEmail ? normalizeEmail(aliasEmail) : null;
+
+  const existingAliasResult = await client.query(
+    `
+      SELECT id
+      FROM customer_aliases
+      WHERE customer_id = $1
+        AND relation = 'zelle identity'
+        AND normalized_name = $2
+        AND COALESCE(normalized_email, '') = COALESCE($3, '')
+        AND COALESCE(phone_last4, '') = COALESCE($4, '')
+      LIMIT 1
+    `,
+    [customerId, normalizedAliasName, normalizedAliasEmail, aliasPhoneLast4 || null],
+  );
+
+  if (existingAliasResult.rowCount) {
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO customer_aliases (
+        id,
+        customer_id,
+        alias_name,
+        normalized_name,
+        relation,
+        email,
+        normalized_email,
+        phone_last4
+      )
+      VALUES ($1, $2, $3, $4, 'zelle identity', $5, $6, $7)
+    `,
+    [
+      `alias-${customerId}-${crypto.randomUUID()}`,
+      customerId,
+      aliasName || customerName,
+      normalizedAliasName,
+      aliasEmail || null,
+      normalizedAliasEmail,
+      aliasPhoneLast4 || null,
+    ],
+  );
+}
+
+async function insertCustomerAggregate(
+  client,
+  {
+    customerId,
+    customerCode,
+    customerName,
+    customerEmail,
+    customerPhone,
+    serviceEntries,
+    profile,
+    zelleAlias,
+  },
+) {
+  await ensureUniqueCustomerIdentity(client, { customerEmail, customerPhone });
+
+  await client.query(
+    `
+      INSERT INTO customers (id, customer_code, initials, full_name, normalized_name, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+    `,
+    [customerId, customerCode, buildInitials(customerName), customerName, normalizeName(customerName)],
+  );
+
+  await upsertPrimaryEmail(client, customerId, customerEmail);
+  await upsertPrimaryPhone(client, customerId, customerPhone);
+  await insertServiceEnrollments(client, customerId, serviceEntries);
+
+  await upsertCustomerProfile(client, customerId, profile);
+  await upsertZelleAlias(client, customerId, zelleAlias, customerName);
+}
+
+async function updateCustomerAggregate(
+  client,
+  {
+    customerId,
+    customerCode,
+    customerName,
+    customerEmail,
+    customerPhone,
+    serviceEntries,
+    profile,
+    zelleAlias,
+  },
+) {
+  await ensureUniqueCustomerIdentity(client, {
+    customerEmail,
+    customerPhone,
+    ignoreCustomerId: customerId,
+  });
+
+  await client.query(
+    `
+      UPDATE customers
+      SET customer_code = COALESCE($2, customer_code),
+          initials = $3,
+          full_name = $4,
+          normalized_name = $5,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [customerId, customerCode ?? null, buildInitials(customerName), customerName, normalizeName(customerName)],
+  );
+
+  await upsertPrimaryEmail(client, customerId, customerEmail);
+  await upsertPrimaryPhone(client, customerId, customerPhone);
+  await insertServiceEnrollments(client, customerId, serviceEntries);
+  await upsertCustomerProfile(client, customerId, profile);
+  await upsertZelleAlias(client, customerId, zelleAlias, customerName);
+}
+
+async function loadReferralProgramConfig(client) {
+  const result = await client.query(
+    `
+      SELECT setting_json
+      FROM system_settings
+      WHERE setting_key = 'referral_program'
+      LIMIT 1
+    `,
+  );
+
+  return normalizeReferralProgramConfig(result.rows[0]?.setting_json ?? DEFAULT_REFERRAL_PROGRAM);
+}
+
+async function upsertReferralProgramConfig(client, config) {
+  const normalized = normalizeReferralProgramConfig(config);
+  await client.query(
+    `
+      INSERT INTO system_settings (setting_key, setting_json, updated_at)
+      VALUES ('referral_program', $1::jsonb, NOW())
+      ON CONFLICT (setting_key)
+      DO UPDATE
+      SET setting_json = EXCLUDED.setting_json,
+          updated_at = NOW()
+    `,
+    [JSON.stringify(normalized)],
+  );
+  return normalized;
+}
+
+async function upsertCustomerReferral(client, { referrerCustomerId, referredCustomerId, notes = null }) {
+  if (!referrerCustomerId || !referredCustomerId || referrerCustomerId === referredCustomerId) {
+    return null;
+  }
+
+  const config = await loadReferralProgramConfig(client);
+  if (!config.enabled) {
+    return null;
+  }
+
+  const existingResult = await client.query(
+    `
+      SELECT id
+      FROM customer_referrals
+      WHERE referred_customer_id = $1
+      LIMIT 1
+    `,
+    [referredCustomerId],
+  );
+
+  if (existingResult.rowCount) {
+    await client.query(
+      `
+        UPDATE customer_referrals
+        SET referrer_customer_id = $2,
+            notes = COALESCE($3, notes),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [existingResult.rows[0].id, referrerCustomerId, notes],
+    );
+    return existingResult.rows[0].id;
+  }
+
+  const referralId = `ref-${crypto.randomUUID()}`;
+  await client.query(
+    `
+      INSERT INTO customer_referrals (
+        id,
+        referrer_customer_id,
+        referred_customer_id,
+        status,
+        bonus_amount,
+        qualifying_paid_amount,
+        qualifying_months,
+        program_snapshot,
+        notes,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, $3, 'active', $4, $5, $6, $7::jsonb, $8, NOW(), NOW())
+    `,
+    [
+      referralId,
+      referrerCustomerId,
+      referredCustomerId,
+      Number(config.bonusAmount || 0),
+      Number(config.qualifyingPaidAmount || 0),
+      Number(config.qualificationMonths || 0),
+      JSON.stringify(config),
+      notes,
+    ],
+  );
+
+  return referralId;
+}
+
+async function awardReferralRewardsForCustomer(client, customerId) {
+  const referralsResult = await client.query(
+    `
+      SELECT *
+      FROM customer_referrals
+      WHERE referred_customer_id = $1
+        AND status IN ('active', 'qualified')
+      ORDER BY created_at ASC, id ASC
+    `,
+    [customerId],
+  );
+
+  if (!referralsResult.rowCount) {
+    return [];
+  }
+
+  const paymentsResult = await client.query(
+    `
+      SELECT COALESCE(SUM(amount_received), 0)::numeric AS total_paid
+      FROM payments
+      WHERE customer_id = $1
+        AND review_status = 'confirmed'
+    `,
+    [customerId],
+  );
+
+  const totalPaid = Number(paymentsResult.rows[0]?.total_paid || 0);
+  const awarded = [];
+  const now = new Date();
+
+  for (const referral of referralsResult.rows) {
+    const qualifiedAt = new Date(referral.created_at);
+    qualifiedAt.setMonth(qualifiedAt.getMonth() + Number(referral.qualifying_months || 0));
+
+    const qualifiesByAmount = totalPaid >= Number(referral.qualifying_paid_amount || 0);
+    const qualifiesByTime = now >= qualifiedAt;
+    if (!qualifiesByAmount && !qualifiesByTime) {
+      continue;
+    }
+
+    const rewardId = `reward-${referral.id}`;
+    await client.query(
+      `
+        INSERT INTO customer_reward_ledger (
+          id,
+          customer_id,
+          referral_id,
+          reward_type,
+          status,
+          amount,
+          description,
+          earned_at,
+          created_at
+        )
+        VALUES ($1, $2, $3, 'referral_bonus', 'available', $4, $5, NOW(), NOW())
+        ON CONFLICT DO NOTHING
+      `,
+      [
+        rewardId,
+        referral.referrer_customer_id,
+        referral.id,
+        Number(referral.bonus_amount || 0),
+        `Referral bonus unlocked for customer ${customerId}`,
+      ],
+    );
+
+    await client.query(
+      `
+        UPDATE customer_referrals
+        SET status = 'awarded',
+            qualified_at = COALESCE(qualified_at, NOW()),
+            awarded_at = COALESCE(awarded_at, NOW()),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [referral.id],
+    );
+
+    awarded.push({
+      referralId: referral.id,
+      referrerCustomerId: referral.referrer_customer_id,
+      amount: Number(referral.bonus_amount || 0),
+    });
+  }
+
+  return awarded;
+}
+
 async function hydratePortalState(client) {
   const customersResult = await client.query(`
-    SELECT id, initials, full_name, normalized_name
+    SELECT id, customer_code, initials, full_name, normalized_name
     FROM customers
     ORDER BY full_name ASC
   `);
   const servicesResult = await client.query(`
-    SELECT customer_id, service_name
-    FROM customer_services
-    ORDER BY customer_id, service_name
+    SELECT id, customer_id, service_name, service_code, is_custom, enrolled_at
+    FROM customer_service_enrollments
+    ORDER BY customer_id, enrolled_at DESC, created_at DESC, id DESC
   `);
   const emailsResult = await client.query(`
     SELECT customer_id, email, label, is_primary
@@ -95,6 +780,25 @@ async function hydratePortalState(client) {
     FROM customer_aliases
     ORDER BY customer_id, created_at ASC, id ASC
   `);
+  const profilesResult = await client.query(`
+    SELECT
+      customer_id,
+      onboarding_status,
+      intake_source,
+      preferred_payment_method,
+      billing_cadence,
+      referral_source,
+      billing_notes,
+      home_address_line1,
+      home_address_line2,
+      home_city,
+      home_state,
+      home_postal_code,
+      home_country,
+      onboarded_at
+    FROM customer_profiles
+    ORDER BY onboarded_at DESC, customer_id ASC
+  `);
   const invoicesResult = await client.query(`
     SELECT
       invoices.*,
@@ -106,14 +810,39 @@ async function hydratePortalState(client) {
   const paymentsResult = await client.query(`
     SELECT
       payments.*,
-      customers.full_name AS resolved_customer_name
+      customers.full_name AS resolved_customer_name,
+      customers.customer_code AS resolved_customer_code,
+      invoices.invoice_code AS matched_invoice_code
     FROM payments
     LEFT JOIN customers ON customers.id = payments.customer_id
+    LEFT JOIN invoices ON invoices.id = payments.invoice_id
     ORDER BY COALESCE(payments.received_at, payments.created_at) DESC, payments.created_at DESC, payments.id DESC
   `);
   const exceptionsResult = await client.query(`
-    SELECT *
+    SELECT
+      exceptions.*,
+      payments.customer_id AS payment_customer_id,
+      payments.customer_name AS payment_customer_name,
+      payments.matched_signals AS payment_matched_signals,
+      payments.score AS payment_score,
+      payments.subject AS payment_subject,
+      payments.raw_text AS payment_raw_text,
+      payments.received_at AS payment_received_at,
+      payments.transaction_reference AS payment_transaction_reference,
+      payments.memo AS payment_memo,
+      payments.source_provider AS payment_source_provider,
+      payments.source_thread_id AS payment_source_thread_id,
+      payments.message_from_email AS payment_message_from_email,
+      payments.message_to_email AS payment_message_to_email,
+      payments.message_date_header AS payment_message_date_header,
+      payments.transaction_date AS payment_transaction_date,
+      payments.parsed_payload AS payment_parsed_payload,
+      payment_customers.customer_code AS payment_customer_code
     FROM exceptions
+    LEFT JOIN payments
+      ON payments.source_message_id = exceptions.source_message_id
+    LEFT JOIN customers AS payment_customers
+      ON payment_customers.id = payments.customer_id
     WHERE status = 'open'
     ORDER BY created_at DESC, id DESC
   `);
@@ -141,6 +870,21 @@ async function hydratePortalState(client) {
     SELECT state_json
     FROM integration_states
     WHERE integration_key = 'gmail'
+  `);
+  const referralProgramResult = await client.query(`
+    SELECT setting_json
+    FROM system_settings
+    WHERE setting_key = 'referral_program'
+  `);
+  const referralsResult = await client.query(`
+    SELECT *
+    FROM customer_referrals
+    ORDER BY created_at DESC, id DESC
+  `);
+  const rewardsResult = await client.query(`
+    SELECT *
+    FROM customer_reward_ledger
+    ORDER BY earned_at DESC, created_at DESC, id DESC
   `);
   const dashboardResult = await client.query(
     `
@@ -171,18 +915,27 @@ async function hydratePortalState(client) {
 
   const customers = customersResult.rows.map((row) => ({
     id: row.id,
+    customerCode: row.customer_code,
     initials: row.initials,
     name: row.full_name,
     services: [],
+    serviceHistory: [],
     emails: [],
     phones: [],
     aliases: [],
     invoices: [],
+    profile: createEmptyCustomerProfile(),
   }));
   const customerMap = new Map(customers.map((customer) => [customer.id, customer]));
 
   for (const row of servicesResult.rows) {
-    customerMap.get(row.customer_id)?.services.push(row.service_name);
+    const customer = customerMap.get(row.customer_id);
+    if (!customer) {
+      continue;
+    }
+
+    customer.serviceHistory.push(mapServiceEnrollmentRow(row));
+    appendServiceSummary(customer, row.service_name);
   }
 
   for (const row of emailsResult.rows) {
@@ -210,6 +963,13 @@ async function hydratePortalState(client) {
     });
   }
 
+  for (const row of profilesResult.rows) {
+    const customer = customerMap.get(row.customer_id);
+    if (customer) {
+      customer.profile = mapCustomerProfileRow(row);
+    }
+  }
+
   const invoices = invoicesResult.rows.map((row) => {
     const invoice = mapInvoiceRow(row);
     const customer = customerMap.get(invoice.customerId);
@@ -222,20 +982,7 @@ async function hydratePortalState(client) {
   const payments = paymentsResult.rows.map(mapPaymentRow);
   const pendingPayments = payments
     .filter((payment) => payment.reviewStatus === "pending")
-    .map((payment) => ({
-      id: payment.id,
-      customerId: payment.customerId,
-      customerName: payment.customerName,
-      matchedSignals: payment.matchedSignals,
-      score: payment.score,
-      amountReceived: payment.amountReceived,
-      invoiceId: payment.invoiceId,
-      sourceMessageId: payment.sourceMessageId,
-      senderEmail: payment.senderEmail,
-      senderPhoneLast4: payment.senderPhoneLast4,
-      senderNameRaw: payment.senderNameRaw,
-      receivedAt: payment.receivedAt,
-    }));
+    .map((payment) => ({ ...payment }));
 
   const exceptionCandidates = new Map();
   for (const row of exceptionCandidatesResult.rows) {
@@ -267,6 +1014,23 @@ async function hydratePortalState(client) {
     summary: row.summary,
     aliasName: row.alias_name,
     sourceMessageId: row.source_message_id,
+    customerId: row.payment_customer_id ?? null,
+    customerName: row.payment_customer_name ?? null,
+    customerCode: row.payment_customer_code ?? null,
+    matchedSignals: row.payment_matched_signals ?? [],
+    score: Number(row.payment_score || 0),
+    subject: row.payment_subject ?? null,
+    rawText: row.payment_raw_text ?? null,
+    receivedAt: formatTimestamp(row.payment_received_at),
+    transactionReference: row.payment_transaction_reference ?? null,
+    memo: row.payment_memo ?? null,
+    sourceProvider: row.payment_source_provider ?? "gmail",
+    sourceThreadId: row.payment_source_thread_id ?? null,
+    messageFromEmail: row.payment_message_from_email ?? null,
+    messageToEmail: row.payment_message_to_email ?? null,
+    messageDateHeader: row.payment_message_date_header ?? null,
+    transactionDate: row.payment_transaction_date ?? null,
+    parsedPayload: row.payment_parsed_payload ?? {},
     candidates: exceptionCandidates.get(row.id) ?? [],
   }));
 
@@ -275,6 +1039,46 @@ async function hydratePortalState(client) {
     lastSyncAt: null,
     lastSyncSummary: null,
   };
+  const referralProgram = normalizeReferralProgramConfig(
+    referralProgramResult.rows[0]?.setting_json ?? DEFAULT_REFERRAL_PROGRAM,
+  );
+  const rewards = rewardsResult.rows.map((row) => ({
+    id: row.id,
+    customerId: row.customer_id,
+    customerName: customerMap.get(row.customer_id)?.name ?? "Unknown customer",
+    customerCode: customerMap.get(row.customer_id)?.customerCode ?? null,
+    referralId: row.referral_id ?? null,
+    rewardType: row.reward_type,
+    status: row.status,
+    amount: Number(row.amount || 0),
+    description: row.description ?? null,
+    earnedAt: formatTimestamp(row.earned_at),
+    appliedAt: formatTimestamp(row.applied_at),
+  }));
+  const referrals = referralsResult.rows.map((row) => {
+    const referrer = customerMap.get(row.referrer_customer_id);
+    const referred = customerMap.get(row.referred_customer_id);
+    if (referred) {
+      referred.profile.referredByCustomerId = row.referrer_customer_id;
+    }
+    return {
+      id: row.id,
+      referrerCustomerId: row.referrer_customer_id,
+      referrerCustomerName: referrer?.name ?? "Unknown customer",
+      referrerCustomerCode: referrer?.customerCode ?? null,
+      referredCustomerId: row.referred_customer_id,
+      referredCustomerName: referred?.name ?? "Unknown customer",
+      referredCustomerCode: referred?.customerCode ?? null,
+      status: row.status,
+      bonusAmount: Number(row.bonus_amount || 0),
+      qualifyingPaidAmount: Number(row.qualifying_paid_amount || 0),
+      qualifyingMonths: Number(row.qualifying_months || 0),
+      notes: row.notes ?? null,
+      qualifiedAt: formatTimestamp(row.qualified_at),
+      awardedAt: formatTimestamp(row.awarded_at),
+      createdAt: formatTimestamp(row.created_at),
+    };
+  });
 
   return {
     customers,
@@ -323,6 +1127,7 @@ async function hydratePortalState(client) {
       .map((invoice) => ({
         id: invoice.id,
         customerId: invoice.customerId,
+        customerCode: customerMap.get(invoice.customerId)?.customerCode ?? null,
         customerName: invoice.customerName,
         email: invoice.email,
         service: invoice.service,
@@ -348,6 +1153,11 @@ async function hydratePortalState(client) {
         lastSyncSummary: gmailState.lastSyncSummary ?? null,
       },
     },
+    admin: {
+      referralProgram,
+      referrals,
+      rewards,
+    },
   };
 }
 
@@ -364,7 +1174,7 @@ async function insertActivity(client, label) {
 async function fetchCustomerAggregate(client, customerId) {
   const customerResult = await client.query(
     `
-      SELECT id, initials, full_name
+      SELECT id, customer_code, initials, full_name
       FROM customers
       WHERE id = $1
     `,
@@ -376,13 +1186,13 @@ async function fetchCustomerAggregate(client, customerId) {
     return null;
   }
 
-  const [servicesResult, emailsResult, phonesResult, aliasesResult, invoicesResult] = await Promise.all([
+  const [servicesResult, emailsResult, phonesResult, aliasesResult, invoicesResult, profileResult, referralResult] = await Promise.all([
     client.query(
       `
-        SELECT service_name
-        FROM customer_services
+        SELECT id, service_name, service_code, is_custom, enrolled_at
+        FROM customer_service_enrollments
         WHERE customer_id = $1
-        ORDER BY service_name ASC
+        ORDER BY enrolled_at DESC, created_at DESC, id DESC
       `,
       [customerId],
     ),
@@ -422,13 +1232,47 @@ async function fetchCustomerAggregate(client, customerId) {
       `,
       [customerId],
     ),
+    client.query(
+      `
+        SELECT
+          onboarding_status,
+          intake_source,
+          preferred_payment_method,
+          billing_cadence,
+          referral_source,
+          billing_notes,
+          home_address_line1,
+          home_address_line2,
+          home_city,
+          home_state,
+          home_postal_code,
+          home_country,
+          onboarded_at
+        FROM customer_profiles
+        WHERE customer_id = $1
+      `,
+      [customerId],
+    ),
+    client.query(
+      `
+        SELECT referrer_customer_id
+        FROM customer_referrals
+        WHERE referred_customer_id = $1
+        LIMIT 1
+      `,
+      [customerId],
+    ),
   ]);
 
   return {
     id: row.id,
+    customerCode: row.customer_code,
     initials: row.initials,
     name: row.full_name,
-    services: servicesResult.rows.map((item) => item.service_name),
+    services: Array.from(
+      new Set(servicesResult.rows.map((item) => item.service_name)),
+    ),
+    serviceHistory: servicesResult.rows.map(mapServiceEnrollmentRow),
     emails: emailsResult.rows.map((item) => ({
       value: item.email,
       label: item.label,
@@ -446,23 +1290,30 @@ async function fetchCustomerAggregate(client, customerId) {
       phoneLast4: item.phone_last4,
     })),
     invoices: invoicesResult.rows.map((item) => item.invoice_code),
+    profile: profileResult.rows[0]
+      ? {
+          ...mapCustomerProfileRow(profileResult.rows[0]),
+          referredByCustomerId: referralResult.rows[0]?.referrer_customer_id ?? null,
+        }
+      : createEmptyCustomerProfile(),
   };
 }
 
-async function reserveNextInvoiceCode(client) {
+async function reserveSequenceValue(client, sequenceName, startingValue = 1) {
   await client.query(`
     INSERT INTO app_sequences (sequence_name, next_value)
-    VALUES ('invoice', 1)
+    VALUES ($1, $2)
     ON CONFLICT (sequence_name) DO NOTHING
-  `);
+  `, [sequenceName, startingValue]);
 
   const sequenceResult = await client.query(
     `
       SELECT next_value
       FROM app_sequences
-      WHERE sequence_name = 'invoice'
+      WHERE sequence_name = $1
       FOR UPDATE
     `,
+    [sequenceName],
   );
   const currentValue = Number(sequenceResult.rows[0]?.next_value ?? 1);
 
@@ -472,12 +1323,26 @@ async function reserveNextInvoiceCode(client) {
       SET next_value = $2
       WHERE sequence_name = $1
     `,
-    ["invoice", currentValue + 1],
+    [sequenceName, currentValue + 1],
   );
 
+  return currentValue;
+}
+
+async function reserveNextInvoiceCode(client) {
+  const sequence = await reserveSequenceValue(client, "invoice", 1);
+
   return {
-    sequence: currentValue,
-    invoiceCode: createInvoiceRefPreview(currentValue),
+    sequence,
+    invoiceCode: createInvoiceRefPreview(sequence),
+  };
+}
+
+async function reserveNextCustomerCode(client) {
+  const sequence = await reserveSequenceValue(client, "customer", 1);
+  return {
+    sequence,
+    customerCode: createCustomerCodePreview(sequence),
   };
 }
 
@@ -584,6 +1449,212 @@ async function upsertGmailIntegrationState(client, gmailState) {
   );
 }
 
+async function resolveOpenExceptionsForMessage(client, sourceMessageId, action = "reconciled") {
+  if (!sourceMessageId) {
+    return;
+  }
+
+  await client.query(
+    `
+      UPDATE exceptions
+      SET status = 'resolved',
+          resolution_action = $2,
+          resolved_at = NOW()
+      WHERE source_message_id = $1
+        AND status = 'open'
+    `,
+    [sourceMessageId, action],
+  );
+}
+
+async function upsertExceptionFromMatch(client, exception) {
+  if (!exception?.id) {
+    return;
+  }
+
+  await client.query(
+    `
+      INSERT INTO exceptions (
+        id,
+        kind,
+        sender_name,
+        amount,
+        expected_amount,
+        date_label,
+        sender_email,
+        sender_phone_last4,
+        service_name,
+        milestone,
+        invoice_id,
+        summary,
+        alias_name,
+        source_message_id,
+        status,
+        created_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'open', NOW()
+      )
+      ON CONFLICT (id)
+      DO UPDATE
+      SET kind = EXCLUDED.kind,
+          sender_name = EXCLUDED.sender_name,
+          amount = EXCLUDED.amount,
+          expected_amount = EXCLUDED.expected_amount,
+          date_label = EXCLUDED.date_label,
+          sender_email = EXCLUDED.sender_email,
+          sender_phone_last4 = EXCLUDED.sender_phone_last4,
+          service_name = EXCLUDED.service_name,
+          milestone = EXCLUDED.milestone,
+          invoice_id = EXCLUDED.invoice_id,
+          summary = EXCLUDED.summary,
+          alias_name = EXCLUDED.alias_name,
+          source_message_id = EXCLUDED.source_message_id,
+          status = 'open',
+          resolution_action = NULL,
+          resolved_at = NULL
+    `,
+    [
+      exception.id,
+      exception.kind,
+      exception.senderName,
+      Number(exception.amount || 0),
+      exception.expectedAmount === null || exception.expectedAmount === undefined
+        ? null
+        : Number(exception.expectedAmount),
+      exception.dateLabel ?? "",
+      exception.senderEmail ?? null,
+      exception.senderPhoneLast4 ?? null,
+      exception.service ?? null,
+      exception.milestone ?? null,
+      exception.invoiceId ?? null,
+      exception.summary,
+      exception.aliasName ?? null,
+      exception.sourceMessageId ?? null,
+    ],
+  );
+
+  await client.query(
+    `
+      DELETE FROM exception_candidates
+      WHERE exception_id = $1
+    `,
+    [exception.id],
+  );
+
+  for (const [index, candidate] of (exception.candidates ?? []).entries()) {
+    await client.query(
+      `
+        INSERT INTO exception_candidates (
+          exception_id,
+          customer_id,
+          candidate_name,
+          note,
+          is_primary,
+          sort_order
+        )
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (exception_id, customer_id)
+        DO UPDATE
+        SET candidate_name = EXCLUDED.candidate_name,
+            note = EXCLUDED.note,
+            is_primary = EXCLUDED.is_primary,
+            sort_order = EXCLUDED.sort_order
+      `,
+      [
+        exception.id,
+        candidate.customerId,
+        candidate.name,
+        candidate.note,
+        Boolean(candidate.primary),
+        index,
+      ],
+    );
+  }
+}
+
+async function reconcileOpenTransactions(client) {
+  const state = await hydratePortalState(client);
+  const transactionsResult = await client.query(
+    `
+      SELECT *
+      FROM payments
+      WHERE review_status IN ('pending', 'exception')
+      ORDER BY COALESCE(received_at, created_at) DESC, created_at DESC, id DESC
+      FOR UPDATE
+    `,
+  );
+
+  for (const row of transactionsResult.rows) {
+    if (!row.source_message_id) {
+      continue;
+    }
+
+    const payment = mapPaymentRow(row);
+    const matchResult = matchPaymentToState(payment, state);
+
+    if (matchResult.kind === "pending") {
+      await client.query(
+        `
+          UPDATE payments
+          SET customer_id = $2,
+              invoice_id = $3,
+              customer_name = $4,
+              matched_signals = $5::text[],
+              score = $6,
+              review_status = 'pending',
+              match_status = 'matched',
+              match_summary = $7,
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [
+          row.id,
+          matchResult.payment.customerId ?? null,
+          matchResult.payment.invoiceId ?? null,
+          matchResult.payment.customerName ?? null,
+          matchResult.payment.matchedSignals ?? [],
+          Number(matchResult.payment.score || 0),
+          matchResult.payment.matchSummary ?? "Matched to customer and invoice.",
+        ],
+      );
+      await resolveOpenExceptionsForMessage(client, row.source_message_id, "reconciled");
+      continue;
+    }
+
+    await client.query(
+      `
+        UPDATE payments
+        SET customer_id = $2,
+            invoice_id = $3,
+            customer_name = $4,
+            matched_signals = $5::text[],
+            score = $6,
+            review_status = 'exception',
+            match_status = $7,
+            match_summary = $8,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [
+        row.id,
+        matchResult.exception.customerId ?? null,
+        matchResult.exception.invoiceId ?? null,
+        matchResult.exception.customerName ?? null,
+        matchResult.exception.matchedSignals ?? [],
+        Number(matchResult.exception.score || 0),
+        matchResult.exception.kind,
+        matchResult.exception.summary ?? "Needs human review.",
+      ],
+    );
+
+    await upsertExceptionFromMatch(client, {
+      id: `exc-${row.source_message_id}`,
+      ...matchResult.exception,
+    });
+  }
+}
+
 export async function prepareStateStore() {
   await prepareDatabase();
 }
@@ -666,6 +1737,115 @@ export async function sendQueuedInvoice(invoiceId, deliverInvoice) {
   });
 }
 
+export async function createCustomerOnboardingRecord({ form }) {
+  return withTransaction(async (client) => {
+    const selectedCustomerId = form.selectedCustomerId?.trim() || null;
+    const referringCustomerId = form.referringCustomerId?.trim() || null;
+    const firstName = form.firstName?.trim();
+    const lastName = form.lastName?.trim();
+    const customerName = [firstName, lastName].filter(Boolean).join(" ").trim();
+    const customerEmail = form.customerEmail?.trim();
+    const customerPhone = form.customerPhone?.trim();
+    const serviceEntries = normalizeServiceEntries(form.serviceEntries);
+    const preferredPaymentMethod = form.preferredPaymentMethod?.trim();
+    const billingCadence = form.billingCadence?.trim();
+    const addressProfile = {
+      homeAddressLine1: form.homeAddressLine1?.trim() || null,
+      homeAddressLine2: form.homeAddressLine2?.trim() || null,
+      homeCity: form.homeCity?.trim() || null,
+      homeState: form.homeState?.trim() || null,
+      homePostalCode: form.homePostalCode?.trim() || null,
+      homeCountry: form.homeCountry?.trim() || null,
+    };
+
+    if (!firstName) {
+      throw new Error("First name is required.");
+    }
+
+    if (!lastName) {
+      throw new Error("Last name is required.");
+    }
+
+    if (!customerEmail) {
+      throw new Error("Primary email is required for onboarding.");
+    }
+
+    if (!customerPhone) {
+      throw new Error("Mobile phone is required for onboarding.");
+    }
+
+    if (!serviceEntries.length) {
+      throw new Error("Select at least one enrolled service.");
+    }
+
+    const customerId = selectedCustomerId || `customer-${crypto.randomUUID()}`;
+    const customerCode = selectedCustomerId
+      ? null
+      : (await reserveNextCustomerCode(client)).customerCode;
+    const profile = {
+      onboardingStatus: "complete",
+      intakeSource: "onboarding",
+      preferredPaymentMethod: preferredPaymentMethod || "zelle",
+      billingCadence: billingCadence || "per_milestone",
+      referralSource: form.referralSource?.trim() || null,
+      billingNotes: form.billingNotes?.trim() || null,
+      onboardedAt: form.onboardedAt || new Date().toISOString(),
+      ...addressProfile,
+    };
+    const zelleAlias = {
+      name: form.zelleSenderName?.trim() || null,
+      email: form.zelleSenderEmail?.trim() || null,
+      phoneLast4: form.zelleSenderPhoneLast4?.trim() || null,
+    };
+
+    if (selectedCustomerId) {
+      await updateCustomerAggregate(client, {
+        customerId,
+        customerCode,
+        customerName,
+        customerEmail,
+        customerPhone,
+        serviceEntries,
+        profile,
+        zelleAlias,
+      });
+      await insertActivity(
+        client,
+        serviceEntries.length
+          ? `Client updated: ${customerName} (${serviceEntries.length} service enrollment${serviceEntries.length === 1 ? "" : "s"} added)`
+          : `Client updated: ${customerName}`,
+      );
+    } else {
+      await insertCustomerAggregate(client, {
+        customerId,
+        customerCode,
+        customerName,
+        customerEmail,
+        customerPhone,
+        serviceEntries,
+        profile,
+        zelleAlias,
+      });
+      await insertActivity(client, `Client onboarded: ${customerName}`);
+    }
+
+    await upsertCustomerReferral(client, {
+      referrerCustomerId: referringCustomerId,
+      referredCustomerId: customerId,
+      notes: form.referralSource?.trim() || null,
+    });
+
+    await reconcileOpenTransactions(client);
+
+    return {
+      state: await hydratePortalState(client),
+      message: selectedCustomerId
+        ? `${customerName} updated${serviceEntries.length ? ` with ${serviceEntries.length} new service enrollment${serviceEntries.length === 1 ? "" : "s"}` : ""}.`
+        : `${customerName} onboarded and ready for invoicing.`,
+    };
+  });
+}
+
 export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
   return withTransaction(async (client) => {
     const isNewCustomer = form.selectedCustomerId === "new";
@@ -679,6 +1859,9 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
     }
 
     const customerId = isNewCustomer ? `customer-${crypto.randomUUID()}` : existingCustomer.id;
+    const customerCode = isNewCustomer
+      ? (await reserveNextCustomerCode(client)).customerCode
+      : existingCustomer.customerCode;
     const customerEmail = isNewCustomer
       ? form.customerEmail?.trim()
       : form.selectedEmail || findPrimaryEmail(existingCustomer);
@@ -687,57 +1870,39 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
       : existingCustomer?.phones?.[0]?.value ?? null;
 
     if (isNewCustomer) {
-      await client.query(
-        `
-          INSERT INTO customers (id, initials, full_name, normalized_name, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, NOW(), NOW())
-        `,
-        [customerId, buildInitials(customerName), customerName, normalizeName(customerName)],
-      );
-
-      if (customerEmail) {
-        await client.query(
-          `
-            INSERT INTO customer_emails (id, customer_id, email, normalized_email, label, is_primary)
-            VALUES ($1, $2, $3, $4, $5, TRUE)
-          `,
-          [
-            `email-${customerId}-1`,
-            customerId,
-            customerEmail,
-            normalizeEmail(customerEmail),
-            "personal",
-          ],
-        );
-      }
-
-      if (customerPhone) {
-        const digits = normalizeDigits(customerPhone);
-        await client.query(
-          `
-            INSERT INTO customer_phones (id, customer_id, phone_value, normalized_digits, phone_last4, label, is_primary)
-            VALUES ($1, $2, $3, $4, $5, $6, TRUE)
-          `,
-          [
-            `phone-${customerId}-1`,
-            customerId,
-            customerPhone,
-            digits,
-            digits.slice(-4) || "0000",
-            "mobile",
-          ],
-        );
+      await insertCustomerAggregate(client, {
+        customerId,
+        customerCode,
+        customerName,
+        customerEmail,
+        customerPhone,
+        serviceEntries: normalizeServiceEntries(
+          [{ name: form.service, isCustom: form.service === "Custom" }],
+          form.service,
+          new Date(),
+        ),
+        profile: {
+          onboardingStatus: "needs_follow_up",
+          intakeSource: "invoice",
+          preferredPaymentMethod: "zelle",
+          billingCadence: "per_milestone",
+          referralSource: "Created from invoice",
+          billingNotes: "Minimal customer created during invoice drafting.",
+          onboardedAt: new Date().toISOString(),
+        },
+      });
+    } else {
+      const hasService = existingCustomer.services.includes(form.service);
+      if (!hasService) {
+        await insertServiceEnrollments(client, customerId, [
+          {
+            name: form.service,
+            isCustom: form.service === "Custom",
+            enrolledAt: new Date(),
+          },
+        ]);
       }
     }
-
-    await client.query(
-      `
-        INSERT INTO customer_services (customer_id, service_name)
-        VALUES ($1, $2)
-        ON CONFLICT (customer_id, service_name) DO NOTHING
-      `,
-      [customerId, form.service],
-    );
 
     if (!isNewCustomer) {
       await client.query(
@@ -773,6 +1938,7 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
     const customer = isNewCustomer
       ? {
           id: customerId,
+          customerCode,
           initials: buildInitials(customerName),
           name: customerName,
           services: [form.service],
@@ -784,12 +1950,39 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
             : [],
           aliases: [],
           invoices: [],
+          serviceHistory: normalizeServiceEntries(
+            [{ name: form.service, isCustom: form.service === "Custom" }],
+            form.service,
+            new Date(),
+          ).map((entry, index) => ({
+            id: `svc-${customerId}-${index + 1}`,
+            ...entry,
+          })),
+          profile: createEmptyCustomerProfile({
+            onboardingStatus: "needs_follow_up",
+            intakeSource: "invoice",
+            referralSource: "Created from invoice",
+            billingNotes: "Minimal customer created during invoice drafting.",
+            onboardedAt: new Date().toISOString(),
+          }),
         }
       : {
           ...existingCustomer,
           services: existingCustomer.services.includes(form.service)
             ? existingCustomer.services
             : [...existingCustomer.services, form.service],
+          serviceHistory: existingCustomer.services.includes(form.service)
+            ? existingCustomer.serviceHistory
+            : [
+                {
+                  id: `svc-${customerId}-${crypto.randomUUID()}`,
+                  name: form.service,
+                  code: null,
+                  isCustom: form.service === "Custom",
+                  enrolledAt: formatTimestamp(new Date()),
+                },
+                ...existingCustomer.serviceHistory,
+              ],
         };
 
     if (sendNow) {
@@ -847,6 +2040,8 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
       `${invoice.invoiceCode} ${sendNow ? "sent to" : "drafted for"} ${invoice.customerName}`,
     );
 
+    await reconcileOpenTransactions(client);
+
     return {
       state: await hydratePortalState(client),
       message: sendNow ? "Invoice created and sent." : "Draft invoice saved.",
@@ -872,13 +2067,10 @@ export async function confirmPendingPaymentRecord(paymentId, deliverReceipt) {
 
     const invoice = await resolveInvoiceForPayment(client, paymentRow);
     const payment = mapPaymentRow(paymentRow);
-    const recipient =
-      payment.senderEmail && payment.senderEmail.includes("@")
-        ? payment.senderEmail
-        : findPrimaryEmail(customer);
+    const recipient = findPrimaryEmail(customer);
 
     if (!recipient) {
-      throw new Error("No receipt email address is available for this customer.");
+      throw new Error("No primary customer email is available for this receipt.");
     }
 
     await deliverReceipt({ customer, payment, invoice, recipient });
@@ -899,17 +2091,28 @@ export async function confirmPendingPaymentRecord(paymentId, deliverReceipt) {
       `
         UPDATE payments
         SET review_status = 'confirmed',
+            match_status = 'applied',
+            applied_at = NOW(),
+            receipt_sent_to_email = $2,
+            receipt_sent_at = NOW(),
             updated_at = NOW()
         WHERE id = $1
       `,
-      [paymentId],
+      [paymentId, recipient],
     );
 
+    const awardedRewards = await awardReferralRewardsForCustomer(client, customer.id);
     await insertActivity(client, `Payment confirmed for ${customer.name}`);
+    for (const reward of awardedRewards) {
+      await insertActivity(
+        client,
+        `Referral bonus unlocked: ${formatCurrency(reward.amount)} for ${reward.referrerCustomerId}`,
+      );
+    }
 
     return {
       state: await hydratePortalState(client),
-      message: `Payment confirmed. Receipt emailed to ${customer.name}`,
+      message: `Transaction applied. Receipt emailed to ${recipient}`,
     };
   });
 }
@@ -973,15 +2176,95 @@ export async function resolveExceptionRecord({
       }
     }
 
-    if (exception.kind === "mismatch" && exception.invoice_id && actionType === "accept_full") {
+    if (exception.kind === "ambiguous" && candidateCustomerId && exception.source_message_id) {
+      const candidate = await fetchCustomerAggregate(client, candidateCustomerId);
+      const invoiceResult = await client.query(
+        `
+          SELECT id
+          FROM invoices
+          WHERE customer_id = $1
+            AND status IN ('sent', 'overdue')
+            AND ROUND(zelle_amount) = ROUND($2::numeric)
+          ORDER BY due_date DESC, created_at DESC, id DESC
+          LIMIT 1
+        `,
+        [candidateCustomerId, Number(exception.amount || 0)],
+      );
+
       await client.query(
         `
-          UPDATE invoices
-          SET status = 'paid',
+          UPDATE payments
+          SET customer_id = $2,
+              customer_name = $3,
+              invoice_id = $4,
+              matched_signals = ARRAY['manual_selection']::text[],
+              score = 100,
+              review_status = $5,
+              match_status = $6,
+              match_summary = $7,
               updated_at = NOW()
-          WHERE id = $1
+          WHERE source_message_id = $1
+        `,
+        [
+          exception.source_message_id,
+          candidateCustomerId,
+          candidate?.name ?? null,
+          invoiceResult.rows[0]?.id ?? null,
+          invoiceResult.rowCount ? "pending" : "exception",
+          invoiceResult.rowCount ? "matched" : "ambiguous",
+          invoiceResult.rowCount
+            ? "Customer selected manually and transaction is ready to apply."
+            : "Customer selected manually, but no matching open invoice was found.",
+        ],
+      );
+    }
+
+    if (exception.kind === "mismatch" && exception.invoice_id && actionType === "accept_full") {
+      const invoiceResult = await client.query(
+        `
+          SELECT invoices.customer_id, customers.full_name AS customer_name
+          FROM invoices
+          JOIN customers ON customers.id = invoices.customer_id
+          WHERE invoices.id = $1
+          LIMIT 1
         `,
         [exception.invoice_id],
+      );
+
+      if (invoiceResult.rowCount && exception.source_message_id) {
+        await client.query(
+          `
+            UPDATE payments
+            SET customer_id = $2,
+                customer_name = $3,
+                invoice_id = $4,
+                matched_signals = ARRAY['manual_override', 'amount']::text[],
+                score = 100,
+                review_status = 'pending',
+                match_status = 'matched',
+                match_summary = 'Prepared as a manual full-payment override. Apply the transaction to complete.',
+                updated_at = NOW()
+            WHERE source_message_id = $1
+          `,
+          [
+            exception.source_message_id,
+            invoiceResult.rows[0].customer_id,
+            invoiceResult.rows[0].customer_name,
+            exception.invoice_id,
+          ],
+        );
+      }
+    }
+
+    if (exception.kind === "mismatch" && actionType === "apply_credit" && exception.source_message_id) {
+      await client.query(
+        `
+          UPDATE payments
+          SET review_notes = 'Operator chose to apply overpayment as future credit.',
+              updated_at = NOW()
+          WHERE source_message_id = $1
+        `,
+        [exception.source_message_id],
       );
     }
 
@@ -1001,6 +2284,19 @@ export async function resolveExceptionRecord({
     return {
       state: await hydratePortalState(client),
       message: "Exception resolved.",
+    };
+  });
+}
+
+export async function updateReferralProgramSettings(config) {
+  return withTransaction(async (client) => {
+    const normalized = await upsertReferralProgramConfig(client, config);
+    await insertActivity(client, "Referral program settings updated");
+    return {
+      state: await hydratePortalState(client),
+      message: normalized.enabled
+        ? "Referral program settings saved."
+        : "Referral program disabled for new referrals.",
     };
   });
 }
@@ -1033,7 +2329,18 @@ export async function applyGmailSyncResult(syncResult) {
             matched_signals,
             score,
             source_message_id,
+            source_provider,
+            source_thread_id,
+            message_from_email,
+            message_to_email,
+            message_date_header,
+            transaction_date,
             subject,
+            transaction_reference,
+            memo,
+            parsed_payload,
+            match_status,
+            match_summary,
             date_label,
             raw_text,
             received_at,
@@ -1042,9 +2349,37 @@ export async function applyGmailSyncResult(syncResult) {
             updated_at
           )
           VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16, NOW(), NOW()
+            $1, $2, $3, $4, $5, $6, $7, $8, $9::text[], $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21::jsonb, $22, $23, $24, $25, $26, $27, NOW(), NOW()
           )
-          ON CONFLICT (id) DO NOTHING
+          ON CONFLICT (id)
+          DO UPDATE
+          SET customer_id = EXCLUDED.customer_id,
+              invoice_id = EXCLUDED.invoice_id,
+              customer_name = EXCLUDED.customer_name,
+              sender_name_raw = EXCLUDED.sender_name_raw,
+              sender_email = EXCLUDED.sender_email,
+              sender_phone_last4 = EXCLUDED.sender_phone_last4,
+              amount_received = EXCLUDED.amount_received,
+              matched_signals = EXCLUDED.matched_signals,
+              score = EXCLUDED.score,
+              source_message_id = EXCLUDED.source_message_id,
+              source_provider = EXCLUDED.source_provider,
+              source_thread_id = EXCLUDED.source_thread_id,
+              message_from_email = EXCLUDED.message_from_email,
+              message_to_email = EXCLUDED.message_to_email,
+              message_date_header = EXCLUDED.message_date_header,
+              transaction_date = EXCLUDED.transaction_date,
+              subject = EXCLUDED.subject,
+              transaction_reference = EXCLUDED.transaction_reference,
+              memo = EXCLUDED.memo,
+              parsed_payload = EXCLUDED.parsed_payload,
+              match_status = EXCLUDED.match_status,
+              match_summary = EXCLUDED.match_summary,
+              date_label = EXCLUDED.date_label,
+              raw_text = EXCLUDED.raw_text,
+              received_at = EXCLUDED.received_at,
+              review_status = EXCLUDED.review_status,
+              updated_at = NOW()
         `,
         [
           payment.id,
@@ -1058,7 +2393,18 @@ export async function applyGmailSyncResult(syncResult) {
           payment.matchedSignals ?? [],
           Number(payment.score || 0),
           payment.sourceMessageId ?? null,
+          payment.sourceProvider ?? "gmail",
+          payment.sourceThreadId ?? null,
+          payment.messageFromEmail ?? null,
+          payment.messageToEmail ?? null,
+          payment.messageDateHeader ?? null,
+          payment.transactionDate ?? null,
           payment.subject ?? null,
+          payment.transactionReference ?? null,
+          payment.memo ?? null,
+          JSON.stringify(payment.parsedPayload ?? {}),
+          payment.matchStatus ?? (payment.reviewStatus === "pending" ? "matched" : "unmatched"),
+          payment.matchSummary ?? null,
           payment.dateLabel ?? null,
           payment.rawText ?? null,
           payment.receivedAt ?? null,
@@ -1068,80 +2414,7 @@ export async function applyGmailSyncResult(syncResult) {
     }
 
     for (const exception of syncResult.exceptionsToInsert ?? []) {
-      await client.query(
-        `
-          INSERT INTO exceptions (
-            id,
-            kind,
-            sender_name,
-            amount,
-            expected_amount,
-            date_label,
-            sender_email,
-            sender_phone_last4,
-            service_name,
-            milestone,
-            invoice_id,
-            summary,
-            alias_name,
-            source_message_id,
-            status,
-            created_at
-          )
-          VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'open', NOW()
-          )
-          ON CONFLICT (id) DO NOTHING
-        `,
-        [
-          exception.id,
-          exception.kind,
-          exception.senderName,
-          Number(exception.amount || 0),
-          exception.expectedAmount === null || exception.expectedAmount === undefined
-            ? null
-            : Number(exception.expectedAmount),
-          exception.dateLabel ?? "",
-          exception.senderEmail ?? null,
-          exception.senderPhoneLast4 ?? null,
-          exception.service ?? null,
-          exception.milestone ?? null,
-          exception.invoiceId ?? null,
-          exception.summary,
-          exception.aliasName ?? null,
-          exception.sourceMessageId ?? null,
-        ],
-      );
-
-      for (const [index, candidate] of (exception.candidates ?? []).entries()) {
-        await client.query(
-          `
-            INSERT INTO exception_candidates (
-              exception_id,
-              customer_id,
-              candidate_name,
-              note,
-              is_primary,
-              sort_order
-            )
-            VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (exception_id, customer_id)
-            DO UPDATE
-            SET candidate_name = EXCLUDED.candidate_name,
-                note = EXCLUDED.note,
-                is_primary = EXCLUDED.is_primary,
-                sort_order = EXCLUDED.sort_order
-          `,
-          [
-            exception.id,
-            candidate.customerId,
-            candidate.name,
-            candidate.note,
-            Boolean(candidate.primary),
-            index,
-          ],
-        );
-      }
+      await upsertExceptionFromMatch(client, exception);
     }
 
     await upsertGmailIntegrationState(client, {

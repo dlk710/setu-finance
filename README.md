@@ -2,6 +2,7 @@
 
 Local full-stack prototype for:
 
+- onboarding clients before billing starts
 - sending invoice and receipt emails through SMTP
 - polling a Gmail inbox for Zelle-like confirmation emails
 - matching parsed payments into `Payments to confirm` or `Exceptions`
@@ -72,6 +73,7 @@ The current backend is designed as a small but scalable product foundation:
   - [server/db/migrations.js](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations.js)
   - [server/db/seed.js](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/seed.js)
 - Core schema is normalized across customers, contacts, aliases, invoices, payments, exceptions, activity, sequences, integrations, and dashboard projections in [server/db/migrations/001_portal_core.sql](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations/001_portal_core.sql)
+- onboarding and billing preferences are stored alongside customer identity through [server/db/migrations/002_customer_profiles.sql](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations/002_customer_profiles.sql)
 
 Performance and cost choices:
 
@@ -94,7 +96,10 @@ More detail is in [docs/architecture.md](/Users/lohithdeshpande/Documents/Claude
 The repo includes the current-state product artifacts alongside the live code:
 
 - updated wireframe: [files/phase1_prototype.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/phase1_prototype.html)
-- current-state requirements: [files/setu_phase1_requirements.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_phase1_requirements.html)
+- business requirements handoff: [files/setu_phase1_requirements.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_phase1_requirements.html)
+- simple process flow: [docs/process-flow.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/process-flow.md)
+- non-technical requirements: [docs/non-technical-requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/non-technical-requirements.md)
+- low-cost AWS solution architecture: [docs/aws-solution-architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/aws-solution-architecture.md)
 - design system notes: [docs/design-system.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/design-system.md)
 - architecture notes: [docs/architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/architecture.md)
 - prompt and scope history: [docs/prompts-and-requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/prompts-and-requirements.md)

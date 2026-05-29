@@ -75,3 +75,16 @@ To evolve this beyond the current portal, the recommended sequence is:
 
 - The app still assembles a portal-wide read model for the existing UI, which is fine at current scale but should be narrowed into endpoint-specific queries as the product suite expands.
 - Email sending remains request-coupled for now. That keeps behavior simple locally, but a job queue is the right next step for high-volume use.
+
+## AWS target
+
+The recommended first production deployment is intentionally different from the local stack while preserving the same behavior:
+
+- static frontend on S3 + CloudFront
+- Node/Express API on App Runner
+- PostgreSQL on RDS
+- background work through SQS + Lambda
+- scheduled Gmail sync through EventBridge Scheduler
+- outbound email through SES
+
+The full diagram and cost rationale are in [aws-solution-architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/aws-solution-architecture.md).

@@ -73,6 +73,18 @@ function getHeader(message, headerName) {
   return header?.value ?? "";
 }
 
+function parseAddressHeader(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return { name: null, email: null };
+  }
+
+  const emailMatch = raw.match(/[A-Z0-9._%*+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  const email = emailMatch ? emailMatch[0] : null;
+  const name = cleanSenderName(raw.replace(emailMatch?.[0] ?? "", "")) || null;
+  return { name, email };
+}
+
 function extractAmount(text) {
   const preferredPatterns = [
     /(?:sent|payment|paid|amount)[^$]{0,40}\$([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)/i,
@@ -116,8 +128,51 @@ function extractSenderName(text) {
 }
 
 function extractSenderEmail(text) {
-  const match = text.match(/[A-Z0-9._%*+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match ? match[0] : null;
+  const patterns = [
+    /sender(?:'s)?\s+email[:\s]+([A-Z0-9._%*+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i,
+    /payer(?:'s)?\s+email[:\s]+([A-Z0-9._%*+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i,
+    /registered\s+email[:\s]+([A-Z0-9._%*+-]+@[A-Z0-9.-]+\.[A-Z]{2,})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return match[1] ?? match[0];
+    }
+  }
+
+  return null;
+}
+
+function formatIsoDateOnly(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString().slice(0, 10);
+}
+
+function extractTransactionDate(text) {
+  const patterns = [
+    /sent on[:\s]+([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})/i,
+    /payment date[:\s]+([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})/i,
+    /date[:\s]+([A-Za-z]{3,9}\s+\d{1,2},\s+\d{4})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (!match) {
+      continue;
+    }
+
+    const parsed = formatIsoDateOnly(match[1]);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return null;
 }
 
 function extractSenderPhoneLast4(text) {
@@ -144,21 +199,83 @@ function formatDateLabel(value) {
   }).format(date);
 }
 
+function extractTransactionReference(text) {
+  const patterns = [
+    /(?:transaction|confirmation|reference)\s*(?:number|id|#)?[:\s#-]+([A-Z0-9-]{6,40})/i,
+    /(?:trace|payment)\s*(?:number|id|#)?[:\s#-]+([A-Z0-9-]{6,40})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return null;
+}
+
+function extractMemo(text) {
+  const patterns = [
+    /memo[:\s-]+([^\n\r]{2,120})/i,
+    /for[:\s-]+([^\n\r]{2,120})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) {
+      return String(match[1]).trim();
+    }
+  }
+
+  return null;
+}
+
 function parseZelleLikeMessage(message) {
   const subject = getHeader(message, "Subject");
   const bodyText = extractBodyText(message);
   const joinedText = [subject, bodyText, message.snippet].filter(Boolean).join("\n");
-  const receivedAt = getHeader(message, "Date") || new Date(Number(message.internalDate)).toISOString();
+  const messageDateHeader = getHeader(message, "Date");
+  const receivedAt = messageDateHeader || new Date(Number(message.internalDate)).toISOString();
+  const messageFrom = parseAddressHeader(getHeader(message, "From"));
+  const messageTo = parseAddressHeader(getHeader(message, "To"));
+  const senderNameRaw = extractSenderName(joinedText);
+  const senderEmail = extractSenderEmail(joinedText);
+  const transactionDate = extractTransactionDate(joinedText);
+  const transactionReference = extractTransactionReference(joinedText);
+  const memo = extractMemo(joinedText);
 
   return {
     sourceMessageId: message.id,
+    sourceProvider: "gmail",
+    sourceThreadId: message.threadId ?? null,
     subject,
     receivedAt,
-    dateLabel: formatDateLabel(receivedAt),
-    senderNameRaw: extractSenderName(joinedText),
-    senderEmail: extractSenderEmail(joinedText),
+    messageFromEmail: messageFrom.email,
+    messageToEmail: messageTo.email,
+    messageDateHeader,
+    transactionDate,
+    dateLabel: formatDateLabel(transactionDate || receivedAt),
+    senderNameRaw,
+    senderEmail,
     senderPhoneLast4: extractSenderPhoneLast4(joinedText),
     amountReceived: extractAmount(joinedText),
+    transactionReference,
+    memo,
+    parsedPayload: {
+      provider: "gmail",
+      subject,
+      messageFrom,
+      messageTo,
+      transactionDate,
+      senderNameRaw,
+      senderEmail,
+      senderPhoneLast4: extractSenderPhoneLast4(joinedText),
+      amountReceived: extractAmount(joinedText),
+      transactionReference,
+      memo,
+      snippet: message.snippet ?? "",
+    },
     rawText: joinedText,
   };
 }
@@ -229,6 +346,35 @@ export async function syncGmailInbox(state) {
         summary: "The inbox parser could not confidently extract a sender and amount from this message",
         sourceMessageId: parsedPayment.sourceMessageId,
       });
+      paymentsToInsert.push({
+        id: `pay-${parsedPayment.sourceMessageId || crypto.randomUUID()}`,
+        customerId: null,
+        customerName: null,
+        matchedSignals: [],
+        score: 0,
+        amountReceived: parsedPayment.amountReceived || 0,
+        invoiceId: null,
+        sourceMessageId: parsedPayment.sourceMessageId,
+        sourceProvider: parsedPayment.sourceProvider,
+        sourceThreadId: parsedPayment.sourceThreadId,
+        messageFromEmail: parsedPayment.messageFromEmail,
+        messageToEmail: parsedPayment.messageToEmail,
+        messageDateHeader: parsedPayment.messageDateHeader,
+        transactionDate: parsedPayment.transactionDate,
+        senderEmail: parsedPayment.senderEmail,
+        senderPhoneLast4: parsedPayment.senderPhoneLast4,
+        senderNameRaw: parsedPayment.senderNameRaw,
+        subject: parsedPayment.subject,
+        transactionReference: parsedPayment.transactionReference,
+        memo: parsedPayment.memo,
+        parsedPayload: parsedPayment.parsedPayload,
+        matchStatus: "unmatched",
+        matchSummary: "Parser could not confidently extract the full Zelle transaction.",
+        dateLabel: parsedPayment.dateLabel,
+        rawText: parsedPayment.rawText,
+        receivedAt: parsedPayment.receivedAt,
+        reviewStatus: "exception",
+      });
       summary.exceptionsAdded += 1;
       continue;
     }
@@ -238,7 +384,18 @@ export async function syncGmailInbox(state) {
     if (matchResult.kind === "pending") {
       paymentsToInsert.push({
         ...matchResult.payment,
+        sourceProvider: parsedPayment.sourceProvider,
+        sourceThreadId: parsedPayment.sourceThreadId,
+        messageFromEmail: parsedPayment.messageFromEmail,
+        messageToEmail: parsedPayment.messageToEmail,
+        messageDateHeader: parsedPayment.messageDateHeader,
+        transactionDate: parsedPayment.transactionDate,
         subject: parsedPayment.subject,
+        transactionReference: parsedPayment.transactionReference,
+        memo: parsedPayment.memo,
+        parsedPayload: parsedPayment.parsedPayload,
+        matchStatus: "matched",
+        matchSummary: matchResult.payment.matchSummary ?? "Matched to customer and invoice.",
         dateLabel: parsedPayment.dateLabel,
         rawText: parsedPayment.rawText,
         reviewStatus: "pending",
@@ -249,17 +406,28 @@ export async function syncGmailInbox(state) {
 
     paymentsToInsert.push({
       id: `pay-${parsedPayment.sourceMessageId || crypto.randomUUID()}`,
-      customerId: null,
-      customerName: null,
-      matchedSignals: [],
-      score: 0,
+      customerId: matchResult.exception.customerId ?? null,
+      customerName: matchResult.exception.customerName ?? null,
+      matchedSignals: matchResult.exception.matchedSignals ?? [],
+      score: Number(matchResult.exception.score || 0),
       amountReceived: parsedPayment.amountReceived || 0,
-      invoiceId: null,
+      invoiceId: matchResult.exception.invoiceId ?? null,
       sourceMessageId: parsedPayment.sourceMessageId,
+      sourceProvider: parsedPayment.sourceProvider,
+      sourceThreadId: parsedPayment.sourceThreadId,
+      messageFromEmail: parsedPayment.messageFromEmail,
+      messageToEmail: parsedPayment.messageToEmail,
+      messageDateHeader: parsedPayment.messageDateHeader,
+      transactionDate: parsedPayment.transactionDate,
       senderEmail: parsedPayment.senderEmail,
       senderPhoneLast4: parsedPayment.senderPhoneLast4,
       senderNameRaw: parsedPayment.senderNameRaw,
       subject: parsedPayment.subject,
+      transactionReference: parsedPayment.transactionReference,
+      memo: parsedPayment.memo,
+      parsedPayload: parsedPayment.parsedPayload,
+      matchStatus: matchResult.exception.kind,
+      matchSummary: matchResult.exception.summary,
       dateLabel: parsedPayment.dateLabel,
       rawText: parsedPayment.rawText,
       receivedAt: parsedPayment.receivedAt,

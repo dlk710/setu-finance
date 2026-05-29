@@ -44,6 +44,13 @@ Typography:
 - Sticky topbar for local context and actions
 - Metric cards across the top of major views
 - Sectioned operational tables in the console
+- Workflow strip to make the operating order explicit: onboard, invoice, payment, receipt
+
+### Onboarding
+
+- First-class screen, not a hidden modal
+- Intake form should capture both billing setup and future payment-match hints
+- Right rail or companion panel should reinforce that onboarding feeds the downstream workflow
 
 ### Modals
 
@@ -68,6 +75,14 @@ The manual invoice flow now uses:
 - identity search instead of a large dropdown
 - member-aware service options
 - inline fallback to create a new customer
+
+### Onboarding-first operations
+
+The product now treats client onboarding as the explicit first step:
+
+- onboarding captures required identity and billing data before invoicing
+- optional Zelle identity details improve later Gmail matching
+- invoice-side "new customer" is still available as a fallback, but not the preferred path
 
 ### Queue-based operations
 

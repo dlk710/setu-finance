@@ -17,12 +17,18 @@ async function ensureMigrationsTable(client) {
   `);
 }
 
+async function acquireMigrationLock(client) {
+  // Shared local processes can bootstrap at the same time; serialize migrations explicitly.
+  await client.query("SELECT pg_advisory_xact_lock($1)", [52_710_004]);
+}
+
 export async function runMigrations() {
   const migrationFiles = (await fs.readdir(migrationsDir))
     .filter((file) => file.endsWith(".sql"))
     .sort();
 
   return withTransaction(async (client) => {
+    await acquireMigrationLock(client);
     await ensureMigrationsTable(client);
 
     for (const file of migrationFiles) {
@@ -37,7 +43,10 @@ export async function runMigrations() {
 
       const sql = await fs.readFile(path.join(migrationsDir, file), "utf8");
       await client.query(sql);
-      await client.query("INSERT INTO schema_migrations (version) VALUES ($1)", [file]);
+      await client.query(
+        "INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING",
+        [file],
+      );
     }
 
     return migrationFiles.length;

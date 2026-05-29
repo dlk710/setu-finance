@@ -39,18 +39,58 @@ const DEFAULT_FORM = {
   customerEmail: "",
   customerPhone: "",
   selectedEmail: "",
-  service: "Authorship",
+  service: "Authorship of scholarly articles",
   milestone: "",
   amount: 1500,
   discountPct: 5,
   dueDate: "2026-06-10",
 };
 
+const EB1A_CRITERIA_OPTIONS = [
+  {
+    code: "awards",
+    label: "Lesser nationally or internationally recognized prizes or awards",
+  },
+  {
+    code: "memberships",
+    label: "Membership in associations that demand outstanding achievement",
+  },
+  {
+    code: "published-material",
+    label: "Published material about the client in major media",
+  },
+  {
+    code: "judging",
+    label: "Participation as a judge of the work of others",
+  },
+  {
+    code: "original-contributions",
+    label: "Original contributions of major significance",
+  },
+  {
+    code: "authorship",
+    label: "Authorship of scholarly articles",
+  },
+  {
+    code: "exhibitions",
+    label: "Display of work at artistic exhibitions or showcases",
+  },
+  {
+    code: "critical-role",
+    label: "Leading or critical role for distinguished organizations",
+  },
+  {
+    code: "high-salary",
+    label: "High salary or other significantly high remuneration",
+  },
+  {
+    code: "commercial-success",
+    label: "Commercial success in the performing arts",
+  },
+];
+
 const DEFAULT_SERVICE_OPTIONS = [
-  "Authorship",
-  "Judging",
-  "Media package",
-  "Full profile",
+  ...EB1A_CRITERIA_OPTIONS.map((option) => option.label),
   "Custom",
 ];
 
@@ -59,16 +99,263 @@ const DEFAULT_AUTH_FORM = {
   password: "",
 };
 
+function createDateTimeLocalValue(value = new Date()) {
+  const date = value instanceof Date ? value : new Date(value);
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return local.toISOString().slice(0, 16);
+}
+
+function createServiceSelectionEntry(code, enrolledAt = createDateTimeLocalValue()) {
+  return {
+    code,
+    enrolledAt,
+  };
+}
+
+function createCustomServiceEntry() {
+  return {
+    id: crypto.randomUUID(),
+    name: "",
+    enrolledAt: createDateTimeLocalValue(),
+  };
+}
+
+const DEFAULT_ONBOARDING_FORM = {
+  selectedCustomerId: "",
+  referringCustomerId: "",
+  firstName: "",
+  lastName: "",
+  customerEmail: "",
+  customerPhone: "",
+  onboardedAt: "",
+  homeAddressLine1: "",
+  homeAddressLine2: "",
+  homeCity: "",
+  homeState: "",
+  homePostalCode: "",
+  homeCountry: "",
+  preferredPaymentMethod: "",
+  billingCadence: "",
+  zelleSenderName: "",
+  zelleSenderEmail: "",
+  zelleSenderPhoneLast4: "",
+  referralSource: "",
+  billingNotes: "",
+  criteriaSelections: [],
+  customServices: [],
+};
+
+const LEGACY_CRITERION_CODE_BY_NAME = {
+  authorship: "authorship",
+  judging: "judging",
+};
+
+function splitCustomerName(fullName) {
+  const parts = String(fullName || "").trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) {
+    return { firstName: "", lastName: "" };
+  }
+
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: "" };
+  }
+
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" "),
+  };
+}
+
+function createOnboardingFormFromCustomer(customer) {
+  const { firstName, lastName } = splitCustomerName(customer?.name);
+  const primaryEmail = customer?.emails.find((email) => email.isPrimary)?.value ?? customer?.emails[0]?.value ?? "";
+  const primaryPhone = customer?.phones.find((phone) => phone.isPrimary)?.value ?? customer?.phones[0]?.value ?? "";
+  const zelleAlias = customer?.aliases.find((alias) => alias.relation === "zelle identity");
+
+  return {
+    ...DEFAULT_ONBOARDING_FORM,
+    selectedCustomerId: customer?.id ?? "",
+    firstName,
+    lastName,
+    customerEmail: primaryEmail,
+    customerPhone: primaryPhone,
+    onboardedAt: customer?.profile?.onboardedAt ?? "",
+    preferredPaymentMethod: customer?.profile?.preferredPaymentMethod ?? DEFAULT_ONBOARDING_FORM.preferredPaymentMethod,
+    billingCadence: customer?.profile?.billingCadence ?? DEFAULT_ONBOARDING_FORM.billingCadence,
+    zelleSenderName: zelleAlias?.name ?? "",
+    zelleSenderEmail: zelleAlias?.email ?? "",
+    zelleSenderPhoneLast4: zelleAlias?.phoneLast4 ?? "",
+    referringCustomerId: customer?.profile?.referredByCustomerId ?? "",
+    referralSource: customer?.profile?.referralSource ?? "",
+    billingNotes: customer?.profile?.billingNotes ?? "",
+    homeAddressLine1: customer?.profile?.homeAddressLine1 ?? "",
+    homeAddressLine2: customer?.profile?.homeAddressLine2 ?? "",
+    homeCity: customer?.profile?.homeCity ?? "",
+    homeState: customer?.profile?.homeState ?? "",
+    homePostalCode: customer?.profile?.homePostalCode ?? "",
+    homeCountry: customer?.profile?.homeCountry ?? "",
+  };
+}
+
+function buildOnboardingServiceEntries(form) {
+  const criteriaEntries = form.criteriaSelections
+    .map((selection) => {
+      const option = EB1A_CRITERIA_OPTIONS.find((criterion) => criterion.code === selection.code);
+      if (!option) {
+        return null;
+      }
+
+      return {
+        code: option.code,
+        name: option.label,
+        isCustom: false,
+        enrolledAt: selection.enrolledAt,
+      };
+    })
+    .filter(Boolean);
+
+  const customEntries = form.customServices
+    .map((service) => {
+      const name = service.name.trim();
+      if (!name) {
+        return null;
+      }
+
+      return {
+        code: "custom",
+        name,
+        isCustom: true,
+        enrolledAt: service.enrolledAt,
+      };
+    })
+    .filter(Boolean);
+
+  return [...criteriaEntries, ...customEntries];
+}
+
+function findCriterionOptionByServiceName(serviceName) {
+  const normalized = String(serviceName || "").trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  return (
+    EB1A_CRITERIA_OPTIONS.find((option) => option.label.toLowerCase() === normalized) ??
+    EB1A_CRITERIA_OPTIONS.find((option) => option.code === LEGACY_CRITERION_CODE_BY_NAME[normalized]) ??
+    null
+  );
+}
+
+function createOnboardingPrefillFromInvoice(form) {
+  const { firstName, lastName } = splitCustomerName(form.customerName);
+  const criterion = findCriterionOptionByServiceName(form.service);
+
+  return {
+    ...DEFAULT_ONBOARDING_FORM,
+    firstName,
+    lastName,
+    customerEmail: form.customerEmail,
+    customerPhone: form.customerPhone,
+    criteriaSelections: criterion ? [createServiceSelectionEntry(criterion.code)] : [],
+    customServices:
+      form.service && !criterion
+        ? [{ ...createCustomServiceEntry(), name: form.service }]
+        : [],
+  };
+}
+
+function findExistingCriterionEnrollment(history, option) {
+  return (
+    history.find(
+      (entry) =>
+        entry.code === option.code ||
+        entry.name === option.label ||
+        LEGACY_CRITERION_CODE_BY_NAME[String(entry.name || "").trim().toLowerCase()] === option.code,
+    ) ?? null
+  );
+}
+
+function formatEnrollmentTimestamp(value) {
+  if (!value) {
+    return "Date not set";
+  }
+
+  return new Date(value).toLocaleString();
+}
+
+const PAYMENT_METHOD_OPTIONS = [
+  { value: "", label: "Use finance default" },
+  { value: "zelle", label: "Zelle first" },
+  { value: "card", label: "Card first" },
+  { value: "both", label: "Both supported" },
+];
+
+const BILLING_CADENCE_OPTIONS = [
+  { value: "", label: "Use finance default" },
+  { value: "per_milestone", label: "Per milestone" },
+  { value: "monthly", label: "Monthly cycle" },
+  { value: "custom", label: "Custom cadence" },
+];
+
+function createReferralProgramForm(config = {}) {
+  return {
+    enabled: config.enabled !== false,
+    bonusAmount: String(config.bonusAmount ?? 500),
+    qualifyingPaidAmount: String(config.qualifyingPaidAmount ?? 3000),
+    qualificationMonths: String(config.qualificationMonths ?? 6),
+  };
+}
+
+function formatTransactionDate(value) {
+  if (!value) {
+    return "Not captured";
+  }
+
+  const parsed =
+    value instanceof Date
+      ? value
+      : new Date(String(value).includes("T") ? String(value) : `${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleDateString();
+}
+
+function formatDateTimeValue(value) {
+  if (!value) {
+    return "Not captured";
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+
+  return parsed.toLocaleString();
+}
+
+function formatCustomerReference(customer) {
+  return customer?.customerCode ?? customer?.id ?? "Unassigned";
+}
+
 function App() {
-  const [view, setView] = useState("dashboard");
+  const [view, setView] = useState("onboarding");
   const [state, setState] = useState(createInitialState);
   const [searchQuery, setSearchQuery] = useState("");
   const [toasts, setToasts] = useState([]);
   const [modal, setModal] = useState({ type: null, payload: null });
   const [invoiceForm, setInvoiceForm] = useState(DEFAULT_FORM);
   const [invoiceCustomerQuery, setInvoiceCustomerQuery] = useState("");
+  const [onboardingCustomerQuery, setOnboardingCustomerQuery] = useState("");
+  const [onboardingForm, setOnboardingForm] = useState(DEFAULT_ONBOARDING_FORM);
+  const [savingOnboarding, setSavingOnboarding] = useState(false);
+  const [savingReferralProgram, setSavingReferralProgram] = useState(false);
   const [saveAlias, setSaveAlias] = useState(true);
   const [syncingInbox, setSyncingInbox] = useState(false);
+  const [referralProgramForm, setReferralProgramForm] = useState(() =>
+    createReferralProgramForm(createInitialState().admin?.referralProgram),
+  );
   const [auth, setAuth] = useState({
     checking: true,
     authenticated: false,
@@ -82,6 +369,7 @@ function App() {
   const [loggingIn, setLoggingIn] = useState(false);
 
   const counts = {
+    onboarded: state.customers.length,
     due: state.dueInvoices.length,
     confirm: state.pendingPayments.length,
     exceptions: state.exceptions.length,
@@ -97,6 +385,40 @@ function App() {
     ? searchCustomersByIdentity(state.customers, invoiceCustomerQuery)
     : [];
   const serviceOptions = buildServiceOptions(selectedCustomer);
+  const selectedOnboardingCustomer =
+    state.customers.find((customer) => customer.id === onboardingForm.selectedCustomerId) ?? null;
+  const onboardingCustomerResults = onboardingCustomerQuery.trim()
+    ? searchCustomersByIdentity(state.customers, onboardingCustomerQuery)
+    : [];
+  const onboardingNeedsFollowUp = state.customers.filter(
+    (customer) => customer.profile?.onboardingStatus === "needs_follow_up",
+  ).length;
+  const zelleReadyCount = state.customers.filter((customer) =>
+    customer.aliases.some((alias) => alias.relation === "zelle identity"),
+  ).length;
+  const recentOnboardedCustomers = [...state.customers]
+    .filter((customer) => customer.profile?.onboardedAt)
+    .sort(
+      (left, right) =>
+        new Date(right.profile.onboardedAt).getTime() - new Date(left.profile.onboardedAt).getTime(),
+    )
+    .slice(0, 6);
+  const currentOnboardingHistory = selectedOnboardingCustomer?.serviceHistory ?? [];
+  const referralProgram = state.admin?.referralProgram ?? {
+    enabled: true,
+    bonusAmount: 500,
+    qualifyingPaidAmount: 3000,
+    qualificationMonths: 6,
+  };
+
+  useEffect(() => {
+    setReferralProgramForm(createReferralProgramForm(state.admin?.referralProgram));
+  }, [
+    state.admin?.referralProgram?.enabled,
+    state.admin?.referralProgram?.bonusAmount,
+    state.admin?.referralProgram?.qualifyingPaidAmount,
+    state.admin?.referralProgram?.qualificationMonths,
+  ]);
 
   useEffect(() => {
     if (modal.type !== "ambiguous") {
@@ -105,12 +427,16 @@ function App() {
   }, [modal.type]);
 
   function resetPortalUi() {
-    setView("dashboard");
+    setView("onboarding");
     setState(createInitialState());
     setSearchQuery("");
     setModal({ type: null, payload: null });
     setInvoiceForm({ ...DEFAULT_FORM });
     setInvoiceCustomerQuery("");
+    setOnboardingCustomerQuery("");
+    setOnboardingForm({ ...DEFAULT_ONBOARDING_FORM });
+    setSavingOnboarding(false);
+    setSavingReferralProgram(false);
     setSaveAlias(true);
     setSyncingInbox(false);
   }
@@ -215,6 +541,16 @@ function App() {
     setInvoiceForm(DEFAULT_FORM);
     setInvoiceCustomerQuery("");
     setModal({ type: "new-invoice", payload: null });
+  }
+
+  function openOnboarding(prefill = null) {
+    setView("onboarding");
+    setModal({ type: null, payload: null });
+    setOnboardingCustomerQuery("");
+    setOnboardingForm({
+      ...DEFAULT_ONBOARDING_FORM,
+      ...(prefill ?? {}),
+    });
   }
 
   function openSendPreview(invoiceId) {
@@ -328,6 +664,7 @@ function App() {
         method: "POST",
       });
       setState(data.state);
+      closeModal();
       pushToast(data.message);
     } catch (error) {
       if (handleUnauthorized(error)) {
@@ -356,15 +693,15 @@ function App() {
     }
   }
 
-  async function resolveMismatch(actionType, toastLabel) {
+  async function resolveMismatch(exceptionId, actionType, toastLabel) {
     try {
-      const data = await apiRequest("/api/exceptions/exc-rahul/resolve", {
+      const data = await apiRequest(`/api/exceptions/${exceptionId}/resolve`, {
         method: "POST",
         body: { actionType },
       });
       setState(data.state);
       closeModal();
-      pushToast(toastLabel);
+      pushToast(toastLabel || data.message);
     } catch (error) {
       if (handleUnauthorized(error)) {
         return;
@@ -373,9 +710,9 @@ function App() {
     }
   }
 
-  async function resolveAmbiguous(candidate) {
+  async function resolveAmbiguous(exceptionId, candidate) {
     try {
-      const data = await apiRequest("/api/exceptions/exc-sharma/resolve", {
+      const data = await apiRequest(`/api/exceptions/${exceptionId}/resolve`, {
         method: "POST",
         body: {
           actionType: "matched_customer",
@@ -398,10 +735,149 @@ function App() {
     }
   }
 
+  async function saveReferralProgram() {
+    const bonusAmount = Number(referralProgramForm.bonusAmount);
+    const qualifyingPaidAmount = Number(referralProgramForm.qualifyingPaidAmount);
+    const qualificationMonths = Number(referralProgramForm.qualificationMonths);
+
+    if (
+      !Number.isFinite(bonusAmount) ||
+      !Number.isFinite(qualifyingPaidAmount) ||
+      !Number.isFinite(qualificationMonths)
+    ) {
+      pushToast("Enter valid referral rule values before saving.");
+      return;
+    }
+
+    setSavingReferralProgram(true);
+    try {
+      const data = await apiRequest("/api/admin/referral-program", {
+        method: "POST",
+        body: {
+          config: {
+            enabled: referralProgramForm.enabled,
+            bonusAmount,
+            qualifyingPaidAmount,
+            qualificationMonths,
+          },
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setSavingReferralProgram(false);
+    }
+  }
+
   function updateForm(field, value) {
     setInvoiceForm((current) => ({
       ...current,
       [field]: value,
+    }));
+  }
+
+  function updateOnboardingForm(field, value) {
+    setOnboardingForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  function updateOnboardingCustomerQuery(value) {
+    setOnboardingCustomerQuery(value);
+
+    if (!selectedOnboardingCustomer) {
+      return;
+    }
+
+    if (value !== selectedOnboardingCustomer.name) {
+      setOnboardingForm((current) => ({
+        ...DEFAULT_ONBOARDING_FORM,
+        firstName: current.firstName,
+        lastName: current.lastName,
+        customerEmail: current.customerEmail,
+        customerPhone: current.customerPhone,
+        onboardedAt: current.onboardedAt,
+        homeAddressLine1: current.homeAddressLine1,
+        homeAddressLine2: current.homeAddressLine2,
+        homeCity: current.homeCity,
+        homeState: current.homeState,
+        homePostalCode: current.homePostalCode,
+        homeCountry: current.homeCountry,
+        preferredPaymentMethod: current.preferredPaymentMethod,
+        billingCadence: current.billingCadence,
+        zelleSenderName: current.zelleSenderName,
+        zelleSenderEmail: current.zelleSenderEmail,
+        zelleSenderPhoneLast4: current.zelleSenderPhoneLast4,
+        referringCustomerId: current.referringCustomerId,
+        referralSource: current.referralSource,
+        billingNotes: current.billingNotes,
+      }));
+    }
+  }
+
+  function selectOnboardingCustomer(customerId) {
+    if (!customerId) {
+      setOnboardingCustomerQuery("");
+      setOnboardingForm(DEFAULT_ONBOARDING_FORM);
+      return;
+    }
+
+    const customer = state.customers.find((item) => item.id === customerId);
+    if (!customer) {
+      return;
+    }
+
+    setOnboardingCustomerQuery(customer.name);
+    setOnboardingForm(createOnboardingFormFromCustomer(customer));
+  }
+
+  function toggleCriteriaSelection(code) {
+    setOnboardingForm((current) => {
+      const exists = current.criteriaSelections.some((selection) => selection.code === code);
+      return {
+        ...current,
+        criteriaSelections: exists
+          ? current.criteriaSelections.filter((selection) => selection.code !== code)
+          : [...current.criteriaSelections, createServiceSelectionEntry(code)],
+      };
+    });
+  }
+
+  function updateCriteriaSelection(code, field, value) {
+    setOnboardingForm((current) => ({
+      ...current,
+      criteriaSelections: current.criteriaSelections.map((selection) =>
+        selection.code === code ? { ...selection, [field]: value } : selection,
+      ),
+    }));
+  }
+
+  function addCustomServiceEntry() {
+    setOnboardingForm((current) => ({
+      ...current,
+      customServices: [...current.customServices, createCustomServiceEntry()],
+    }));
+  }
+
+  function updateCustomServiceEntry(id, field, value) {
+    setOnboardingForm((current) => ({
+      ...current,
+      customServices: current.customServices.map((service) =>
+        service.id === id ? { ...service, [field]: value } : service,
+      ),
+    }));
+  }
+
+  function removeCustomServiceEntry(id) {
+    setOnboardingForm((current) => ({
+      ...current,
+      customServices: current.customServices.filter((service) => service.id !== id),
     }));
   }
 
@@ -519,6 +995,51 @@ function App() {
     }
   }
 
+  async function submitOnboarding(event) {
+    event.preventDefault();
+    const serviceEntries = buildOnboardingServiceEntries(onboardingForm);
+    const hasRequiredIdentity =
+      onboardingForm.firstName.trim() &&
+      onboardingForm.lastName.trim() &&
+      onboardingForm.customerEmail.trim() &&
+      onboardingForm.customerPhone.trim();
+
+    if (!hasRequiredIdentity) {
+      pushToast("First name, last name, email, and phone are required.");
+      return;
+    }
+
+    if (!serviceEntries.length) {
+      pushToast("Select at least one service enrollment.");
+      return;
+    }
+
+    setSavingOnboarding(true);
+
+    try {
+      const data = await apiRequest("/api/customers", {
+        method: "POST",
+        body: {
+          form: {
+            ...onboardingForm,
+            serviceEntries,
+          },
+        },
+      });
+      setState(data.state);
+      setOnboardingForm(DEFAULT_ONBOARDING_FORM);
+      setOnboardingCustomerQuery("");
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setSavingOnboarding(false);
+    }
+  }
+
   async function syncInbox() {
     setSyncingInbox(true);
     try {
@@ -577,6 +1098,13 @@ function App() {
         </div>
         <div className="nav-label">Finance</div>
         <button
+          className={`nav-item ${view === "onboarding" ? "active" : ""}`}
+          onClick={() => setView("onboarding")}
+        >
+          <IconUsers size={17} />
+          Client onboarding
+        </button>
+        <button
           className={`nav-item ${view === "dashboard" ? "active" : ""}`}
           onClick={() => setView("dashboard")}
         >
@@ -598,6 +1126,13 @@ function App() {
           <IconSearch size={17} />
           Customer search
         </button>
+        <button
+          className={`nav-item ${view === "admin" ? "active" : ""}`}
+          onClick={() => setView("admin")}
+        >
+          <IconTable size={17} />
+          Program admin
+        </button>
         <div className="sidebar-foot">
           <div className="row">
             <IconCircleCheckFilled size={13} />
@@ -611,10 +1146,37 @@ function App() {
       </aside>
 
       <main className="main">
+        {view === "onboarding" && (
+          <OnboardingView
+            currentHistory={currentOnboardingHistory}
+            counts={counts}
+            customers={state.customers}
+            customerQuery={onboardingCustomerQuery}
+            customerResults={onboardingCustomerResults}
+            currentCustomer={selectedOnboardingCustomer}
+            needsFollowUp={onboardingNeedsFollowUp}
+            onAddCustomService={addCustomServiceEntry}
+            onCriteriaChange={updateCriteriaSelection}
+            onCustomerQueryChange={updateOnboardingCustomerQuery}
+            recentCustomers={recentOnboardedCustomers}
+            saving={savingOnboarding}
+            onCustomServiceChange={updateCustomServiceEntry}
+            onRemoveCustomService={removeCustomServiceEntry}
+            referralProgram={referralProgram}
+            form={onboardingForm}
+            onSelectCustomer={selectOnboardingCustomer}
+            zelleReadyCount={zelleReadyCount}
+            onFormChange={updateOnboardingForm}
+            onOpenConsole={() => setView("console")}
+            onSubmit={submitOnboarding}
+            onToggleCriteria={toggleCriteriaSelection}
+          />
+        )}
         {view === "dashboard" && (
           <DashboardView
             dashboard={state.dashboard}
             needsAttention={needsAttention}
+            onOpenOnboarding={() => setView("onboarding")}
             onOpenConsole={() => setView("console")}
           />
         )}
@@ -631,8 +1193,9 @@ function App() {
             onConfirmPayment={confirmPayment}
             onConfirmAll={confirmAllPayments}
             onSyncInbox={syncInbox}
-            onOpenMismatch={() => setModal({ type: "mismatch", payload: null })}
-            onOpenAmbiguous={() => setModal({ type: "ambiguous", payload: null })}
+            onOpenPayment={(payment) => setModal({ type: "payment-review", payload: payment })}
+            onOpenMismatch={(exception) => setModal({ type: "mismatch", payload: exception })}
+            onOpenAmbiguous={(exception) => setModal({ type: "ambiguous", payload: exception })}
             syncingInbox={syncingInbox}
           />
         )}
@@ -643,6 +1206,22 @@ function App() {
             results={searchResults}
             onQueryChange={setSearchQuery}
             onOpenCustomer={(name) => pushToast(`Customer detail for ${name} coming next`)}
+          />
+        )}
+        {view === "admin" && (
+          <AdminView
+            referralProgram={referralProgram}
+            referralProgramForm={referralProgramForm}
+            referrals={state.admin?.referrals ?? []}
+            rewards={state.admin?.rewards ?? []}
+            saving={savingReferralProgram}
+            onFormChange={(field, value) =>
+              setReferralProgramForm((current) => ({
+                ...current,
+                [field]: value,
+              }))
+            }
+            onSave={saveReferralProgram}
           />
         )}
       </main>
@@ -660,6 +1239,7 @@ function App() {
           onSelectCustomer={selectCustomer}
           selectedCustomer={selectedCustomer}
           invoiceCode={nextInvoicePreview}
+          onOpenOnboarding={() => openOnboarding(createOnboardingPrefillFromInvoice(invoiceForm))}
           serviceOptions={serviceOptions}
           zelleAmount={zellePreview}
         />
@@ -669,22 +1249,38 @@ function App() {
         <SendPreviewModal invoice={modal.payload} onClose={closeModal} onSend={sendInvoice} />
       </ModalShell>
 
-      <ModalShell show={modal.type === "mismatch"} onClose={closeModal}>
+      <ModalShell show={modal.type === "payment-review"} onClose={closeModal} size="wide">
+        <PaymentReviewModal payment={modal.payload} onApply={confirmPayment} onClose={closeModal} />
+      </ModalShell>
+
+      <ModalShell show={modal.type === "mismatch"} onClose={closeModal} size="wide">
         <MismatchModal
-          exception={state.exceptions.find((item) => item.id === "exc-rahul")}
-          onAccept={() => resolveMismatch("accept_full", "Accepted as full payment")}
-          onCredit={() => resolveMismatch("apply_credit", "$90 applied as credit")}
+          exception={modal.payload}
+          onAccept={() =>
+            resolveMismatch(
+              modal.payload?.id,
+              "accept_full",
+              "Transaction moved into the apply queue as a full-payment override.",
+            )
+          }
+          onCredit={() =>
+            resolveMismatch(
+              modal.payload?.id,
+              "apply_credit",
+              "Overpayment marked for future credit review.",
+            )
+          }
           onClose={closeModal}
         />
       </ModalShell>
 
-      <ModalShell show={modal.type === "ambiguous"} onClose={closeModal}>
+      <ModalShell show={modal.type === "ambiguous"} onClose={closeModal} size="wide">
         <AmbiguousModal
-          exception={state.exceptions.find((item) => item.id === "exc-sharma")}
+          exception={modal.payload}
           saveAlias={saveAlias}
           onChangeSaveAlias={setSaveAlias}
           onClose={closeModal}
-          onResolve={resolveAmbiguous}
+          onResolve={(candidate) => resolveAmbiguous(modal.payload?.id, candidate)}
         />
       </ModalShell>
 
@@ -803,7 +1399,593 @@ function PortalLoginView({
   );
 }
 
-function DashboardView({ dashboard, needsAttention, onOpenConsole }) {
+function WorkflowStrip({ activeStep }) {
+  const steps = [
+    { key: "onboarding", label: "1. Onboard client" },
+    { key: "invoice", label: "2. Create invoice" },
+    { key: "payment", label: "3. Record payment" },
+    { key: "receipt", label: "4. Send receipt" },
+  ];
+
+  return (
+    <div className="workflow-strip">
+      {steps.map((step) => (
+        <div
+          className={`workflow-step ${activeStep === step.key ? "active" : ""}`}
+          key={step.key}
+        >
+          {step.label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OnboardingView({
+  customers,
+  currentCustomer,
+  currentHistory,
+  counts,
+  customerQuery,
+  customerResults,
+  form,
+  needsFollowUp,
+  onAddCustomService,
+  onCriteriaChange,
+  onCustomerQueryChange,
+  onCustomServiceChange,
+  onFormChange,
+  onOpenConsole,
+  onRemoveCustomService,
+  onSelectCustomer,
+  onSubmit,
+  onToggleCriteria,
+  referralProgram,
+  recentCustomers,
+  saving,
+  zelleReadyCount,
+}) {
+  const customerSearchId = useId();
+  const referralCustomerOptions = [...customers]
+    .filter((customer) => customer.id !== currentCustomer?.id)
+    .sort((left, right) => left.name.localeCompare(right.name));
+  const selectedCriteriaCodes = new Set(form.criteriaSelections.map((selection) => selection.code));
+  const selectedServiceCount = buildOnboardingServiceEntries(form).length;
+  const hasRequiredFields =
+    form.firstName.trim() &&
+    form.lastName.trim() &&
+    form.customerEmail.trim() &&
+    form.customerPhone.trim() &&
+    selectedServiceCount > 0;
+  const historyHeading = currentCustomer
+    ? `${formatCustomerReference(currentCustomer)} · ${currentCustomer.name} service history`
+    : "Service history";
+
+  return (
+    <div>
+      <div className="topbar">
+        <div>
+          <h1>Client onboarding</h1>
+          <div className="sub">
+            First step in the operating flow. Capture searchable identity details first, then record
+            every enrolled service with its own date and time.
+          </div>
+        </div>
+        <div className="topbar-right">
+          <button className="btn btn-primary btn-sm" onClick={onOpenConsole}>
+            Next: billing console <IconArrowRight size={14} />
+          </button>
+        </div>
+      </div>
+      <div className="content">
+        <WorkflowStrip activeStep="onboarding" />
+
+        <div className="metrics c3">
+          <MetricCard accent label="Clients onboarded" value={counts.onboarded} />
+          <MetricCard label="Zelle match identities captured" value={zelleReadyCount} />
+          <MetricCard label="Needs intake follow-up" value={needsFollowUp} />
+        </div>
+
+        <div className="two-col onboarding-layout">
+          <section className="section no-gap">
+            <div className="section-head">
+              <h2>Client profile and enrollment</h2>
+            </div>
+            <div className="section-desc">
+              Email, phone, first name, last name, and at least one service are required. Everything
+              else is optional support data for billing and Zelle matching.
+            </div>
+            <div className="chart-card onboarding-card">
+              <form onSubmit={onSubmit}>
+                <div className="field">
+                  <label htmlFor={customerSearchId}>Existing client search</label>
+                  <div className="search-wrap modal-search">
+                    <IconSearch size={18} />
+                    <input
+                      id={customerSearchId}
+                      className="search-input"
+                      value={customerQuery}
+                      onChange={(event) => onCustomerQueryChange(event.target.value)}
+                      placeholder="Search by phone, email, first name, or last name"
+                    />
+                  </div>
+                  {!customerQuery.trim() && !currentCustomer ? (
+                    <div className="autofill-note">
+                      Leave this blank for a brand-new client, or search to add later enrollments for an
+                      existing member.
+                    </div>
+                  ) : null}
+                  {currentCustomer ? (
+                    <div className="picker-selected">
+                      <div>
+                        <div className="cust">{currentCustomer.name}</div>
+                        <div className="sub">
+                          Customer ID {formatCustomerReference(currentCustomer)} ·{" "}
+                          Updating an existing profile. Only select services enrolled in this step;
+                          earlier services stay in the history panel.
+                        </div>
+                      </div>
+                      <button className="btn btn-sm" type="button" onClick={() => onSelectCustomer("")}>
+                        Start new client
+                      </button>
+                    </div>
+                  ) : null}
+                  {customerQuery.trim() && !currentCustomer ? (
+                    <div className="picker-results">
+                      {customerResults.length ? (
+                        customerResults.map((customer) => (
+                          <button
+                            className="picker-item"
+                            key={customer.id}
+                            type="button"
+                            onClick={() => onSelectCustomer(customer.id)}
+                          >
+                            <div>
+                              <div className="cust">{customer.name}</div>
+                              <div className="sub">
+                                Customer ID {formatCustomerReference(customer)} · {describeCustomerMatch(customer)} ·{" "}
+                                {summarizeContacts(customer)}
+                              </div>
+                            </div>
+                            <div className="picker-service-count">
+                              {customer.services.length} service
+                              {customer.services.length === 1 ? "" : "s"}
+                            </div>
+                          </button>
+                        ))
+                      ) : (
+                        <div className="picker-empty">No existing customer matches that search.</div>
+                      )}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="field-row">
+                  <div className="field">
+                    <label>First name</label>
+                    <input
+                      value={form.firstName}
+                      onChange={(event) => onFormChange("firstName", event.target.value)}
+                      placeholder="Client first name"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Last name</label>
+                    <input
+                      value={form.lastName}
+                      onChange={(event) => onFormChange("lastName", event.target.value)}
+                      placeholder="Client last name"
+                    />
+                  </div>
+                </div>
+
+                <div className="field-row">
+                  <div className="field">
+                    <label>Primary email</label>
+                    <input
+                      type="email"
+                      value={form.customerEmail}
+                      onChange={(event) => onFormChange("customerEmail", event.target.value)}
+                      placeholder="name@email.com"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Mobile phone</label>
+                    <input
+                      value={form.customerPhone}
+                      onChange={(event) => onFormChange("customerPhone", event.target.value)}
+                      placeholder="(555) 555-5555"
+                    />
+                  </div>
+                </div>
+
+                <div className="onboarding-block">
+                  <div className="onboarding-block-head">
+                    <div>
+                      <h3>Services enrolled in this step</h3>
+                      <div className="sub">
+                        Select every EB1A criterion or custom service enrolled right now. Each one gets
+                        its own timestamped history entry.
+                      </div>
+                    </div>
+                    <span className="chip onboarding-chip">{selectedServiceCount} selected</span>
+                  </div>
+
+                  <div className="service-picker-list">
+                    {EB1A_CRITERIA_OPTIONS.map((option) => {
+                      const existingEnrollment = findExistingCriterionEnrollment(currentHistory, option);
+                      const selected = selectedCriteriaCodes.has(option.code);
+                      const selection = form.criteriaSelections.find(
+                        (entry) => entry.code === option.code,
+                      );
+
+                      return (
+                        <div
+                          className={`service-picker-item ${selected ? "selected" : ""} ${existingEnrollment ? "locked" : ""}`}
+                          key={option.code}
+                        >
+                          <label className="service-picker-check">
+                            <input
+                              type="checkbox"
+                              checked={existingEnrollment ? true : selected}
+                              disabled={Boolean(existingEnrollment)}
+                              onChange={() => onToggleCriteria(option.code)}
+                            />
+                            <div>
+                              <div className="cust">{option.label}</div>
+                              <div className="sub">
+                                {existingEnrollment
+                                  ? `Already enrolled on ${formatEnrollmentTimestamp(existingEnrollment.enrolledAt)}`
+                                  : "Add this to the member's enrolled services"}
+                              </div>
+                            </div>
+                          </label>
+                          {existingEnrollment ? (
+                            <span className="history-pill">Recorded</span>
+                          ) : selected ? (
+                            <input
+                              className="service-date-input"
+                              type="datetime-local"
+                              value={selection?.enrolledAt ?? createDateTimeLocalValue()}
+                              onChange={(event) =>
+                                onCriteriaChange(option.code, "enrolledAt", event.target.value)
+                              }
+                            />
+                          ) : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="custom-service-head">
+                    <div>
+                      <div className="cust">Custom services</div>
+                      <div className="sub">
+                        Use this when the enrolled service is not one of the default EB1A criteria.
+                      </div>
+                    </div>
+                    <button className="btn btn-sm" type="button" onClick={onAddCustomService}>
+                      <IconPlus size={14} />
+                      Add custom
+                    </button>
+                  </div>
+
+                  {form.customServices.length ? (
+                    <div className="custom-service-list">
+                      {form.customServices.map((service) => (
+                        <div className="custom-service-row" key={service.id}>
+                          <div className="field">
+                            <label>Custom service name</label>
+                            <input
+                              value={service.name}
+                              onChange={(event) =>
+                                onCustomServiceChange(service.id, "name", event.target.value)
+                              }
+                              placeholder="Example: Media package or RFE support"
+                            />
+                          </div>
+                          <div className="field">
+                            <label>Enrolled date and time</label>
+                            <input
+                              type="datetime-local"
+                              value={service.enrolledAt}
+                              onChange={(event) =>
+                                onCustomServiceChange(service.id, "enrolledAt", event.target.value)
+                              }
+                            />
+                          </div>
+                          <div className="custom-service-remove">
+                            <button
+                              className="btn btn-sm btn-ghost"
+                              type="button"
+                              onClick={() => onRemoveCustomService(service.id)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="picker-empty onboarding-inline-empty">
+                      No custom services selected yet.
+                    </div>
+                  )}
+                </div>
+
+                <div className="onboarding-block">
+                  <div className="onboarding-block-head">
+                    <div>
+                      <h3>Home address</h3>
+                      <div className="sub">Optional, but useful for complete client records.</div>
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label>Address line 1</label>
+                    <input
+                      value={form.homeAddressLine1}
+                      onChange={(event) => onFormChange("homeAddressLine1", event.target.value)}
+                      placeholder="Street address"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Address line 2</label>
+                    <input
+                      value={form.homeAddressLine2}
+                      onChange={(event) => onFormChange("homeAddressLine2", event.target.value)}
+                      placeholder="Apartment, suite, unit, building"
+                    />
+                  </div>
+                  <div className="field-row">
+                    <div className="field">
+                      <label>City</label>
+                      <input
+                        value={form.homeCity}
+                        onChange={(event) => onFormChange("homeCity", event.target.value)}
+                        placeholder="City"
+                      />
+                    </div>
+                    <div className="field">
+                      <label>State / province</label>
+                      <input
+                        value={form.homeState}
+                        onChange={(event) => onFormChange("homeState", event.target.value)}
+                        placeholder="State"
+                      />
+                    </div>
+                  </div>
+                  <div className="field-row">
+                    <div className="field">
+                      <label>Postal code</label>
+                      <input
+                        value={form.homePostalCode}
+                        onChange={(event) => onFormChange("homePostalCode", event.target.value)}
+                        placeholder="ZIP or postal code"
+                      />
+                    </div>
+                    <div className="field">
+                      <label>Country</label>
+                      <input
+                        value={form.homeCountry}
+                        onChange={(event) => onFormChange("homeCountry", event.target.value)}
+                        placeholder="Country"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="field-row">
+                  <div className="field">
+                    <label>Preferred payment method</label>
+                    <select
+                      value={form.preferredPaymentMethod}
+                      onChange={(event) => onFormChange("preferredPaymentMethod", event.target.value)}
+                    >
+                      {PAYMENT_METHOD_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label>Billing cadence</label>
+                    <select
+                      value={form.billingCadence}
+                      onChange={(event) => onFormChange("billingCadence", event.target.value)}
+                    >
+                      {BILLING_CADENCE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="note info onboarding-note">
+                  <IconMail size={16} />
+                  <div>
+                    Optional Zelle identity details help the Gmail sync recognize the sender more
+                    accurately later.
+                  </div>
+                </div>
+
+                <div className="field-row">
+                  <div className="field">
+                    <label>Zelle sender name</label>
+                    <input
+                      value={form.zelleSenderName}
+                      onChange={(event) => onFormChange("zelleSenderName", event.target.value)}
+                      placeholder="How their payment name appears"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Zelle sender email</label>
+                    <input
+                      type="email"
+                      value={form.zelleSenderEmail}
+                      onChange={(event) => onFormChange("zelleSenderEmail", event.target.value)}
+                      placeholder="Optional payment email"
+                    />
+                  </div>
+                </div>
+
+                <div className="field-row">
+                  <div className="field">
+                    <label>Zelle phone last 4</label>
+                    <input
+                      value={form.zelleSenderPhoneLast4}
+                      maxLength={4}
+                      onChange={(event) =>
+                        onFormChange(
+                          "zelleSenderPhoneLast4",
+                          event.target.value.replace(/\D/g, "").slice(0, 4),
+                        )
+                      }
+                      placeholder="4471"
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Referred by existing client</label>
+                    <select
+                      value={form.referringCustomerId}
+                      onChange={(event) => onFormChange("referringCustomerId", event.target.value)}
+                      disabled={!referralProgram.enabled}
+                    >
+                      <option value="">No linked referrer</option>
+                      {referralCustomerOptions.map((customer) => (
+                        <option key={customer.id} value={customer.id}>
+                          {formatCustomerReference(customer)} · {customer.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="autofill-note">
+                      {referralProgram.enabled
+                        ? `Active rule: ${formatCurrency(referralProgram.bonusAmount)} after ${formatCurrency(
+                            referralProgram.qualifyingPaidAmount,
+                          )} paid or ${referralProgram.qualificationMonths} months.`
+                        : "Referral program is disabled for new enrollments right now."}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="field">
+                  <label>Referral source</label>
+                  <input
+                    value={form.referralSource}
+                    onChange={(event) => onFormChange("referralSource", event.target.value)}
+                    placeholder="Referral, direct, website, partner…"
+                  />
+                </div>
+
+                <div className="field">
+                  <label>Billing notes</label>
+                  <textarea
+                    value={form.billingNotes}
+                    onChange={(event) => onFormChange("billingNotes", event.target.value)}
+                    placeholder="Anything finance ops should know before the first invoice goes out"
+                    rows={4}
+                  />
+                </div>
+
+                <div className="onboarding-actions">
+                  <button
+                    className="btn btn-primary"
+                    type="submit"
+                    disabled={saving || !hasRequiredFields}
+                  >
+                    {saving
+                      ? "Saving…"
+                      : currentCustomer
+                        ? "Save profile + enroll services"
+                        : "Onboard client"}
+                  </button>
+                  <div className="autofill-note">
+                    Required first step for clean invoicing, payment matching, and receipts.
+                  </div>
+                </div>
+              </form>
+            </div>
+          </section>
+
+          <section className="section no-gap">
+            <div className="section-head">
+              <h2>{historyHeading}</h2>
+            </div>
+            <div className="section-desc">
+              Every service enrollment is preserved with its own recorded timestamp so later add-ons
+              stay traceable.
+            </div>
+            <div className="tcard">
+              {currentHistory.length ? (
+                currentHistory.map((service) => (
+                  <div className="history-row" key={service.id}>
+                    <div className="result-copy">
+                      <div className="cust">{service.name}</div>
+                      <div className="sub">
+                        {service.isCustom ? "Custom service" : service.code ? "EB1A criterion" : "Service"}
+                      </div>
+                    </div>
+                    <div className="result-meta">
+                      <div className="mono">{formatEnrollmentTimestamp(service.enrolledAt)}</div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="empty">
+                  <IconCalendar size={14} />
+                  Select an existing client to review their service history, or create a new record now.
+                </div>
+              )}
+            </div>
+
+            <div className="section-gap">
+              <div className="section-head">
+                <h2>Recent clients</h2>
+              </div>
+              <div className="section-desc">
+                The newest intake records feed customer search, invoice creation, and payment matching.
+              </div>
+              <div className="tcard">
+                {recentCustomers.map((customer) => (
+                  <div className="res-row onboarding-result" key={customer.id}>
+                    <div className="avatar">{customer.initials}</div>
+                    <div className="result-copy">
+                      <div className="cust">{customer.name}</div>
+                      <div className="sub">
+                        Customer ID {formatCustomerReference(customer)} ·{" "}
+                        {formatOnboardingStatus(customer.profile.onboardingStatus)} ·{" "}
+                        {formatPaymentMethod(customer.profile.preferredPaymentMethod)} ·{" "}
+                        {formatBillingCadence(customer.profile.billingCadence)}
+                      </div>
+                    </div>
+                    <div className="result-meta">
+                      <div className="sub">{customer.services[0] ?? "Service not set"}</div>
+                      <div className="mono">
+                        {customer.profile.onboardedAt
+                          ? new Date(customer.profile.onboardedAt).toLocaleDateString()
+                          : "Pending"}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                {!recentCustomers.length && (
+                  <div className="empty">
+                    <IconUsers size={14} />
+                    No onboarded clients yet
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DashboardView({ dashboard, needsAttention, onOpenConsole, onOpenOnboarding }) {
   return (
     <div>
       <div className="topbar">
@@ -822,6 +2004,8 @@ function DashboardView({ dashboard, needsAttention, onOpenConsole }) {
         </div>
       </div>
       <div className="content">
+        <WorkflowStrip activeStep="invoice" />
+
         <div className="metrics c4">
           <MetricCard
             accent
@@ -913,9 +2097,14 @@ function DashboardView({ dashboard, needsAttention, onOpenConsole }) {
         <section className="section section-gap">
           <div className="section-head">
             <h2>Needs attention</h2>
-            <button className="btn btn-sm btn-ghost" onClick={onOpenConsole}>
-              Open console <IconArrowRight size={14} />
-            </button>
+            <div className="topbar-right">
+              <button className="btn btn-sm" onClick={onOpenOnboarding}>
+                Onboard client
+              </button>
+              <button className="btn btn-sm btn-ghost" onClick={onOpenConsole}>
+                Open console <IconArrowRight size={14} />
+              </button>
+            </div>
           </div>
           <div className="section-desc">
             Items that need a decision before they affect cash flow
@@ -976,6 +2165,7 @@ function ConsoleView({
   integrationStatus,
   pendingPayments,
   exceptions,
+  onOpenPayment,
   onOpenNewInvoice,
   onSendAll,
   onPreviewInvoice,
@@ -1053,7 +2243,9 @@ function ConsoleView({
               <div className="trow due-grid" key={invoice.id}>
                 <div>
                   <div className="cust">{invoice.customerName}</div>
-                  <div className="sub">{invoice.email}</div>
+                  <div className="sub">
+                    Customer ID {invoice.customerCode ?? invoice.customerId} · {invoice.email}
+                  </div>
                 </div>
                 <div>
                   {invoice.service} {invoice.milestone}
@@ -1084,40 +2276,51 @@ function ConsoleView({
               onClick={onConfirmAll}
               disabled={!pendingPayments.length}
             >
-              Confirm all high-confidence
+              Apply all high-confidence
             </button>
           </div>
           <div className="section-desc">
-            Matched against customer records. Confirming also sends the receipt.
+            Matched against customer records and saved as durable transaction records. Applying also
+            sends the receipt to the customer's primary email.
             {gmailSyncAt ? ` Last inbox sync: ${new Date(gmailSyncAt).toLocaleString()}.` : ""}
           </div>
           <div className="tcard">
             <div className="trow head confirm-grid">
-              <div>Customer</div>
-              <div>Signals matched</div>
+              <div>Customer / invoice</div>
+              <div>Saved transaction</div>
               <div>Score</div>
               <div>Paid</div>
               <div />
             </div>
             {pendingPayments.map((payment) => (
               <div className="trow confirm-grid" key={payment.id}>
-                <div className="cust">{payment.customerName}</div>
                 <div className="signals">
-                  <span className="ok">
-                    <IconCheck size={13} />
-                    {payment.matchedSignals.join(" · ")}
-                  </span>
+                  <div className="cust">{payment.customerName}</div>
+                  <div className="sub">
+                    Customer ID {payment.customerCode ?? payment.customerId} ·{" "}
+                    {payment.matchedInvoiceCode ?? "Invoice pending"}
+                  </div>
+                </div>
+                <div>
+                  <div className="sub mono">{payment.transactionReference ?? "No transaction ref"}</div>
+                  <div className="sub">{payment.memo ?? payment.matchSummary ?? "Saved from synced email"}</div>
+                  <div className="signals">
+                    <span className="ok">
+                      <IconCheck size={13} />
+                      {payment.matchedSignals.join(" · ")}
+                    </span>
+                  </div>
                 </div>
                 <div>
                   <span className="score hi">{payment.score}</span>
                 </div>
-                <div className="mono">{formatCurrency(payment.amountReceived)}</div>
                 <div>
-                  <button
-                    className="btn btn-sm btn-primary"
-                    onClick={() => onConfirmPayment(payment.id)}
-                  >
-                    Confirm
+                  <div className="mono">{formatCurrency(payment.amountReceived)}</div>
+                  <div className="sub">{formatTransactionDate(payment.transactionDate)}</div>
+                </div>
+                <div>
+                  <button className="btn btn-sm btn-primary" onClick={() => onOpenPayment(payment)}>
+                    Review &amp; apply
                   </button>
                 </div>
               </div>
@@ -1140,7 +2343,7 @@ function ConsoleView({
           </div>
           <div className="tcard">
             <div className="trow head exception-grid">
-              <div>Sender / amount</div>
+              <div>Sender / transaction</div>
               <div>Reason</div>
               <div>Date</div>
               <div />
@@ -1149,7 +2352,14 @@ function ConsoleView({
               <div className="trow exception-grid attn" key={exception.id}>
                 <div>
                   <div className="cust">{exception.senderName}</div>
-                  <div className="sub mono">{formatCurrency(exception.amount)}</div>
+                  <div className="sub mono">
+                    {formatCurrency(exception.amount)} · {exception.transactionReference ?? "No ref"}
+                  </div>
+                  <div className="sub">
+                    {exception.customerCode
+                      ? `Tentative ${exception.customerCode}`
+                      : exception.senderEmail || "Customer still unresolved"}
+                  </div>
                 </div>
                 <div>
                   {exception.kind === "mismatch" ? (
@@ -1160,17 +2370,28 @@ function ConsoleView({
                   ) : (
                     <span className="pill warn">
                       <IconUsers size={13} />
-                      2 customers match name
+                      {exception.kind === "ambiguous"
+                        ? "2 customers match name"
+                        : "Needs manual match"}
                     </span>
                   )}
+                  <div className="sub exception-summary">{exception.summary}</div>
                 </div>
-                <div className="sub">{exception.dateLabel}</div>
+                <div className="sub">
+                  {exception.transactionDate
+                    ? formatTransactionDate(exception.transactionDate)
+                    : exception.dateLabel}
+                </div>
                 <div>
                   <button
                     className="btn btn-sm"
-                    onClick={exception.kind === "mismatch" ? onOpenMismatch : onOpenAmbiguous}
+                    onClick={() =>
+                      exception.kind === "mismatch"
+                        ? onOpenMismatch(exception)
+                        : onOpenAmbiguous(exception)
+                    }
                   >
-                    {exception.kind === "mismatch" ? "Review" : "Resolve"}
+                    Review
                   </button>
                 </div>
               </div>
@@ -1188,6 +2409,195 @@ function ConsoleView({
   );
 }
 
+function AdminView({
+  referralProgram,
+  referralProgramForm,
+  referrals,
+  rewards,
+  saving,
+  onFormChange,
+  onSave,
+}) {
+  const availableRewards = rewards.filter((reward) => reward.status === "available");
+  const awardedRewards = rewards.filter((reward) => reward.status === "applied");
+
+  return (
+    <div>
+      <div className="topbar">
+        <div>
+          <h1>Program admin</h1>
+          <div className="sub">
+            Configure the referral rule once and keep each customer referral on its own historical
+            snapshot for future product-suite growth.
+          </div>
+        </div>
+      </div>
+      <div className="content">
+        <div className="metrics c3">
+          <MetricCard accent label="Program status" value={referralProgram.enabled ? "Active" : "Disabled"} />
+          <MetricCard label="Tracked referrals" value={referrals.length} />
+          <MetricCard label="Rewards available" value={availableRewards.length} />
+        </div>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Referral rule</h2>
+            <button className="btn btn-primary btn-sm" onClick={onSave} disabled={saving}>
+              {saving ? "Saving…" : "Save settings"}
+            </button>
+          </div>
+          <div className="section-desc">
+            Changes affect new referrals going forward. Existing referral records keep their own
+            captured rule snapshot.
+          </div>
+          <div className="chart-card admin-form-card">
+            <label className="check-row admin-check-row">
+              <input
+                type="checkbox"
+                checked={referralProgramForm.enabled}
+                onChange={(event) => onFormChange("enabled", event.target.checked)}
+              />
+              Enable referral program for new client enrollments
+            </label>
+            <div className="field-row">
+              <div className="field">
+                <label>Bonus amount ($)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="25"
+                  value={referralProgramForm.bonusAmount}
+                  onChange={(event) => onFormChange("bonusAmount", event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Qualifying paid amount ($)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  value={referralProgramForm.qualifyingPaidAmount}
+                  onChange={(event) => onFormChange("qualifyingPaidAmount", event.target.value)}
+                />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Qualification months</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={referralProgramForm.qualificationMonths}
+                  onChange={(event) => onFormChange("qualificationMonths", event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Rule summary</label>
+                <div className="admin-rule-preview">
+                  {referralProgramForm.enabled
+                    ? `${formatCurrency(Number(referralProgramForm.bonusAmount || 0))} bonus after ${formatCurrency(
+                        Number(referralProgramForm.qualifyingPaidAmount || 0),
+                      )} paid or ${referralProgramForm.qualificationMonths || 0} months.`
+                    : "Disabled for new referrals."}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Referral relationships</h2>
+          </div>
+          <div className="section-desc">
+            Each relationship snapshots the rule active at the time the referral was recorded.
+          </div>
+          <div className="tcard">
+            <div className="trow head admin-grid">
+              <div>Referrer</div>
+              <div>Referred client</div>
+              <div>Rule snapshot</div>
+              <div>Status</div>
+            </div>
+            {referrals.map((referral) => (
+              <div className="trow admin-grid" key={referral.id}>
+                <div>
+                  <div className="cust">{referral.referrerCustomerName}</div>
+                  <div className="sub">{referral.referrerCustomerCode}</div>
+                </div>
+                <div>
+                  <div className="cust">{referral.referredCustomerName}</div>
+                  <div className="sub">{referral.referredCustomerCode}</div>
+                </div>
+                <div className="sub">
+                  {formatCurrency(referral.bonusAmount)} bonus · {formatCurrency(referral.qualifyingPaidAmount)} paid
+                  or {referral.qualifyingMonths} months
+                </div>
+                <div>
+                  <span className={`pill ${referral.status === "awarded" ? "" : "warn"}`}>
+                    {referral.status}
+                  </span>
+                </div>
+              </div>
+            ))}
+            {!referrals.length && <div className="empty">No referral relationships recorded yet.</div>}
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Reward ledger</h2>
+          </div>
+          <div className="section-desc">
+            Available rewards can be applied later as credits or tracked across additional products.
+          </div>
+          <div className="tcard">
+            <div className="trow head reward-grid">
+              <div>Customer</div>
+              <div>Reward</div>
+              <div>Status</div>
+              <div>Earned</div>
+            </div>
+            {rewards.map((reward) => (
+              <div className="trow reward-grid" key={reward.id}>
+                <div>
+                  <div className="cust">{reward.customerName}</div>
+                  <div className="sub">{reward.customerCode}</div>
+                </div>
+                <div>
+                  <div className="mono">{formatCurrency(reward.amount)}</div>
+                  <div className="sub">{reward.description ?? reward.rewardType}</div>
+                </div>
+                <div>
+                  <span className={`pill ${reward.status === "available" ? "warn" : ""}`}>
+                    {reward.status}
+                  </span>
+                </div>
+                <div className="sub">
+                  {formatDateTimeValue(reward.earnedAt)}
+                  {reward.appliedAt ? ` · applied ${formatDateTimeValue(reward.appliedAt)}` : ""}
+                </div>
+              </div>
+            ))}
+            {!rewards.length && (
+              <div className="empty">
+                No rewards earned yet. Bonuses appear here once the configured amount or timing rule is met.
+              </div>
+            )}
+          </div>
+
+          {awardedRewards.length ? (
+            <div className="section-desc admin-reward-footnote">
+              {awardedRewards.length} reward{awardedRewards.length === 1 ? "" : "s"} already applied.
+            </div>
+          ) : null}
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function SearchView({ customers, query, results, onQueryChange, onOpenCustomer }) {
   const showingAll = !query.trim();
   const hint = showingAll
@@ -1199,7 +2609,7 @@ function SearchView({ customers, query, results, onQueryChange, onOpenCustomer }
       <div className="topbar">
         <div>
           <h1>Customer search</h1>
-          <div className="sub">Search by name, any email, any phone, alias, or invoice code</div>
+          <div className="sub">Search by customer ID, name, any email, any phone, alias, or invoice code</div>
         </div>
       </div>
       <div className="content search-content">
@@ -1226,6 +2636,12 @@ function SearchView({ customers, query, results, onQueryChange, onOpenCustomer }
                     className="sub"
                     dangerouslySetInnerHTML={{ __html: matchLine }}
                   />
+                  <div className="sub result-profile">
+                    Customer ID {formatCustomerReference(customer)} ·{" "}
+                    {formatOnboardingStatus(customer.profile?.onboardingStatus)} ·{" "}
+                    {formatPaymentMethod(customer.profile?.preferredPaymentMethod)} ·{" "}
+                    {formatBillingCadence(customer.profile?.billingCadence)}
+                  </div>
                 </div>
                 <div className="result-meta">
                   <div className="sub">{summarizeContacts(customer)}</div>
@@ -1257,14 +2673,14 @@ function MetricCard({ accent = false, label, value, delta, deltaIcon, deltaTone 
   );
 }
 
-function ModalShell({ children, onClose, show }) {
+function ModalShell({ children, onClose, show, size = "default" }) {
   if (!show) {
     return null;
   }
 
   return (
     <div className="modal-back show" onClick={onClose}>
-      <div className="modal" onClick={(event) => event.stopPropagation()}>
+      <div className={`modal ${size === "wide" ? "wide" : ""}`} onClick={(event) => event.stopPropagation()}>
         {children}
       </div>
     </div>
@@ -1280,6 +2696,7 @@ function NewInvoiceModal({
   onCreateInvoice,
   onCustomerQueryChange,
   onFormChange,
+  onOpenOnboarding,
   onSelectCustomer,
   selectedCustomer,
   invoiceCode,
@@ -1325,7 +2742,8 @@ function NewInvoiceModal({
                 <div>
                   <div className="cust">{selectedCustomer.name}</div>
                   <div className="sub">
-                    Autofilled from record · {summarizeContacts(selectedCustomer)} ·{" "}
+                    Customer ID {formatCustomerReference(selectedCustomer)} · Autofilled from record ·{" "}
+                    {summarizeContacts(selectedCustomer)} ·{" "}
                     {selectedCustomer.services.length} predefined service
                     {selectedCustomer.services.length === 1 ? "" : "s"}
                   </div>
@@ -1348,7 +2766,8 @@ function NewInvoiceModal({
                       <div>
                         <div className="cust">{customer.name}</div>
                         <div className="sub">
-                          {describeCustomerMatch(customer)} · {summarizeContacts(customer)}
+                          Customer ID {formatCustomerReference(customer)} · {describeCustomerMatch(customer)} ·{" "}
+                          {summarizeContacts(customer)}
                         </div>
                       </div>
                       <div className="picker-service-count">
@@ -1367,6 +2786,10 @@ function NewInvoiceModal({
             <button className="btn btn-sm" type="button" onClick={() => onSelectCustomer("new")}>
               New customer instead
             </button>
+            <div className="autofill-note">
+              Best practice: use Client onboarding first so payment preferences and Zelle match details
+              are captured before the first invoice.
+            </div>
           </div>
         ) : (
           <div className="field">
@@ -1382,6 +2805,9 @@ function NewInvoiceModal({
                 Search existing
               </button>
             </div>
+            <button className="btn btn-sm" type="button" onClick={onOpenOnboarding}>
+              Open onboarding flow
+            </button>
           </div>
         )}
 
@@ -1547,6 +2973,7 @@ function describeCustomerMatch(customer) {
 
   const labels = {
     name: `Matched name ${customer.matchValue}`,
+    customerId: `Matched customer ID ${customer.matchValue}`,
     email: `Matched email ${customer.matchValue}`,
     phone: `Matched phone ${customer.matchValue}`,
     alias: `Matched alias ${customer.matchValue}`,
@@ -1554,6 +2981,35 @@ function describeCustomerMatch(customer) {
   };
 
   return labels[customer.matchField] ?? "Existing customer";
+}
+
+function formatOnboardingStatus(value) {
+  const labels = {
+    complete: "Intake complete",
+    needs_follow_up: "Needs follow-up",
+  };
+
+  return labels[value] ?? "Profile pending";
+}
+
+function formatPaymentMethod(value) {
+  const labels = {
+    zelle: "Zelle first",
+    card: "Card first",
+    both: "Both supported",
+  };
+
+  return labels[value] ?? "Payment method pending";
+}
+
+function formatBillingCadence(value) {
+  const labels = {
+    per_milestone: "Per milestone",
+    monthly: "Monthly cycle",
+    custom: "Custom cadence",
+  };
+
+  return labels[value] ?? "Cadence pending";
 }
 
 function SendPreviewModal({ invoice, onClose, onSend }) {
@@ -1615,6 +3071,154 @@ function SendPreviewModal({ invoice, onClose, onSend }) {
   );
 }
 
+function TransactionDetailsPanel({
+  amount,
+  customerCode,
+  customerName,
+  dateLabel,
+  matchedInvoiceCode,
+  matchedSignals,
+  memo,
+  messageDateHeader,
+  messageFromEmail,
+  messageToEmail,
+  rawText,
+  receivedAt,
+  reviewNotes,
+  score,
+  senderEmail,
+  senderName,
+  senderPhoneLast4,
+  sourceMessageId,
+  sourceProvider,
+  sourceThreadId,
+  subject,
+  transactionDate,
+  transactionReference,
+  summary,
+}) {
+  return (
+    <div className="transaction-panel">
+      <div className="detail-banner">
+        <div>
+          <div className="detail-label">Saved transaction record</div>
+          <div className="detail-title">
+            {senderName || customerName || "Unknown sender"} · {formatCurrency(amount || 0)}
+          </div>
+          <div className="sub">
+            {transactionReference ?? "No transaction reference"} · {memo ?? "No memo captured"}
+          </div>
+        </div>
+        <div className="detail-score-wrap">
+          <div className="score hi">{score ?? 0}</div>
+          <div className="sub">{matchedSignals?.length ? matchedSignals.join(" · ") : "Awaiting review"}</div>
+        </div>
+      </div>
+
+      <div className="detail-grid">
+        <div className="detail-card">
+          <div className="detail-label">Matching snapshot</div>
+          <div className="detail-kv"><span>Customer</span><strong>{customerName ?? "Not assigned"}</strong></div>
+          <div className="detail-kv"><span>Customer ID</span><strong>{customerCode ?? "Not assigned"}</strong></div>
+          <div className="detail-kv"><span>Invoice</span><strong>{matchedInvoiceCode ?? "Not assigned"}</strong></div>
+          <div className="detail-kv"><span>Summary</span><strong>{summary ?? "No match summary yet"}</strong></div>
+          {reviewNotes ? <div className="detail-note">{reviewNotes}</div> : null}
+        </div>
+
+        <div className="detail-card">
+          <div className="detail-label">Zelle email capture</div>
+          <div className="detail-kv"><span>Transaction ref</span><strong>{transactionReference ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Memo</span><strong>{memo ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Transaction date</span><strong>{transactionDate ? formatTransactionDate(transactionDate) : dateLabel ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Inbox received</span><strong>{formatDateTimeValue(receivedAt)}</strong></div>
+          <div className="detail-kv"><span>Email header date</span><strong>{messageDateHeader ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Subject</span><strong>{subject ?? "Not captured"}</strong></div>
+        </div>
+
+        <div className="detail-card">
+          <div className="detail-label">Identity fields</div>
+          <div className="detail-kv"><span>Payer name</span><strong>{senderName ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Payer email</span><strong>{senderEmail ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Payer phone</span><strong>{senderPhoneLast4 ? `••••${senderPhoneLast4}` : "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Bank sender</span><strong>{messageFromEmail ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Inbox destination</span><strong>{messageToEmail ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Provider</span><strong>{sourceProvider ?? "gmail"}</strong></div>
+        </div>
+
+        <div className="detail-card">
+          <div className="detail-label">Trace fields</div>
+          <div className="detail-kv"><span>Source message ID</span><strong>{sourceMessageId ?? "Not captured"}</strong></div>
+          <div className="detail-kv"><span>Thread ID</span><strong>{sourceThreadId ?? "Not captured"}</strong></div>
+        </div>
+      </div>
+
+      <div className="detail-card detail-card-wide">
+        <div className="detail-label">Raw extracted email text</div>
+        <pre className="detail-pre">{rawText || "No email text was extracted."}</pre>
+      </div>
+    </div>
+  );
+}
+
+function PaymentReviewModal({ onApply, onClose, payment }) {
+  if (!payment) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="modal-head">
+        <div>
+          <h3>Review transaction before apply</h3>
+          <div className="sub modal-sub">
+            One click will apply the payment, mark the invoice paid, and email the receipt to the
+            primary customer email.
+          </div>
+        </div>
+        <button className="x" onClick={onClose}>
+          <IconX size={18} />
+        </button>
+      </div>
+      <div className="modal-body">
+        <TransactionDetailsPanel
+          amount={payment.amountReceived}
+          customerCode={payment.customerCode}
+          customerName={payment.customerName}
+          dateLabel={payment.dateLabel}
+          matchedInvoiceCode={payment.matchedInvoiceCode}
+          matchedSignals={payment.matchedSignals}
+          memo={payment.memo}
+          messageDateHeader={payment.messageDateHeader}
+          messageFromEmail={payment.messageFromEmail}
+          messageToEmail={payment.messageToEmail}
+          rawText={payment.rawText}
+          receivedAt={payment.receivedAt}
+          reviewNotes={payment.reviewNotes}
+          score={payment.score}
+          senderEmail={payment.senderEmail}
+          senderName={payment.senderNameRaw}
+          senderPhoneLast4={payment.senderPhoneLast4}
+          sourceMessageId={payment.sourceMessageId}
+          sourceProvider={payment.sourceProvider}
+          sourceThreadId={payment.sourceThreadId}
+          subject={payment.subject}
+          summary={payment.matchSummary}
+          transactionDate={payment.transactionDate}
+          transactionReference={payment.transactionReference}
+        />
+      </div>
+      <div className="modal-foot">
+        <button className="btn btn-primary" onClick={() => onApply(payment.id)}>
+          Apply transaction
+        </button>
+        <button className="btn" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </>
+  );
+}
+
 function MismatchModal({ exception, onAccept, onCredit, onClose }) {
   if (!exception) {
     return null;
@@ -1633,6 +3237,33 @@ function MismatchModal({ exception, onAccept, onCredit, onClose }) {
         </button>
       </div>
       <div className="modal-body">
+        <TransactionDetailsPanel
+          amount={exception.amount}
+          customerCode={exception.customerCode}
+          customerName={exception.customerName}
+          dateLabel={exception.dateLabel}
+          matchedInvoiceCode={
+            exception.service ? `${exception.service}${exception.milestone ? ` · ${exception.milestone}` : ""}` : null
+          }
+          matchedSignals={exception.matchedSignals}
+          memo={exception.memo}
+          messageDateHeader={exception.messageDateHeader}
+          messageFromEmail={exception.messageFromEmail}
+          messageToEmail={exception.messageToEmail}
+          rawText={exception.rawText}
+          receivedAt={exception.receivedAt}
+          score={exception.score}
+          senderEmail={exception.senderEmail}
+          senderName={exception.senderName}
+          senderPhoneLast4={exception.senderPhoneLast4}
+          sourceMessageId={exception.sourceMessageId}
+          sourceProvider={exception.sourceProvider}
+          sourceThreadId={exception.sourceThreadId}
+          subject={exception.subject}
+          summary={exception.summary}
+          transactionDate={exception.transactionDate}
+          transactionReference={exception.transactionReference}
+        />
         <div className="split">
           <div>
             <div className="col-label">Payment received</div>
@@ -1663,7 +3294,10 @@ function MismatchModal({ exception, onAccept, onCredit, onClose }) {
             </div>
             <div className="kv">
               <span className="k">Difference</span>
-              <span className="mono warn-text">+{formatCurrency(difference)}</span>
+              <span className="mono warn-text">
+                {difference > 0 ? "+" : ""}
+                {formatCurrency(difference)}
+              </span>
             </div>
           </div>
         </div>
@@ -1671,13 +3305,14 @@ function MismatchModal({ exception, onAccept, onCredit, onClose }) {
           <IconAlertTriangle size={16} />
           <div>
             Name and phone matched, but the customer paid the full amount instead of the stored
-            Zelle rate. Per Phase 1 rules, this always needs a human decision.
+            Zelle rate. Choose whether to move this into the apply queue as a full-payment override
+            or leave the overage as credit.
           </div>
         </div>
       </div>
       <div className="modal-foot">
         <button className="btn btn-primary" onClick={onAccept}>
-          Accept as full payment
+          Prepare full-payment apply
         </button>
         <button className="btn" onClick={onCredit}>
           Apply {formatCurrency(difference)} as credit
@@ -1706,6 +3341,33 @@ function AmbiguousModal({ exception, saveAlias, onChangeSaveAlias, onClose, onRe
         </button>
       </div>
       <div className="modal-body">
+        <TransactionDetailsPanel
+          amount={exception.amount}
+          customerCode={exception.customerCode}
+          customerName={exception.customerName}
+          dateLabel={exception.dateLabel}
+          matchedInvoiceCode={
+            exception.service ? `${exception.service}${exception.milestone ? ` · ${exception.milestone}` : ""}` : null
+          }
+          matchedSignals={exception.matchedSignals}
+          memo={exception.memo}
+          messageDateHeader={exception.messageDateHeader}
+          messageFromEmail={exception.messageFromEmail}
+          messageToEmail={exception.messageToEmail}
+          rawText={exception.rawText}
+          receivedAt={exception.receivedAt}
+          score={exception.score}
+          senderEmail={exception.senderEmail}
+          senderName={exception.senderName}
+          senderPhoneLast4={exception.senderPhoneLast4}
+          sourceMessageId={exception.sourceMessageId}
+          sourceProvider={exception.sourceProvider}
+          sourceThreadId={exception.sourceThreadId}
+          subject={exception.subject}
+          summary={exception.summary}
+          transactionDate={exception.transactionDate}
+          transactionReference={exception.transactionReference}
+        />
         <div className="note warn">
           <IconUsers size={16} />
           <div>
@@ -1736,7 +3398,7 @@ function AmbiguousModal({ exception, saveAlias, onChangeSaveAlias, onClose, onRe
       </div>
       <div className="modal-foot">
         <button className="btn" onClick={onClose}>
-          None of these — assign manually
+          Close for later
         </button>
       </div>
     </>
@@ -1797,6 +3459,7 @@ function buildMatchLine(customer, query) {
 
   const labels = {
     name: "matched name",
+    customerId: "matched customer ID",
     email: "matched email",
     phone: "matched phone",
     alias: "matched payment alias",

@@ -2,6 +2,7 @@ import express from "express";
 import {
   applyGmailSyncResult,
   confirmPendingPaymentRecord,
+  createCustomerOnboardingRecord,
   createInvoiceRecord,
   listDueInvoiceIds,
   listPendingPaymentIds,
@@ -9,6 +10,7 @@ import {
   prepareStateStore,
   resolveExceptionRecord,
   sendQueuedInvoice,
+  updateReferralProgramSettings,
 } from "./stateStore.js";
 import {
   authenticatePortalUser,
@@ -182,6 +184,42 @@ app.post("/api/invoices", async (request, response, next) => {
         }),
     });
 
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/customers", async (request, response, next) => {
+  try {
+    const { form } = request.body ?? {};
+
+    if (!form) {
+      throw new Error("Client onboarding data is required.");
+    }
+
+    const result = await createCustomerOnboardingRecord({ form });
+
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/referral-program", async (request, response, next) => {
+  try {
+    const { config } = request.body ?? {};
+    if (!config) {
+      throw new Error("Referral program settings are required.");
+    }
+
+    const result = await updateReferralProgramSettings(config);
     response.json({
       message: result.message,
       state: formatApiState(result.state),

@@ -6,19 +6,35 @@ export function formatCurrency(value) {
   }).format(value);
 }
 
+function parseDisplayDate(value) {
+  if (!value) {
+    return new Date("");
+  }
+
+  if (value instanceof Date) {
+    return value;
+  }
+
+  const stringValue = String(value);
+  const parsed = stringValue.includes("T")
+    ? new Date(stringValue)
+    : new Date(`${stringValue}T12:00:00`);
+  return parsed;
+}
+
 export function formatLongDate(value) {
   return new Intl.DateTimeFormat("en-US", {
     month: "long",
     day: "numeric",
     year: "numeric",
-  }).format(new Date(`${value}T12:00:00`));
+  }).format(parseDisplayDate(value));
 }
 
 export function formatShortDate(value) {
   return new Intl.DateTimeFormat("en-US", {
     month: "short",
     day: "numeric",
-  }).format(new Date(`${value}T12:00:00`));
+  }).format(parseDisplayDate(value));
 }
 
 export function calculateZelleAmount(amount, discountPct) {
@@ -53,6 +69,10 @@ export function searchCustomers(customers, query) {
 
   return customers
     .map((customer) => {
+      if (customer.customerCode?.toLowerCase().includes(trimmed)) {
+        return { ...customer, matchField: "customerId", matchValue: customer.customerCode };
+      }
+
       if (customer.name.toLowerCase().includes(trimmed)) {
         return { ...customer, matchField: "name", matchValue: customer.name };
       }
@@ -109,6 +129,10 @@ export function searchCustomersByIdentity(customers, query) {
 
   return customers
     .map((customer) => {
+      if (customer.customerCode?.toLowerCase().includes(trimmed)) {
+        return { ...customer, matchField: "customerId", matchValue: customer.customerCode };
+      }
+
       if (customer.name.toLowerCase().includes(trimmed)) {
         return { ...customer, matchField: "name", matchValue: customer.name };
       }

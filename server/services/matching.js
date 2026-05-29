@@ -38,7 +38,7 @@ function buildCandidateNote(customer, invoice) {
   const phone = customer.phones[0]?.value ?? "";
   const phoneLast4 = normalizeDigits(phone).slice(-4) || "----";
   const statusLabel = invoice?.status === "paid" ? "paid" : "open invoice";
-  return `${invoice?.service ?? "Service"} ${invoice?.milestone ?? ""} · exp ${formatCurrency(invoice?.zelleAmount ?? 0)} · phone ••••${phoneLast4} · ${statusLabel}`.trim();
+  return `${customer.customerCode ?? customer.id} · ${invoice?.service ?? "Service"} ${invoice?.milestone ?? ""} · exp ${formatCurrency(invoice?.zelleAmount ?? 0)} · phone ••••${phoneLast4} · ${statusLabel}`.trim();
 }
 
 function buildMatchedSignals({ nameMatched, emailMatched, phoneMatched, amountMatched }) {
@@ -64,6 +64,13 @@ function findOpenInvoices(state, customerId) {
       invoice.customerId === customerId &&
       ["sent", "overdue"].includes(invoice.status),
   );
+}
+
+function buildMatchSummary({ customer, invoice, matchedSignals, score }) {
+  const invoiceLabel = invoice
+    ? `${invoice.invoiceCode} · ${invoice.service}${invoice.milestone ? ` ${invoice.milestone}` : ""}`
+    : "No invoice matched yet";
+  return `${customer.customerCode ?? customer.id} · ${matchedSignals.join(" + ")} · score ${score} · ${invoiceLabel}`;
 }
 
 export function matchPaymentToState(payment, state) {
@@ -128,6 +135,11 @@ export function matchPaymentToState(payment, state) {
       kind: "exception",
       exception: {
         kind: "unmatched",
+        customerId: null,
+        customerName: null,
+        customerCode: null,
+        matchedSignals: [],
+        score: 0,
         senderName: payment.senderNameRaw || "Unknown sender",
         amount: payment.amountReceived || 0,
         dateLabel: payment.dateLabel,
@@ -149,6 +161,11 @@ export function matchPaymentToState(payment, state) {
       kind: "exception",
       exception: {
         kind: "ambiguous",
+        customerId: null,
+        customerName: null,
+        customerCode: null,
+        matchedSignals: topCandidate.matchedSignals,
+        score: topCandidate.score,
         senderName: payment.senderNameRaw || "Unknown sender",
         amount: payment.amountReceived || 0,
         dateLabel: payment.dateLabel,
@@ -173,6 +190,11 @@ export function matchPaymentToState(payment, state) {
       kind: "exception",
       exception: {
         kind: "mismatch",
+        customerId: topCandidate.customer.id,
+        customerName: topCandidate.customer.name,
+        customerCode: topCandidate.customer.customerCode ?? null,
+        matchedSignals: topCandidate.matchedSignals,
+        score: topCandidate.score,
         senderName: payment.senderNameRaw || topCandidate.customer.name,
         amount: payment.amountReceived || 0,
         expectedAmount: expectedInvoice.zelleAmount,
@@ -195,15 +217,23 @@ export function matchPaymentToState(payment, state) {
         id: `pay-${payment.sourceMessageId || crypto.randomUUID()}`,
         customerId: topCandidate.customer.id,
         customerName: topCandidate.customer.name,
+        customerCode: topCandidate.customer.customerCode ?? null,
         matchedSignals: topCandidate.matchedSignals,
         score: topCandidate.score,
         amountReceived: payment.amountReceived,
         invoiceId: topCandidate.matchedInvoice.id,
+        matchedInvoiceCode: topCandidate.matchedInvoice.invoiceCode,
         sourceMessageId: payment.sourceMessageId,
         senderEmail: payment.senderEmail,
         senderPhoneLast4: payment.senderPhoneLast4,
         senderNameRaw: payment.senderNameRaw,
         receivedAt: payment.receivedAt,
+        matchSummary: buildMatchSummary({
+          customer: topCandidate.customer,
+          invoice: topCandidate.matchedInvoice,
+          matchedSignals: topCandidate.matchedSignals,
+          score: topCandidate.score,
+        }),
       },
     };
   }
@@ -212,6 +242,11 @@ export function matchPaymentToState(payment, state) {
     kind: "exception",
     exception: {
       kind: "unmatched",
+      customerId: topCandidate.customer.id,
+      customerName: topCandidate.customer.name,
+      customerCode: topCandidate.customer.customerCode ?? null,
+      matchedSignals: topCandidate.matchedSignals,
+      score: topCandidate.score,
       senderName: payment.senderNameRaw || "Unknown sender",
       amount: payment.amountReceived || 0,
       dateLabel: payment.dateLabel,

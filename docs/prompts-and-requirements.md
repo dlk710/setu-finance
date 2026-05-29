@@ -28,6 +28,15 @@ The build evolved through these concrete asks:
    - strong performance
    - cost efficiency
    - growth beyond a single portal into a broader product suite
+9. Add a standalone client onboarding step as the first part of the operating flow so key billing and payment-match information is captured before invoicing.
+10. Make onboarding service selection support:
+   - mandatory service capture
+   - EB1A criteria checkbox defaults
+   - custom services
+   - dated service-enrollment history
+11. Capture complete Zelle transaction details in one place for human review and one-click apply.
+12. Add stable customer IDs plus a configurable referral bonus mechanism with admin controls.
+13. Package the repo with updated wireframes, non-technical requirements, process flow, and AWS deployment design.
 
 ## Current interpretation of the requirements
 
@@ -36,12 +45,17 @@ The codebase now implements the following current-state requirements:
 - local full-stack operation
 - protected portal access
 - Postgres as the operational source of truth
+- standalone client onboarding as the first workflow step
+- stable customer IDs for future cross-product reference
 - manual and queue-based invoice workflows
 - searchable member selection in new invoice
 - member-specific service selection
+- dated service enrollment history with later add-ons
 - SMTP-backed invoice and receipt sending path
 - Gmail-backed inbox sync path for Zelle confirmations
+- full transaction-detail capture for Zelle-like payments
 - exception routing for mismatch and ambiguity cases
+- referral program configuration, tracking, and reward ledger
 - customer search across identity fields and invoice code
 
 ## Requirements that are still intentionally deferred
@@ -58,4 +72,7 @@ When future contributors ask “why does this system work this way?”, this fil
 
 - [README.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/README.md)
 - [docs/architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/architecture.md)
+- [docs/process-flow.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/process-flow.md)
+- [docs/non-technical-requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/non-technical-requirements.md)
+- [docs/aws-solution-architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/aws-solution-architecture.md)
 - [docs/design-system.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/design-system.md)

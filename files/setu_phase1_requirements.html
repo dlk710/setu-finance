@@ -3,29 +3,30 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Setu Finance - Current State Requirements</title>
+<title>Setu Finance - Non-Technical Requirements and Solution Overview</title>
 <style>
   :root {
-    --ink: #1a1a1f;
-    --amber: #ba7517;
-    --amber-soft: #faeeda;
+    --ink: #171922;
+    --amber: #b87418;
+    --amber-soft: #faedd9;
     --paper: #ffffff;
-    --paper-2: #f5f4f0;
-    --paper-3: #faf9f5;
-    --text-1: #1a1a1f;
-    --text-2: #5b5b75;
-    --text-3: #9295a8;
-    --border-1: #d8d6cf;
-    --border-2: #e8e6df;
-    --success: #0d6b4d;
-    --success-bg: #e1f5ee;
-    --warn-bg: #fef3c7;
-    --warn-text: #92520c;
+    --paper-2: #f5f4ef;
+    --paper-3: #fbfaf6;
+    --line: #d7d4cb;
+    --line-soft: #ebe7dd;
+    --text-1: #171922;
+    --text-2: #5a5f70;
+    --text-3: #8e93a3;
+    --good: #0f6f4d;
+    --good-bg: #e3f6ef;
+    --warn: #8b570e;
+    --warn-bg: #fef2c9;
     --sans: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     --mono: "IBM Plex Mono", Menlo, monospace;
   }
 
   * { box-sizing: border-box; }
+
   body {
     margin: 0;
     font-family: var(--sans);
@@ -35,13 +36,15 @@
   }
 
   .cover {
-    background: var(--ink);
+    background:
+      radial-gradient(circle at top right, rgba(184, 116, 24, 0.18), transparent 28%),
+      linear-gradient(180deg, #141720, #1d212d);
     color: white;
     padding: 58px 0 50px;
   }
 
   .wrap {
-    max-width: 980px;
+    max-width: 1060px;
     margin: 0 auto;
     padding: 0 24px;
   }
@@ -55,78 +58,75 @@
 
   .letters {
     font-size: 34px;
-    letter-spacing: -0.04em;
     line-height: 1;
+    letter-spacing: -0.05em;
   }
 
   .deck {
     margin-top: 5px;
-    width: 70px;
+    width: 72px;
     height: 3px;
+    border-radius: 999px;
     background: var(--amber);
-    border-radius: 3px;
   }
 
   h1 {
     margin: 0 0 10px;
-    font-size: 34px;
-    letter-spacing: -0.05em;
+    font-size: 38px;
+    letter-spacing: -0.06em;
   }
 
   .subtitle {
-    color: #d0d0da;
+    max-width: 74ch;
+    color: #d8dbe8;
     font-size: 15px;
-    max-width: 70ch;
   }
 
   .meta {
-    margin-top: 18px;
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
+    margin-top: 18px;
   }
 
   .tag {
-    border-radius: 999px;
     padding: 7px 11px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.08);
     font-size: 12px;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.12);
   }
 
-  .toc, section {
-    background: var(--paper);
-    border: 1px solid var(--border-1);
-    border-radius: 18px;
+  .toc,
+  section {
     margin-top: 20px;
-    box-shadow: 0 22px 60px -40px rgba(12, 12, 18, 0.3);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    background: var(--paper);
+    box-shadow: 0 26px 70px -50px rgba(15, 18, 27, 0.35);
   }
 
   .toc {
     padding: 22px 24px;
   }
 
-  .toc h2, .sec-title {
+  section {
+    padding: 28px 28px 20px;
+  }
+
+  .sec-title,
+  .toc h2 {
     margin: 0 0 14px;
     font-size: 12px;
+    color: var(--text-3);
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: var(--text-3);
-  }
-
-  .toc ol {
-    margin: 0;
-    padding-left: 18px;
-  }
-
-  section {
-    padding: 28px 28px 18px;
   }
 
   h3 {
     margin: 0 0 8px;
-    font-size: 24px;
-    letter-spacing: -0.04em;
+    font-size: 28px;
+    letter-spacing: -0.05em;
   }
 
   h4 {
@@ -137,7 +137,6 @@
 
   p {
     margin: 0 0 12px;
-    color: var(--text-1);
   }
 
   .lead {
@@ -156,16 +155,16 @@
     font-family: var(--mono);
     font-size: 12px;
     background: var(--paper-3);
-    border: 1px solid var(--border-2);
+    border: 1px solid var(--line-soft);
     border-radius: 6px;
     padding: 2px 6px;
     color: var(--amber);
   }
 
   .callout {
-    border-radius: 14px;
-    padding: 14px 16px;
     margin: 14px 0;
+    padding: 14px 16px;
+    border-radius: 16px;
     font-size: 14px;
   }
 
@@ -174,14 +173,14 @@
     border-left: 3px solid var(--amber);
   }
 
-  .callout.success {
-    background: var(--success-bg);
-    color: var(--success);
+  .callout.good {
+    background: var(--good-bg);
+    color: var(--good);
   }
 
   .callout.warn {
     background: var(--warn-bg);
-    color: var(--warn-text);
+    color: var(--warn);
   }
 
   table {
@@ -191,20 +190,115 @@
   }
 
   th {
-    text-align: left;
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-3);
-    background: var(--paper-3);
     padding: 10px 12px;
-    border-bottom: 1px solid var(--border-1);
+    text-align: left;
+    background: var(--paper-3);
+    color: var(--text-3);
+    border-bottom: 1px solid var(--line);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
   }
 
   td {
     padding: 10px 12px;
-    border-bottom: 1px solid var(--border-2);
+    border-bottom: 1px solid var(--line-soft);
     vertical-align: top;
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+    margin: 14px 0 18px;
+  }
+
+  .card {
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: linear-gradient(180deg, var(--paper), var(--paper-3));
+  }
+
+  .card h4 {
+    margin-top: 0;
+  }
+
+  .flow {
+    display: grid;
+    gap: 12px;
+    margin: 16px 0 18px;
+  }
+
+  .flow-row {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .flow-step {
+    position: relative;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--paper);
+    min-height: 124px;
+  }
+
+  .flow-step .num {
+    display: inline-flex;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    background: var(--ink);
+    color: white;
+    font-family: var(--mono);
+    font-size: 12px;
+    margin-bottom: 10px;
+  }
+
+  .flow-step .title {
+    font-weight: 700;
+    margin-bottom: 6px;
+  }
+
+  .flow-step .note {
+    color: var(--text-2);
+    font-size: 13px;
+  }
+
+  .arch-grid {
+    display: grid;
+    gap: 14px;
+    margin: 16px 0 18px;
+  }
+
+  .arch-layer {
+    display: grid;
+    grid-template-columns: 190px 1fr 170px;
+    gap: 14px;
+    align-items: center;
+    padding: 16px;
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    background: var(--paper);
+  }
+
+  .arch-layer .left {
+    font-weight: 700;
+  }
+
+  .arch-layer .middle {
+    color: var(--text-2);
+  }
+
+  .arch-layer .right {
+    text-align: right;
+    color: var(--amber);
+    font-family: var(--mono);
+    font-size: 12px;
   }
 
   .foot {
@@ -212,6 +306,21 @@
     color: var(--text-3);
     font-size: 12px;
     text-align: center;
+  }
+
+  @media (max-width: 900px) {
+    .cards,
+    .flow-row {
+      grid-template-columns: 1fr;
+    }
+
+    .arch-layer {
+      grid-template-columns: 1fr;
+    }
+
+    .arch-layer .right {
+      text-align: left;
+    }
   }
 </style>
 </head>
@@ -222,14 +331,14 @@
         <div class="letters">setu</div>
         <div class="deck"></div>
       </div>
-      <h1>Current State Requirements and Handoff</h1>
-      <div class="subtitle">This document replaces the earlier aspirational Phase 1 brief with the product state that is actually implemented now in the local codebase.</div>
+      <h1>Non-Technical Requirements and Solution Overview</h1>
+      <div class="subtitle">This is the business-facing handoff for the current Setu Finance portal and the recommended low-cost AWS deployment path. It is written for operators, decision-makers, and future contributors who need the product intent without reading code.</div>
       <div class="meta">
-        <span class="tag">Internal portal</span>
-        <span class="tag">Login-protected</span>
-        <span class="tag">Postgres-backed</span>
-        <span class="tag">SMTP + Gmail integration hooks</span>
-        <span class="tag">Ready for repo handoff</span>
+        <span class="tag">Internal finance portal</span>
+        <span class="tag">Onboarding-first workflow</span>
+        <span class="tag">Human-reviewed payment posting</span>
+        <span class="tag">Referral-ready</span>
+        <span class="tag">Low-cost AWS target</span>
       </div>
     </div>
   </div>
@@ -238,190 +347,236 @@
     <div class="toc">
       <h2>Contents</h2>
       <ol>
-        <li>Product state summary</li>
-        <li>Implemented capabilities</li>
-        <li>Frontend behavior</li>
-        <li>Backend architecture</li>
-        <li>Database and persistence</li>
-        <li>Performance and scale posture</li>
-        <li>Known limits and next steps</li>
+        <li>What this product is for</li>
+        <li>Who uses it and what it must achieve</li>
+        <li>Business requirements</li>
+        <li>Simple process flow</li>
+        <li>Low-cost AWS solution architecture</li>
+        <li>Governance, controls, and policy</li>
+        <li>What is intentionally left for later</li>
       </ol>
     </div>
 
     <section>
-      <div class="sec-title">1. Product State Summary</div>
-      <h3>What exists now</h3>
-      <p class="lead">The app is no longer just a wireframe or front-end mock. It is a local full-stack product with portal authentication, a React operator UI, an Express API, real Postgres persistence, SMTP-backed invoice and receipt sending hooks, and Gmail-based Zelle confirmation ingestion hooks.</p>
+      <div class="sec-title">1. What This Product Is For</div>
+      <h3>One place for onboarding, billing, payment review, and receipts</h3>
+      <p class="lead">Setu Finance is designed to replace a fragmented workflow where client details live in one place, invoices in another, payment confirmations inside email, and exception handling inside team memory. The product creates one operational path from onboarding to invoice to payment application to receipt.</p>
 
-      <div class="callout success">The portal can now function as a real internal operations surface instead of a disconnected prototype.</div>
+      <div class="callout good">The most important product choice is that money does not get auto-posted blindly. The system captures and prepares transactions, but a human still completes the final apply step.</div>
 
-      <h4>Primary operator surfaces</h4>
-      <ul>
-        <li><strong>Login screen</strong> with session-based access control.</li>
-        <li><strong>Dashboard</strong> for collected cash, outstanding balances, expected inflow, aging, and needs-attention items.</li>
-        <li><strong>Billing console</strong> for due invoices, queued payments, exceptions, inbox sync, and manual invoicing.</li>
-        <li><strong>Customer search</strong> across identity fields and invoice references.</li>
-      </ul>
+      <div class="cards">
+        <div class="card">
+          <h4>Business value</h4>
+          <p>Reduce re-keying, missed follow-ups, and payment confusion across onboarding, invoicing, and Zelle-based collections.</p>
+        </div>
+        <div class="card">
+          <h4>Operational value</h4>
+          <p>Give finance one queue for invoices, one queue for clear payments, and one queue for exceptions.</p>
+        </div>
+        <div class="card">
+          <h4>Future value</h4>
+          <p>Stable customer IDs and append-only service history make the finance model reusable across future products.</p>
+        </div>
+      </div>
     </section>
 
     <section>
-      <div class="sec-title">2. Implemented Capabilities</div>
-      <h3>Current functional scope</h3>
+      <div class="sec-title">2. Users and Outcomes</div>
+      <h3>Who the system serves</h3>
       <table>
-        <tr>
-          <th>Area</th>
-          <th>Current behavior</th>
-        </tr>
-        <tr>
-          <td>Portal access</td>
-          <td>Username/password login using secure server-issued session cookies.</td>
-        </tr>
-        <tr>
-          <td>Invoices</td>
-          <td>Create manual invoices, save drafts, send immediately, or send from the due queue.</td>
-        </tr>
-        <tr>
-          <td>Customer selection</td>
-          <td>New invoice flow uses search instead of a customer dropdown, matching by first name, last name, email, and phone.</td>
-        </tr>
-        <tr>
-          <td>Service selection</td>
-          <td>Existing members expose predefined services plus a <code>Custom</code> option.</td>
-        </tr>
-        <tr>
-          <td>Email operations</td>
-          <td>Backend sends invoices and receipts through SMTP when configured.</td>
-        </tr>
-        <tr>
-          <td>Zelle ingestion</td>
-          <td>Backend can read Gmail confirmations, parse likely payment details, and route records to either payment confirmation or exceptions.</td>
-        </tr>
-        <tr>
-          <td>Exceptions</td>
-          <td>Resolve mismatch and ambiguous payer flows from the billing console.</td>
-        </tr>
-        <tr>
-          <td>Search</td>
-          <td>Search spans names, emails, phones, aliases, and invoice codes.</td>
-        </tr>
-        <tr>
-          <td>Persistence</td>
-          <td>Live state is stored in Postgres, not in a runtime-only client store or a JSON blob.</td>
-        </tr>
-      </table>
-
-      <div class="callout info">SMTP and Gmail are integrated honestly: the UI shows when those services are not configured yet instead of pretending they are live.</div>
-    </section>
-
-    <section>
-      <div class="sec-title">3. Frontend Behavior</div>
-      <h3>Operator UX requirements now reflected in the product</h3>
-      <h4>Login</h4>
-      <ul>
-        <li>Unauthenticated users see a dedicated sign-in screen before finance data loads.</li>
-        <li>Expired sessions return the user to login and protect the API from unauthorized requests.</li>
-      </ul>
-
-      <h4>Billing console</h4>
-      <ul>
-        <li>Status chips show schedule linkage, email readiness, and Gmail authorization state.</li>
-        <li><code>Sync Zelle inbox</code> calls the backend Gmail sync endpoint.</li>
-        <li>Due invoices, payments to confirm, and exceptions update from backend state.</li>
-      </ul>
-
-      <h4>Manual invoice flow</h4>
-      <ul>
-        <li>Existing member search replaces the original static customer picker.</li>
-        <li>Member selection autofills identity details.</li>
-        <li>Service choices are constrained to member-specific services when a known member is selected.</li>
-        <li>New customers can still be created inline.</li>
-      </ul>
-    </section>
-
-    <section>
-      <div class="sec-title">4. Backend Architecture</div>
-      <h3>Current service layers</h3>
-      <ol>
-        <li><strong>React frontend</strong> calls <code>/api</code> through the Vite local proxy.</li>
-        <li><strong>Express API</strong> owns auth, invoice actions, payment confirmation, exception resolution, and inbox sync entry points.</li>
-        <li><strong>State store layer</strong> translates portal actions into transactional database operations.</li>
-        <li><strong>Service layer</strong> handles SMTP email, Gmail authorization, Gmail message parsing, and payment matching logic.</li>
-        <li><strong>Postgres</strong> acts as the source of truth for operational state.</li>
-      </ol>
-
-      <div class="callout info">The route layer is intentionally thin so the product can grow into more modules and APIs without business logic getting trapped in Express handlers.</div>
-    </section>
-
-    <section>
-      <div class="sec-title">5. Database and Persistence</div>
-      <h3>Persistence model</h3>
-      <p>The product now uses a normalized Postgres schema with transactional writes. The earlier JSON file is retained only as a bootstrap seed source for local development.</p>
-
-      <h4>Core domains persisted</h4>
-      <ul>
-        <li>Customers</li>
-        <li>Customer services</li>
-        <li>Customer emails</li>
-        <li>Customer phones</li>
-        <li>Customer aliases</li>
-        <li>Invoices</li>
-        <li>Payments</li>
-        <li>Exceptions and candidate matches</li>
-        <li>Activity events</li>
-        <li>Processed Gmail message ids</li>
-        <li>Integration state</li>
-        <li>Invoice sequences</li>
-        <li>Dashboard snapshots and projections</li>
-      </ul>
-
-      <table>
-        <tr>
-          <th>Why it matters</th>
-          <th>Current design choice</th>
-        </tr>
-        <tr>
-          <td>Data integrity</td>
-          <td>Transactional invoice, payment, exception, and activity updates.</td>
-        </tr>
-        <tr>
-          <td>Operational lookup speed</td>
-          <td>Indexes for normalized names, emails, phone last-4, invoice status, payment review status, and exception status.</td>
-        </tr>
-        <tr>
-          <td>Local development</td>
-          <td>Database starts locally through the provided scripts and seeds from the demo state snapshot.</td>
-        </tr>
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>What they need</th>
+            <th>What success looks like</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Finance operations</td>
+            <td>Onboard clients, send invoices, review payments, apply transactions, send receipts</td>
+            <td>They can complete the full workflow without juggling spreadsheets and inboxes</td>
+          </tr>
+          <tr>
+            <td>Program admin</td>
+            <td>Set referral rules and track earned bonuses</td>
+            <td>Rule changes affect future referrals without corrupting history</td>
+          </tr>
+          <tr>
+            <td>Leadership</td>
+            <td>See collections, outstanding receivables, queue health, and referral status</td>
+            <td>They can assess finance health without asking for manual reporting</td>
+          </tr>
+        </tbody>
       </table>
     </section>
 
     <section>
-      <div class="sec-title">6. Performance and Scale Posture</div>
-      <h3>Why this backend is a better product-suite foundation</h3>
+      <div class="sec-title">3. Business Requirements</div>
+      <h3>What the product must do</h3>
+
+      <h4>Client onboarding</h4>
       <ul>
-        <li>Postgres replaces the monolithic state blob, which is better for concurrency, queryability, and future automation.</li>
-        <li>Connection pooling is configurable, keeping local and small-team operating cost low while leaving room to grow.</li>
-        <li>Identity matching fields are normalized for predictable search and reconciliation.</li>
-        <li>Integration metadata uses JSON only where flexibility is helpful and query pressure is low.</li>
-        <li>The model can evolve toward tenant-aware <code>organizations</code> and <code>workspaces</code> without rethinking the core financial domains.</li>
+        <li>The first step in the workflow must be client onboarding.</li>
+        <li>First name, last name, primary email, phone, and at least one enrolled service must be required.</li>
+        <li>Home address should be available as an optional field.</li>
+        <li>Every client must receive a stable customer ID.</li>
+        <li>Service history must preserve the date and time when each service was enrolled.</li>
       </ul>
 
-      <div class="callout success">This is now shaped like the early backend of a product suite, not just a demo portal.</div>
+      <h4>Invoices and billing</h4>
+      <ul>
+        <li>Finance users must be able to create invoices from the client record.</li>
+        <li>The invoice flow should reuse the client’s enrolled services as the default selection set.</li>
+        <li>The system must support invoice statuses such as draft, sent, paid, and overdue.</li>
+        <li>The system must support invoice email delivery.</li>
+      </ul>
+
+      <h4>Payments and transaction capture</h4>
+      <ul>
+        <li>The system must save synced Zelle payment confirmations as structured transaction records.</li>
+        <li>A transaction record should capture date, transaction number, amount, memo, source message details, and raw extracted content whenever available.</li>
+        <li>The matching engine should identify likely customer and invoice matches using saved customer information.</li>
+        <li>Clear matches go to a confirmation queue. Unclear cases go to an exceptions queue.</li>
+        <li>A human must complete the final apply action.</li>
+      </ul>
+
+      <h4>Receipts and communication</h4>
+      <ul>
+        <li>Once a transaction is applied, the receipt must go to the customer’s primary email on file.</li>
+        <li>The system should keep enough transaction detail to explain later how and why the payment was applied.</li>
+      </ul>
+
+      <h4>Referral program</h4>
+      <ul>
+        <li>The default referral reward is <code>$500</code>, but admins must be able to change it.</li>
+        <li>The default qualification rule is <code>$3,000 paid or 6 months</code>, but admins must be able to change or disable it.</li>
+        <li>Historical referral relationships must preserve the rule snapshot active when they were created.</li>
+      </ul>
+
+      <div class="callout info">The portal should optimize for auditability, low operational friction, and future expansion into a broader suite rather than only solving a single invoice screen.</div>
     </section>
 
     <section>
-      <div class="sec-title">7. Known Limits and Next Steps</div>
-      <h3>What still comes next</h3>
-      <ul>
-        <li>SMTP and Gmail need real credentials before external delivery and inbox sync can be validated end to end.</li>
-        <li>Email delivery and Gmail polling still run inline with request flow. A background jobs layer is the next performance and reliability step.</li>
-        <li>The portal is still single-tenant. Multi-workspace support should be the next structural evolution if this becomes a broader suite.</li>
-        <li>Dashboard projections are currently stored for the existing UI contract; later they can be fed by scheduled jobs or a dedicated analytics pipeline.</li>
-      </ul>
-
-      <div class="callout warn">Recommended next product-suite move: add tenant scoping plus an outbox/job system before increasing operator count or payment volume significantly.</div>
+      <div class="sec-title">4. Simple Process Flow</div>
+      <h3>How work moves through the portal</h3>
+      <div class="flow">
+        <div class="flow-row">
+          <div class="flow-step">
+            <div class="num">1</div>
+            <div class="title">Onboard client</div>
+            <div class="note">Capture required identity details, optional address, referral source, and initial service enrollments.</div>
+          </div>
+          <div class="flow-step">
+            <div class="num">2</div>
+            <div class="title">Create customer record</div>
+            <div class="note">Assign a stable customer ID and preserve service history with timestamps.</div>
+          </div>
+          <div class="flow-step">
+            <div class="num">3</div>
+            <div class="title">Create and send invoice</div>
+            <div class="note">Use the client’s saved services and contact details instead of re-keying the basics.</div>
+          </div>
+          <div class="flow-step">
+            <div class="num">4</div>
+            <div class="title">Capture payment</div>
+            <div class="note">Bring in Zelle confirmation details from email or review the transaction manually.</div>
+          </div>
+        </div>
+        <div class="flow-row">
+          <div class="flow-step">
+            <div class="num">5</div>
+            <div class="title">Match customer and invoice</div>
+            <div class="note">Use saved customer identity hints, services, and invoice context to prepare the best match.</div>
+          </div>
+          <div class="flow-step">
+            <div class="num">6</div>
+            <div class="title">Queue for review</div>
+            <div class="note">Clear matches go to payments-to-confirm. Mismatches and ambiguities go to exceptions.</div>
+          </div>
+          <div class="flow-step">
+            <div class="num">7</div>
+            <div class="title">Human clicks apply</div>
+            <div class="note">The operator completes the final payment posting with one click after reviewing the prepared record.</div>
+          </div>
+          <div class="flow-step">
+            <div class="num">8</div>
+            <div class="title">Receipt and downstream updates</div>
+            <div class="note">The invoice is marked paid, a receipt is sent, and referral progress or rewards are updated.</div>
+          </div>
+        </div>
+      </div>
     </section>
 
-    <div class="foot">Setu finance current-state handoff · generated from the working local implementation</div>
+    <section>
+      <div class="sec-title">5. Low-Cost AWS Solution Architecture</div>
+      <h3>How this can be deployed without losing functionality</h3>
+      <p class="lead">The target deployment keeps the same behavior while shifting the local prototype into a cost-conscious AWS footprint. The idea is to use managed services where they reduce operational burden, but avoid heavy fixed-cost infrastructure too early.</p>
+
+      <div class="arch-grid">
+        <div class="arch-layer">
+          <div class="left">Portal frontend</div>
+          <div class="middle">Static web app hosted on Amazon S3 and delivered through CloudFront for fast HTTPS access.</div>
+          <div class="right">low fixed cost</div>
+        </div>
+        <div class="arch-layer">
+          <div class="left">Application API</div>
+          <div class="middle">Node/Express service deployed on AWS App Runner so the current backend shape can move to AWS without a full rewrite.</div>
+          <div class="right">simple ops</div>
+        </div>
+        <div class="arch-layer">
+          <div class="left">System of record</div>
+          <div class="middle">Amazon RDS for PostgreSQL stores customers, invoices, payments, exceptions, referral records, and activity history.</div>
+          <div class="right">managed postgres</div>
+        </div>
+        <div class="arch-layer">
+          <div class="left">Background work</div>
+          <div class="middle">Amazon SQS and Lambda handle scheduled Gmail sync, transaction processing, and email jobs without requiring another always-on server.</div>
+          <div class="right">usage-based</div>
+        </div>
+        <div class="arch-layer">
+          <div class="left">Outbound email</div>
+          <div class="middle">Amazon SES sends invoices and receipts at lower cost than most third-party vendors.</div>
+          <div class="right">low per-message cost</div>
+        </div>
+        <div class="arch-layer">
+          <div class="left">Monitoring and secrets</div>
+          <div class="middle">CloudWatch handles logs and alarms, while Parameter Store and Secrets Manager keep credentials and tokens out of code.</div>
+          <div class="right">managed controls</div>
+        </div>
+      </div>
+
+      <div class="callout good">This target stack preserves login, onboarding, invoices, Gmail/Zelle sync, payment queues, one-click apply, receipts, and referral logic while keeping the first production shape relatively lean.</div>
+
+      <div class="callout warn">The product should stay intentionally simple at launch: single region, one primary app service, one Postgres database, and background jobs only where they materially improve reliability or response time.</div>
+    </section>
+
+    <section>
+      <div class="sec-title">6. Governance, Controls, and Policy</div>
+      <h3>What should remain controlled</h3>
+      <ul>
+        <li>Finance data must stay behind login.</li>
+        <li>Money should not auto-post directly from an email sync without human review.</li>
+        <li>Transactions must remain saved even before they are applied.</li>
+        <li>Referral rules may change for future enrollments, but historical relationships must remain intact.</li>
+        <li>Customer IDs must remain stable so future products can reference the same customer cleanly.</li>
+      </ul>
+    </section>
+
+    <section>
+      <div class="sec-title">7. What Is Intentionally Left For Later</div>
+      <h3>Deferred scope</h3>
+      <ul>
+        <li>Public client self-service portal</li>
+        <li>Full bank API integration beyond the current Gmail/Zelle path</li>
+        <li>Automatic payment posting with no human review</li>
+        <li>Multi-tenant organization model for several businesses inside one deployment</li>
+        <li>Warehouse-grade analytics and business intelligence tooling</li>
+      </ul>
+      <div class="callout info">The current product already sets up the right foundation for those future steps, but it does not need their cost or complexity yet.</div>
+    </section>
+
+    <div class="foot">Prepared for current-state repo handoff and low-cost AWS deployment planning.</div>
   </div>
 </body>
 </html>
