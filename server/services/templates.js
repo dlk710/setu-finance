@@ -22,11 +22,23 @@ function formatCurrency(value) {
 }
 
 function formatLongDate(value) {
+  if (!value) {
+    return "Date unavailable";
+  }
+
+  const raw =
+    value instanceof Date ? value.toISOString().slice(0, 10) : String(value).trim().slice(0, 10);
+  const parsedDate = new Date(`${raw}T12:00:00`);
+
+  if (Number.isNaN(parsedDate.getTime())) {
+    return String(value);
+  }
+
   return new Intl.DateTimeFormat("en-US", {
     month: "long",
     day: "numeric",
     year: "numeric",
-  }).format(new Date(`${value}T12:00:00`));
+  }).format(parsedDate);
 }
 
 function buildCardPaymentUrl(invoice) {
