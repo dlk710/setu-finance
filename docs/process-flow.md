@@ -2,6 +2,33 @@
 
 This is the current business workflow for Setu Finance, written for operations and leadership teams.
 
+## Quick Business View
+
+```mermaid
+flowchart TD
+    A["Onboard client"] --> B["Create customer record"]
+    B --> C["Create and send invoice"]
+    C --> D["Capture payment from Zelle email or manual review"]
+    D --> E{"Match confidence"}
+    E -->|"Clear"| F["Payments to confirm"]
+    E -->|"Unclear"| G["Exceptions"]
+    G --> H["Finance resolves and assigns the right customer / action"]
+    H --> F
+    F --> I["Apply transaction"]
+    I --> J["Completed transactions"]
+    J --> K["Send or re-send PDF receipt"]
+    K --> L["Update dashboard and history"]
+```
+
+### In Plain English
+
+- First create the client record.
+- Then send the invoice.
+- When money shows up, save it as a transaction record.
+- If the portal is confident, finance applies it from `Payments to confirm`.
+- If the portal is not confident, finance resolves it in `Exceptions`.
+- After apply, the transaction stays in history and the receipt can be sent separately.
+
 ## End-to-End Flow
 
 ```mermaid

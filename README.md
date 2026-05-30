@@ -11,6 +11,34 @@ Local full-stack prototype for:
 - summarizing saved received amounts on the dashboard by day, week, month, or year
 - persisting the operational backend in PostgreSQL instead of a file store
 
+## Simple Process Flow
+
+```mermaid
+flowchart TD
+    A["Onboard client"] --> B["Create customer record"]
+    B --> C["Create and send invoice"]
+    C --> D["Capture payment from Zelle email or manual review"]
+    D --> E{"Match confidence"}
+    E -->|"Clear"| F["Payments to confirm"]
+    E -->|"Unclear"| G["Exceptions"]
+    G --> H["Finance resolves and assigns the right customer / action"]
+    H --> F
+    F --> I["Apply transaction"]
+    I --> J["Completed transactions"]
+    J --> K["Send or re-send PDF receipt"]
+    K --> L["Update dashboard and history"]
+```
+
+Plain-English version:
+
+- onboard the client
+- send the invoice
+- capture the payment
+- review it in `Payments to confirm` or `Exceptions`
+- apply it
+- send the receipt
+- keep the full history
+
 ## Run locally
 
 1. Install dependencies:
