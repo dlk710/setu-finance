@@ -98,6 +98,24 @@ function replaceIdentifierText(text, replacements) {
   }, String(text));
 }
 
+function dedupeRecordsById(records = [], excludedIds = new Set()) {
+  const seen = new Set(excludedIds);
+
+  return records.filter((record) => {
+    const id = record?.id;
+    if (!id) {
+      return true;
+    }
+
+    if (seen.has(id)) {
+      return false;
+    }
+
+    seen.add(id);
+    return true;
+  });
+}
+
 function buildServiceHistory(seedPrefix, services, startedAt) {
   return services.map((service, index) => ({
     id: `seed-${seedPrefix}-${String(service).toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${index + 1}`,
@@ -775,7 +793,7 @@ const seedAdmin = {
   rewards: [],
 };
 
-const seedAllPayments = [...seedPendingPayments, ...seedPayments];
+const seedAllPayments = [...seedPayments];
 
 export function normalizeSeedIdentifiers(state) {
   const customerCodeMap = new Map();
@@ -842,8 +860,11 @@ export function normalizeSeedIdentifiers(state) {
     matchSummary: replaceIdentifierText(payment.matchSummary, textReplacements),
   });
 
-  state.pendingPayments = (state.pendingPayments ?? []).map(normalizePaymentRecord);
-  state.payments = (state.payments ?? []).map(normalizePaymentRecord);
+  state.pendingPayments = dedupeRecordsById((state.pendingPayments ?? []).map(normalizePaymentRecord));
+  state.payments = dedupeRecordsById(
+    (state.payments ?? []).map(normalizePaymentRecord),
+    new Set(state.pendingPayments.map((payment) => payment.id).filter(Boolean)),
+  );
 
   state.exceptions = (state.exceptions ?? []).map((exception) => ({
     ...exception,
