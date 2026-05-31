@@ -284,6 +284,7 @@ export async function replaceStateInDatabase(client, state) {
           onboarding_status,
           intake_source,
           preferred_payment_method,
+          fee_type,
           billing_cadence,
           referral_source,
           billing_notes,
@@ -298,8 +299,8 @@ export async function replaceStateInDatabase(client, state) {
           updated_at
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::date,
-          COALESCE($15::timestamptz, NOW()),
+          $1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10, $11, $12, $13, $14, $15,
+          COALESCE($16::timestamptz, NOW()),
           NOW()
         )
       `,
@@ -308,6 +309,7 @@ export async function replaceStateInDatabase(client, state) {
         profile.onboardingStatus ?? "complete",
         profile.intakeSource ?? "seed",
         profile.preferredPaymentMethod ?? "zelle",
+        profile.feeType ?? (profile.billingCadence === "monthly" ? "recurring" : "one_time"),
         profile.billingCadence ?? "per_milestone",
         profile.referralSource ?? null,
         profile.billingNotes ?? null,

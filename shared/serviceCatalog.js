@@ -45,7 +45,13 @@ const SERVICE_CATALOG = [
     type: "criteria",
     shortLabel: "Contributions",
     longLabel: "Original contributions of major significance",
-    aliases: ["original contributions", "major significance", "contributions"],
+    aliases: [
+      "original contributions",
+      "major significance",
+      "contributions",
+      "original contribution criteria",
+      "original contribution",
+    ],
   },
   {
     code: "authorship",
@@ -97,11 +103,38 @@ const SERVICE_CATALOG = [
     aliases: ["full petition review", "petition review", "petition assembly"],
   },
   {
+    code: "drafting-filing",
+    type: "service",
+    shortLabel: "Drafting & filing",
+    longLabel: "EB1A drafting and filing service",
+    aliases: [
+      "drafting filing",
+      "drafting and filing",
+      "eb1a drafting filing",
+      "eb1a drafting and filing",
+      "drafting filing only",
+    ],
+  },
+  {
     code: "media-package",
     type: "service",
     shortLabel: "Media package",
     longLabel: "Media package and publication support",
     aliases: ["media package", "publication support", "press package"],
+  },
+  {
+    code: "lor-package",
+    type: "service",
+    shortLabel: "LOR package",
+    longLabel: "Expert and recommendation letter package",
+    aliases: [
+      "lor assistance package",
+      "lor package",
+      "letter of recommendation package",
+      "recommendation letters",
+      "independent expert letters",
+      "government letters",
+    ],
   },
   {
     code: "rfe-support",

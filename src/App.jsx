@@ -82,7 +82,7 @@ const PORTAL_VIEW_PATHS = {
   admin: "/admin",
 };
 
-function createPortalRoute(view = "onboarding", customerId = "") {
+function createPortalRoute(view = "dashboard", customerId = "") {
   return {
     view,
     customerId,
@@ -94,7 +94,7 @@ function buildPortalPath(route) {
     return `/customers/${encodeURIComponent(route.customerId)}`;
   }
 
-  return PORTAL_VIEW_PATHS[route?.view] ?? PORTAL_VIEW_PATHS.onboarding;
+  return PORTAL_VIEW_PATHS[route?.view] ?? PORTAL_VIEW_PATHS.dashboard;
 }
 
 function parsePortalRoute(pathname = "/") {
@@ -109,7 +109,7 @@ function parsePortalRoute(pathname = "/") {
     return createPortalRoute(entry[0]);
   }
 
-  return createPortalRoute("onboarding");
+  return createPortalRoute("dashboard");
 }
 
 function createAskSetuMessage(role, text) {
@@ -160,6 +160,19 @@ function createInvoiceScheduleEntry(overrides = {}) {
   };
 }
 
+function shiftDateByCadence(value, cadence) {
+  const base = value ? new Date(`${value}T12:00:00`) : new Date();
+  if (Number.isNaN(base.getTime())) {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  if (cadence === "monthly") {
+    base.setMonth(base.getMonth() + 1);
+  }
+
+  return base.toISOString().slice(0, 10);
+}
+
 function readFileAsDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -178,6 +191,7 @@ const DEFAULT_ONBOARDING_FORM = {
   customerPhone: "",
   onboardedAt: "",
   serviceStartDate: "",
+  feeType: "one_time",
   homeAddressLine1: "",
   homeAddressLine2: "",
   homeCity: "",
@@ -233,6 +247,7 @@ function createOnboardingFormFromCustomer(customer) {
     onboardedAt: customer?.profile?.onboardedAt ?? "",
     serviceStartDate: customer?.profile?.serviceStartDate ?? customer?.activeContract?.serviceStartDate ?? "",
     preferredPaymentMethod: customer?.profile?.preferredPaymentMethod ?? DEFAULT_ONBOARDING_FORM.preferredPaymentMethod,
+    feeType: customer?.profile?.feeType ?? DEFAULT_ONBOARDING_FORM.feeType,
     billingCadence: customer?.profile?.billingCadence ?? DEFAULT_ONBOARDING_FORM.billingCadence,
     zelleSenderName: zelleAlias?.name ?? "",
     zelleSenderEmail: zelleAlias?.email ?? "",
@@ -274,8 +289,52 @@ function buildServiceSelectionsFromParsedServices(services = []) {
   };
 }
 
+function getContractPrefillRank(contract) {
+  return Number(contract?.prefillRank ?? contract?.parsed?.prefillRank ?? 0) || 0;
+}
+
+function selectPreferredContractUpload(contractUploads = [], { requireBilling = false, requireProfile = false } = {}) {
+  return [...(Array.isArray(contractUploads) ? contractUploads : [])]
+    .map((contract, index) => ({ contract, index }))
+    .filter(({ contract }) => {
+      if (requireBilling && !Boolean(contract?.prefillBilling ?? contract?.parsed?.prefillBilling)) {
+        return false;
+      }
+      if (requireProfile && !Boolean(contract?.prefillProfile ?? contract?.parsed?.prefillProfile)) {
+        return false;
+      }
+      return true;
+    })
+    .sort((left, right) => {
+      const rankDiff = getContractPrefillRank(right.contract) - getContractPrefillRank(left.contract);
+      if (rankDiff !== 0) {
+        return rankDiff;
+      }
+      return right.index - left.index;
+    })[0]?.contract ?? null;
+}
+
+function getContractUsageLabel(contract) {
+  const parsed = contract?.parsed ?? contract ?? {};
+  if (parsed.prefillBilling) {
+    return "Used for onboarding + billing";
+  }
+  if (parsed.prefillProfile) {
+    return "Used for onboarding";
+  }
+  return "Supporting document only";
+}
+
 function buildInvoiceScheduleFromParsedContract(parsed = {}, fallbackServiceStartDate = "") {
-  const fallbackDate = parsed.serviceStartDate || fallbackServiceStartDate || new Date().toISOString().slice(0, 10);
+  if (!parsed?.prefillBilling) {
+    return [];
+  }
+
+  const fallbackDate =
+    parsed.serviceStartDate ||
+    parsed.contractDate ||
+    fallbackServiceStartDate ||
+    new Date().toISOString().slice(0, 10);
   const services = (parsed.services ?? []).map((service) => normalizeServiceLabel(service.name ?? service.shortLabel ?? service.longLabel ?? service));
   const primaryService = services[0] ?? "Authorship";
   const installments = Array.isArray(parsed.installments) ? parsed.installments : [];
@@ -296,9 +355,9 @@ function buildInvoiceScheduleFromParsedContract(parsed = {}, fallbackServiceStar
   if (Number(parsed.totalFee || 0) > 0) {
     return [
       createInvoiceScheduleEntry({
-        label: "Contract fee",
+        label: parsed.feeType === "recurring" ? "Recurring charge" : "Contract fee",
         serviceName: primaryService,
-        milestone: "Contract fee",
+        milestone: parsed.feeType === "recurring" ? "Recurring charge" : "Contract fee",
         amount: Number(parsed.totalFee || 0),
         dueDate: fallbackDate,
       }),
@@ -398,12 +457,29 @@ const PAYMENT_METHOD_OPTIONS = [
   { value: "both", label: "Both supported" },
 ];
 
+const FEE_TYPE_OPTIONS = [
+  { value: "one_time", label: "One-time fee" },
+  { value: "recurring", label: "Recurring fee" },
+];
+
 const BILLING_CADENCE_OPTIONS = [
   { value: "", label: "Use finance default" },
   { value: "per_milestone", label: "Per milestone" },
   { value: "monthly", label: "Monthly cycle" },
   { value: "custom", label: "Custom cadence" },
 ];
+
+function getBillingCadenceOptions(feeType) {
+  if (feeType === "recurring") {
+    return BILLING_CADENCE_OPTIONS.filter(
+      (option) => option.value === "" || option.value === "monthly" || option.value === "custom",
+    );
+  }
+
+  return BILLING_CADENCE_OPTIONS.filter(
+    (option) => option.value === "" || option.value === "per_milestone" || option.value === "custom",
+  );
+}
 
 const DASHBOARD_TRANSACTION_FILTERS = [
   { key: "day", label: "Day" },
@@ -612,7 +688,7 @@ function buildCustomerLedgerStatus(customer, { dueInvoices = [], invoices = [], 
   return {
     label: "Active",
     tone: "success",
-    detail: `${formatPaymentMethod(customer.profile?.preferredPaymentMethod)} · ${formatBillingCadence(
+    detail: `${formatFeeType(customer.profile?.feeType)} · ${formatPaymentMethod(customer.profile?.preferredPaymentMethod)} · ${formatBillingCadence(
       customer.profile?.billingCadence,
     )}`,
   };
@@ -690,13 +766,6 @@ function App() {
   const zelleReadyCount = state.customers.filter((customer) =>
     customer.aliases.some((alias) => alias.relation === "zelle identity"),
   ).length;
-  const recentOnboardedCustomers = [...state.customers]
-    .filter((customer) => customer.profile?.onboardedAt)
-    .sort(
-      (left, right) =>
-        new Date(right.profile.onboardedAt).getTime() - new Date(left.profile.onboardedAt).getTime(),
-    )
-    .slice(0, 6);
   const currentOnboardingHistory = selectedOnboardingCustomer?.serviceHistory ?? [];
   const referralProgram = state.admin?.referralProgram ?? {
     enabled: true,
@@ -769,7 +838,7 @@ function App() {
   }, []);
 
   function resetPortalUi() {
-    setRoute(createPortalRoute("onboarding"));
+    setRoute(createPortalRoute("dashboard"));
     setState(createInitialState());
     setSearchQuery("");
     setModal({ type: null, payload: null });
@@ -1148,11 +1217,30 @@ function App() {
     }));
   }
 
-  function updateOnboardingForm(field, value) {
-    setOnboardingForm((current) => ({
-      ...current,
-      [field]: value,
-    }));
+function updateOnboardingForm(field, value) {
+    setOnboardingForm((current) => {
+      if (field === "feeType") {
+        const nextFeeType = value || "one_time";
+        let nextBillingCadence = current.billingCadence;
+        if (nextFeeType === "recurring" && (!nextBillingCadence || nextBillingCadence === "per_milestone")) {
+          nextBillingCadence = "monthly";
+        }
+        if (nextFeeType === "one_time" && nextBillingCadence === "monthly") {
+          nextBillingCadence = "per_milestone";
+        }
+
+        return {
+          ...current,
+          feeType: nextFeeType,
+          billingCadence: nextBillingCadence,
+        };
+      }
+
+      return {
+        ...current,
+        [field]: value,
+      };
+    });
   }
 
   function updateInvoiceScheduleEntry(id, field, value) {
@@ -1165,16 +1253,29 @@ function App() {
   }
 
   function addInvoiceScheduleEntry() {
-    setOnboardingForm((current) => ({
-      ...current,
-      invoiceSchedule: [
-        ...current.invoiceSchedule,
-        createInvoiceScheduleEntry({
-          dueDate: current.serviceStartDate || new Date().toISOString().slice(0, 10),
-          serviceName: buildOnboardingServiceEntries(current)[0]?.name ?? "Authorship",
-        }),
-      ],
-    }));
+    setOnboardingForm((current) => {
+      const currentCycle = current.invoiceSchedule.length + 1;
+      const lastDueDate = current.invoiceSchedule.at(-1)?.dueDate || current.serviceStartDate;
+      const nextDueDate =
+        current.feeType === "recurring"
+          ? current.invoiceSchedule.length
+            ? shiftDateByCadence(lastDueDate || new Date().toISOString().slice(0, 10), current.billingCadence)
+            : current.serviceStartDate || new Date().toISOString().slice(0, 10)
+          : current.serviceStartDate || new Date().toISOString().slice(0, 10);
+
+      return {
+        ...current,
+        invoiceSchedule: [
+          ...current.invoiceSchedule,
+          createInvoiceScheduleEntry({
+            label: current.feeType === "recurring" ? `Cycle ${currentCycle}` : "",
+            milestone: current.feeType === "recurring" ? `Cycle ${currentCycle}` : "",
+            dueDate: nextDueDate,
+            serviceName: buildOnboardingServiceEntries(current)[0]?.name ?? "Authorship",
+          }),
+        ],
+      };
+    });
   }
 
   function removeInvoiceScheduleEntry(id) {
@@ -1184,20 +1285,28 @@ function App() {
     }));
   }
 
-  function applyContractPreviewToForm(preview) {
-    const parsed = preview?.parsed ?? {};
-    const nextSchedule = buildInvoiceScheduleFromParsedContract(parsed, parsed.serviceStartDate);
-    const nextServices = buildServiceSelectionsFromParsedServices(parsed.services ?? []);
-    const parsedName = splitCustomerName(parsed.clientName);
+  function applyContractPrefillsToForm(contractList) {
+    const preferredProfileContract = selectPreferredContractUpload(contractList, { requireProfile: true });
+    const preferredBillingContract = selectPreferredContractUpload(contractList, { requireBilling: true });
+    const profileParsed = preferredProfileContract?.parsed ?? {};
+    const billingParsed = preferredBillingContract?.parsed ?? {};
+    const nextServices = buildServiceSelectionsFromParsedServices(profileParsed.services ?? []);
+    const nextSchedule = buildInvoiceScheduleFromParsedContract(
+      billingParsed,
+      billingParsed.serviceStartDate || profileParsed.serviceStartDate,
+    );
+    const parsedName = splitCustomerName(profileParsed.clientName);
 
     setOnboardingForm((current) => ({
       ...current,
       firstName: parsedName.firstName || current.firstName,
       lastName: parsedName.lastName || current.lastName,
-      customerEmail: parsed.customerEmail || current.customerEmail,
-      customerPhone: parsed.customerPhone || current.customerPhone,
-      serviceStartDate: parsed.serviceStartDate || current.serviceStartDate,
-      billingCadence: parsed.billingCadence || current.billingCadence,
+      customerEmail: profileParsed.customerEmail || current.customerEmail,
+      customerPhone: profileParsed.customerPhone || current.customerPhone,
+      serviceStartDate:
+        billingParsed.serviceStartDate || profileParsed.serviceStartDate || current.serviceStartDate,
+      feeType: billingParsed.feeType || current.feeType,
+      billingCadence: billingParsed.billingCadence || current.billingCadence,
       criteriaSelections: nextServices.criteriaSelections.length
         ? nextServices.criteriaSelections
         : current.criteriaSelections,
@@ -1216,6 +1325,7 @@ function App() {
 
     setUploadingContract(true);
     try {
+      let nextUploads = [...contractUploads];
       for (const file of fileList) {
         const contentBase64 = await readFileAsDataUrl(file);
         const data = await apiRequest("/api/contracts/preview", {
@@ -1237,8 +1347,9 @@ function App() {
           contentBase64,
         };
 
-        setContractUploads((current) => [...current, uploadRecord]);
-        applyContractPreviewToForm(uploadRecord);
+        nextUploads = [...nextUploads, uploadRecord];
+        setContractUploads(nextUploads);
+        applyContractPrefillsToForm(nextUploads);
         pushToast(`${file.name} parsed and added to onboarding.`);
       }
     } catch (error) {
@@ -1252,7 +1363,9 @@ function App() {
   }
 
   function removeContractUpload(uploadId) {
-    setContractUploads((current) => current.filter((contract) => contract.id !== uploadId));
+    const nextUploads = contractUploads.filter((contract) => contract.id !== uploadId);
+    setContractUploads(nextUploads);
+    applyContractPrefillsToForm(nextUploads);
   }
 
   function updateOnboardingCustomerQuery(value) {
@@ -1278,6 +1391,7 @@ function App() {
         homePostalCode: current.homePostalCode,
         homeCountry: current.homeCountry,
         preferredPaymentMethod: current.preferredPaymentMethod,
+        feeType: current.feeType,
         billingCadence: current.billingCadence,
         zelleSenderName: current.zelleSenderName,
         zelleSenderEmail: current.zelleSenderEmail,
@@ -1580,10 +1694,10 @@ function App() {
     <div className="app">
       <aside className="sidebar">
         <div className="logo-wrap">
-          <span className="wordmark">
+          <button className="wordmark logo-home" onClick={() => navigateToView("dashboard")} type="button">
             <span className="letters">setu</span>
             <span className="deck" />
-          </span>
+          </button>
         </div>
         <div className="nav-label">Finance</div>
         <button
@@ -1651,7 +1765,6 @@ function App() {
             onCustomerQueryChange={updateOnboardingCustomerQuery}
             onContractUpload={uploadContracts}
             onInvoiceScheduleChange={updateInvoiceScheduleEntry}
-            recentCustomers={recentOnboardedCustomers}
             onRemoveContract={removeContractUpload}
             onRemoveInvoiceScheduleEntry={removeInvoiceScheduleEntry}
             saving={savingOnboarding}
@@ -1986,7 +2099,6 @@ function OnboardingView({
   onSubmit,
   onToggleCriteria,
   referralProgram,
-  recentCustomers,
   saving,
   uploadingContract,
   zelleReadyCount,
@@ -2027,7 +2139,7 @@ function OnboardingView({
           </button>
         </div>
       </div>
-      <div className="content">
+      <div className="content onboarding-content">
         <WorkflowStrip activeStep="onboarding" />
 
         <div className="metrics c3">
@@ -2036,7 +2148,7 @@ function OnboardingView({
           <MetricCard label="Needs intake follow-up" value={needsFollowUp} />
         </div>
 
-        <div className="two-col onboarding-layout">
+        <div className="onboarding-layout">
           <section className="section no-gap">
             <div className="section-head">
               <h2>Client profile and enrollment</h2>
@@ -2052,11 +2164,14 @@ function OnboardingView({
                     <div>
                       <h3>1. Contract intake</h3>
                       <div className="sub">
-                        Start here. Upload signed contracts so Setu can prefill services, fees,
-                        installments, and service-start dates before onboarding is saved.
+                        Start here. Upload proposals, service agreements, and NDAs so Setu can
+                        prefill services, fees, installments, and service-start dates before
+                        onboarding is saved.
                       </div>
                     </div>
-                    <label className={`btn btn-sm btn-primary ${uploadingContract ? "is-disabled" : ""}`}>
+                    <label
+                      className={`btn btn-sm btn-primary contract-upload-trigger ${uploadingContract ? "is-disabled" : ""}`}
+                    >
                       <input
                         className="hidden-file-input"
                         type="file"
@@ -2073,90 +2188,88 @@ function OnboardingView({
                   </div>
 
                   <div className="autofill-note">
-                    Contracts are stored with the customer record after onboarding is saved. On AWS,
-                    the same upload path can be directed into a private S3 bucket by customer ID and date.
+                    Contracts are stored with the customer record after onboarding is saved. Billing
+                    agreements and proposals drive prefills, while NDAs stay attached as supporting
+                    documents. On AWS, the same upload path can be directed into a private S3 bucket
+                    by customer ID and date.
                   </div>
 
                   {contractUploads.length ? (
                     <div className="contract-upload-list">
-                      {contractUploads.map((contract) => (
-                        <div className="contract-upload-card" key={contract.id}>
-                          <div className="contract-upload-head">
-                            <div>
-                              <div className="cust">{contract.fileName}</div>
-                              <div className="sub">
-                                {(contract.sizeBytes / 1024).toFixed(1)} KB ·{" "}
-                                {contract.parsed?.serviceStartDate
-                                  ? `Start ${formatShortDate(contract.parsed.serviceStartDate)}`
-                                  : "Start date not parsed yet"}
-                              </div>
-                            </div>
-                            <button
-                              className="btn btn-sm btn-ghost"
-                              onClick={() => onRemoveContract(contract.id)}
-                              type="button"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                          <div className="contract-upload-grid">
-                            <div>
-                              <div className="detail-label">Services</div>
-                              <div className="contract-service-cloud">
-                                {summarizeServiceLabels(
-                                  contract.parsed?.services?.map(
-                                    (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
-                                  ) ?? [],
-                                  6,
-                                ).visible.length
-                                  ? summarizeServiceLabels(
-                                      contract.parsed?.services?.map(
-                                        (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
-                                      ) ?? [],
-                                      6,
-                                    ).visible.map((service) => (
-                                      <span className="compact-service-pill" key={`${contract.id}-${service}`}>
-                                        {service}
-                                      </span>
-                                    ))
-                                  : <span className="sub">No services parsed yet</span>}
-                                {summarizeServiceLabels(
-                                  contract.parsed?.services?.map(
-                                    (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
-                                  ) ?? [],
-                                  6,
-                                ).overflowCount ? (
-                                  <span className="compact-service-pill muted">
-                                    +{summarizeServiceLabels(
-                                      contract.parsed?.services?.map(
-                                        (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
-                                      ) ?? [],
-                                      6,
-                                    ).overflowCount} more
+                      {contractUploads.map((contract) => {
+                        const parsed = contract.parsed ?? {};
+                        const serviceSummary = summarizeServiceLabels(
+                          parsed.services?.map(
+                            (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
+                          ) ?? [],
+                          6,
+                        );
+
+                        return (
+                          <div className="contract-upload-card" key={contract.id}>
+                            <div className="contract-upload-head">
+                              <div>
+                                <div className="cust">{contract.fileName}</div>
+                                <div className="contract-badge-row">
+                                  <span className="contract-kind-badge">
+                                    {parsed.contractKindLabel ?? "Supporting document"}
                                   </span>
-                                ) : null}
+                                  <span className="contract-kind-note">{getContractUsageLabel(parsed)}</span>
+                                </div>
+                                <div className="sub">
+                                  {(contract.sizeBytes / 1024).toFixed(1)} KB
+                                  {parsed.contractDate ? ` · Contract ${formatShortDate(parsed.contractDate)}` : ""}
+                                  {parsed.serviceStartDate
+                                    ? ` · Start ${formatShortDate(parsed.serviceStartDate)}`
+                                    : " · Start date not parsed yet"}
+                                </div>
+                              </div>
+                              <button
+                                className="btn btn-sm btn-ghost"
+                                onClick={() => onRemoveContract(contract.id)}
+                                type="button"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                            <div className="contract-upload-grid">
+                              <div>
+                                <div className="detail-label">Services</div>
+                                <div className="contract-service-cloud">
+                                  {serviceSummary.visible.length
+                                    ? serviceSummary.visible.map((service) => (
+                                        <span className="compact-service-pill" key={`${contract.id}-${service}`}>
+                                          {service}
+                                        </span>
+                                      ))
+                                    : <span className="sub">No services parsed yet</span>}
+                                  {serviceSummary.overflowCount ? (
+                                    <span className="compact-service-pill muted">
+                                      +{serviceSummary.overflowCount} more
+                                    </span>
+                                  ) : null}
+                                </div>
+                              </div>
+                              <div>
+                                <div className="detail-label">Fee + installments</div>
+                                <div className="sub">
+                                  {parsed.totalFee
+                                    ? `${formatCurrency(parsed.totalFee)} total fee`
+                                    : "Total fee not parsed yet"}
+                                  {Array.isArray(parsed.installments) && parsed.installments.length
+                                    ? ` · ${parsed.installments.length} installment${
+                                        parsed.installments.length === 1 ? "" : "s"
+                                      }`
+                                    : ""}
+                                </div>
                               </div>
                             </div>
-                            <div>
-                              <div className="detail-label">Fee + installments</div>
-                              <div className="sub">
-                                {contract.parsed?.totalFee
-                                  ? `${formatCurrency(contract.parsed.totalFee)} total fee`
-                                  : "Total fee not parsed yet"}
-                                {Array.isArray(contract.parsed?.installments) &&
-                                contract.parsed.installments.length
-                                  ? ` · ${contract.parsed.installments.length} installment${
-                                      contract.parsed.installments.length === 1 ? "" : "s"
-                                    }`
-                                  : ""}
-                              </div>
+                            <div className="contract-upload-preview">
+                              {contract.extractedTextPreview}
                             </div>
                           </div>
-                          <div className="contract-upload-preview">
-                            {contract.extractedTextPreview}
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   ) : (
                     <div className="picker-empty onboarding-inline-empty">
@@ -2413,8 +2526,9 @@ function OnboardingView({
                     <div>
                       <h3>4. Billing schedule</h3>
                       <div className="sub">
-                        These rows become draft invoices when onboarding is saved. Contract uploads
-                        prefill this automatically, and admins can override any field here.
+                        {form.feeType === "recurring"
+                          ? "These rows become draft invoices for each recurring cycle you want generated now. Contracts can prefill the pattern, and admins can override any row."
+                          : "These rows become draft invoices when onboarding is saved. Contract uploads prefill this automatically, and admins can override any field here."}
                       </div>
                     </div>
                     <div className="topbar-right">
@@ -2503,7 +2617,9 @@ function OnboardingView({
                     </div>
                   ) : (
                     <div className="picker-empty onboarding-inline-empty">
-                      No billing schedule rows yet. Upload a contract or add manual installments now.
+                      {form.feeType === "recurring"
+                        ? "No recurring billing rows yet. Upload a contract or add the first cycles now."
+                        : "No billing schedule rows yet. Upload a contract or add manual installments now."}
                     </div>
                   )}
                 </div>
@@ -2571,6 +2687,19 @@ function OnboardingView({
 
                 <div className="field-row">
                   <div className="field">
+                    <label>Fee type</label>
+                    <select
+                      value={form.feeType}
+                      onChange={(event) => onFormChange("feeType", event.target.value)}
+                    >
+                      {FEE_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field">
                     <label>Preferred payment method</label>
                     <select
                       value={form.preferredPaymentMethod}
@@ -2583,18 +2712,29 @@ function OnboardingView({
                       ))}
                     </select>
                   </div>
+                </div>
+
+                <div className="field-row">
                   <div className="field">
                     <label>Billing cadence</label>
                     <select
                       value={form.billingCadence}
                       onChange={(event) => onFormChange("billingCadence", event.target.value)}
                     >
-                      {BILLING_CADENCE_OPTIONS.map((option) => (
+                      {getBillingCadenceOptions(form.feeType).map((option) => (
                         <option key={option.value} value={option.value}>
                           {option.label}
                         </option>
                       ))}
                     </select>
+                  </div>
+                  <div className="field">
+                    <label>Billing behavior</label>
+                    <div className="picker-empty onboarding-inline-empty">
+                      {form.feeType === "recurring"
+                        ? "Recurring billing keeps cadence-driven cycles together. Add one row per cycle you want created now."
+                        : "One-time billing supports a single fee or multiple milestone/installment rows for the same engagement."}
+                    </div>
                   </div>
                 </div>
 
@@ -2706,7 +2846,8 @@ function OnboardingView({
             </div>
           </section>
 
-          <section className="section no-gap">
+          {currentCustomer ? (
+            <section className="section no-gap">
             <div className="section-head">
               <h2>{historyHeading}</h2>
             </div>
@@ -2736,48 +2877,8 @@ function OnboardingView({
                 </div>
               )}
             </div>
-
-            <div className="section-gap">
-              <div className="section-head">
-                <h2>Recent clients</h2>
-              </div>
-              <div className="section-desc">
-                The newest intake records feed customer search, invoice creation, and payment matching.
-              </div>
-              <div className="tcard">
-                {recentCustomers.map((customer) => (
-                  <div className="res-row onboarding-result" key={customer.id}>
-                    <div className="avatar">{customer.initials}</div>
-                    <div className="result-copy">
-                      <div className="cust">{customer.name}</div>
-                      <div className="sub">
-                        Customer ID {formatCustomerReference(customer)} ·{" "}
-                        {formatOnboardingStatus(customer.profile.onboardingStatus)} ·{" "}
-                        {formatPaymentMethod(customer.profile.preferredPaymentMethod)} ·{" "}
-                        {formatBillingCadence(customer.profile.billingCadence)}
-                      </div>
-                    </div>
-                    <div className="result-meta">
-                      <div className="sub">
-                        {customer.services[0] ? normalizeServiceLabel(customer.services[0]) : "Service not set"}
-                      </div>
-                      <div className="mono">
-                        {customer.profile.onboardedAt
-                          ? new Date(customer.profile.onboardedAt).toLocaleDateString()
-                          : "Pending"}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-                {!recentCustomers.length && (
-                  <div className="empty">
-                    <IconUsers size={14} />
-                    No onboarded clients yet
-                  </div>
-                )}
-              </div>
-            </div>
           </section>
+          ) : null}
         </div>
       </div>
     </div>
@@ -3821,6 +3922,7 @@ function SearchView({
                       dangerouslySetInnerHTML={{ __html: matchLine }}
                     />
                     <div className="sub search-cell-sub">
+                      {formatFeeType(customer.profile?.feeType)} ·{" "}
                       {formatPaymentMethod(customer.profile?.preferredPaymentMethod)} ·{" "}
                       {formatBillingCadence(customer.profile?.billingCadence)}
                     </div>
@@ -4185,6 +4287,15 @@ function formatPaymentMethod(value) {
   return labels[value] ?? "Payment method pending";
 }
 
+function formatFeeType(value) {
+  const labels = {
+    one_time: "One-time fee",
+    recurring: "Recurring fee",
+  };
+
+  return labels[value] ?? "Fee type pending";
+}
+
 function formatBillingCadence(value) {
   const labels = {
     per_milestone: "Per milestone",
@@ -4308,7 +4419,12 @@ function Customer360Page({
   const contractRecords = [...(customer.contracts ?? [])].sort(
     (left, right) => getComparableTime(right.uploadedAt) - getComparableTime(left.uploadedAt),
   );
-  const activeContract = contractRecords[0] ?? customer.activeContract ?? null;
+  const activeContract =
+    customer.activeContract ??
+    selectPreferredContractUpload(contractRecords, { requireBilling: true }) ??
+    selectPreferredContractUpload(contractRecords, { requireProfile: true }) ??
+    contractRecords[0] ??
+    null;
   const financeSnapshot = {
     openInvoices: customerInvoices.filter((invoice) => invoice.status === "sent" || invoice.status === "overdue")
       .length,
@@ -4370,13 +4486,21 @@ function Customer360Page({
 
           <div className="detail-card">
             <div className="detail-label">Contract and billing setup</div>
+            <div className="detail-kv"><span>Fee type</span><strong>{formatFeeType(customer.profile?.feeType)}</strong></div>
             <div className="detail-kv"><span>Billing cadence</span><strong>{formatBillingCadence(customer.profile?.billingCadence)}</strong></div>
             <div className="detail-kv"><span>Preferred payment</span><strong>{formatPaymentMethod(customer.profile?.preferredPaymentMethod)}</strong></div>
             <div className="detail-kv"><span>Service start</span><strong>{customer.profile?.serviceStartDate ? formatLongDate(customer.profile.serviceStartDate) : activeContract?.serviceStartDate ? formatLongDate(activeContract.serviceStartDate) : "Not captured"}</strong></div>
             <div className="detail-kv"><span>Enrolled services</span><strong>{customer.services.length ? summarizeServiceLabels(customer.services, 8).all.join(" · ") : "Not captured"}</strong></div>
             <div className="detail-kv"><span>Active contract</span><strong>{activeContract ? activeContract.fileName : "No contract uploaded yet"}</strong></div>
+            <div className="detail-kv"><span>Contract type</span><strong>{activeContract?.contractKindLabel || "Not captured"}</strong></div>
             <div className="detail-kv"><span>Contract fee</span><strong>{activeContract?.totalFee ? formatCurrency(activeContract.totalFee) : "Not captured"}</strong></div>
             <div className="detail-kv"><span>Installments</span><strong>{activeContract ? `${activeContract.installmentCount} planned` : "Not captured"}</strong></div>
+            {activeContract ? (
+              <div className="contract-badge-row">
+                <span className="contract-kind-badge">{activeContract.contractKindLabel || "Supporting document"}</span>
+                <span className="contract-kind-note">{getContractUsageLabel(activeContract)}</span>
+              </div>
+            ) : null}
             {activeContract ? (
               <a className="btn btn-sm" href={activeContract.downloadPath} rel="noreferrer" target="_blank">
                 Open uploaded contract
@@ -4400,53 +4524,69 @@ function Customer360Page({
             <h2>Contract records</h2>
           </div>
           <div className="section-desc">
-            Uploaded agreements, extracted critical fields, and the billing schedule that Setu used
-            to prefill onboarding and invoice drafts.
+            Uploaded agreements, proposals, NDAs, extracted critical fields, and the billing
+            schedule that Setu used to prefill onboarding and invoice drafts.
           </div>
           <div className="tcard">
             {contractRecords.length ? (
-              contractRecords.map((contract) => (
-                <div className="contract-record-row" key={contract.id}>
-                  <div>
-                    <div className="cust">{contract.fileName}</div>
-                    <div className="sub">
-                      Uploaded {formatDateTimeValue(contract.uploadedAt)}
-                      {contract.uploadedByUsername ? ` · by ${contract.uploadedByUsername}` : ""}
+              contractRecords.map((contract) => {
+                const serviceSummary = summarizeServiceLabels(
+                  contract.services.map((service) => normalizeServiceLabel(service.name)),
+                  6,
+                );
+
+                return (
+                  <div className="contract-record-row" key={contract.id}>
+                    <div>
+                      <div className="cust">{contract.fileName}</div>
+                      <div className="contract-badge-row">
+                        <span className="contract-kind-badge">
+                          {contract.contractKindLabel || "Supporting document"}
+                        </span>
+                        <span className="contract-kind-note">{getContractUsageLabel(contract)}</span>
+                      </div>
+                      <div className="sub">
+                        Uploaded {formatDateTimeValue(contract.uploadedAt)}
+                        {contract.uploadedByUsername ? ` · by ${contract.uploadedByUsername}` : ""}
+                        {contract.contractDate ? ` · Contract ${formatLongDate(contract.contractDate)}` : ""}
+                      </div>
                     </div>
-                  </div>
-                  <div className="contract-record-meta">
-                    <div className="sub">
-                      {contract.serviceStartDate
-                        ? `Start ${formatLongDate(contract.serviceStartDate)}`
-                        : "Start date not captured"}
-                    </div>
-                    <div className="sub">
-                      {contract.totalFee ? formatCurrency(contract.totalFee) : "Fee pending"} ·{" "}
-                      {contract.installmentCount} installment
-                      {contract.installmentCount === 1 ? "" : "s"}
-                    </div>
-                    <div className="contract-service-cloud">
-                      {contract.services.length ? (
-                        summarizeServiceLabels(
-                          contract.services.map((service) => normalizeServiceLabel(service.name)),
-                          6,
-                        ).visible.map((service) => (
-                          <span className="compact-service-pill" key={`${contract.id}-${service}`}>
-                            {service}
+                    <div className="contract-record-meta">
+                      <div className="sub">
+                        {contract.serviceStartDate
+                          ? `Start ${formatLongDate(contract.serviceStartDate)}`
+                          : "Start date not captured"}
+                      </div>
+                      <div className="sub">
+                        {contract.totalFee ? formatCurrency(contract.totalFee) : "Fee pending"} ·{" "}
+                        {contract.installmentCount} installment
+                        {contract.installmentCount === 1 ? "" : "s"}
+                      </div>
+                      <div className="contract-service-cloud">
+                        {serviceSummary.visible.length ? (
+                          serviceSummary.visible.map((service) => (
+                            <span className="compact-service-pill" key={`${contract.id}-${service}`}>
+                              {service}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="sub">No services extracted</span>
+                        )}
+                        {serviceSummary.overflowCount ? (
+                          <span className="compact-service-pill muted">
+                            +{serviceSummary.overflowCount} more
                           </span>
-                        ))
-                      ) : (
-                        <span className="sub">No services extracted</span>
-                      )}
+                        ) : null}
+                      </div>
+                    </div>
+                    <div className="contract-record-actions">
+                      <a className="btn btn-sm" href={contract.downloadPath} rel="noreferrer" target="_blank">
+                        Open
+                      </a>
                     </div>
                   </div>
-                  <div className="contract-record-actions">
-                    <a className="btn btn-sm" href={contract.downloadPath} rel="noreferrer" target="_blank">
-                      Open
-                    </a>
-                  </div>
-                </div>
-              ))
+                );
+              })
             ) : (
               <div className="empty">No contracts have been uploaded for this customer yet.</div>
             )}

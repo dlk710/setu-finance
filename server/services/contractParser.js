@@ -7,6 +7,37 @@ import {
   normalizeServiceLabel,
 } from "../../shared/serviceCatalog.js";
 
+const CONTRACT_KIND_DEFINITIONS = {
+  service_agreement: {
+    code: "service_agreement",
+    label: "Service agreement",
+    prefillProfile: true,
+    prefillBilling: true,
+    rank: 30,
+  },
+  proposal: {
+    code: "proposal",
+    label: "Proposal",
+    prefillProfile: true,
+    prefillBilling: true,
+    rank: 20,
+  },
+  nda: {
+    code: "nda",
+    label: "Confidentiality / NDA",
+    prefillProfile: false,
+    prefillBilling: false,
+    rank: 0,
+  },
+  supporting: {
+    code: "supporting",
+    label: "Supporting document",
+    prefillProfile: false,
+    prefillBilling: false,
+    rank: 0,
+  },
+};
+
 function buildPreview(text, maxLength = 420) {
   const normalized = String(text || "").replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -26,12 +57,19 @@ function normalizeWhitespace(value) {
     .trim();
 }
 
+function normalizeInlineText(value) {
+  return normalizeWhitespace(value).replace(/\s+/g, " ").trim();
+}
+
 function formatDateOnly(value) {
   if (!value) {
     return null;
   }
 
-  const parsed = new Date(value);
+  const sanitized = String(value)
+    .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+    .trim();
+  const parsed = new Date(sanitized);
   if (Number.isNaN(parsed.getTime())) {
     return null;
   }
@@ -52,12 +90,14 @@ function parseCurrencyAmount(value) {
   return Math.round(numeric * 100) / 100;
 }
 
-function extractEmail(text) {
-  const match = String(text || "").match(/[A-Z0-9._%*+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
-  return match?.[0] ?? null;
+function extractEmails(text) {
+  return Array.from(
+    String(text || "").matchAll(/[A-Z0-9._%*+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi),
+    (match) => match[0],
+  );
 }
 
-function extractPhone(text) {
+function extractPhoneValue(text) {
   const match = String(text || "").match(
     /(\+?1[\s.-]?)?(?:\(?\d{3}\)?[\s.-]?)\d{3}[\s.-]?\d{4}/,
   );
@@ -76,8 +116,95 @@ function extractLabeledLineValue(text, labels) {
   return null;
 }
 
+function containsNormalizedPhrase(haystack, needle) {
+  const normalizedHaystack = normalizeWhitespace(String(haystack || "")).toLowerCase();
+  const normalizedNeedle = normalizeWhitespace(String(needle || "")).toLowerCase();
+  if (!normalizedNeedle) {
+    return false;
+  }
+  return new RegExp(`(^|\\s)${normalizedNeedle.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(\\s|$)`, "i").test(
+    normalizedHaystack,
+  );
+}
+
+function isLikelyPersonName(value) {
+  const normalized = String(value || "")
+    .replace(/[\[\]]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!normalized || normalized.length > 80) {
+    return false;
+  }
+
+  if (/(presented by|created by|specialist|agreement|summary|client|consultant|signature)/i.test(normalized)) {
+    return false;
+  }
+
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  if (parts.length < 2 || parts.length > 5) {
+    return false;
+  }
+
+  return parts.every((part) => /^[A-Z][A-Za-z.'-]{1,24}$/.test(part));
+}
+
+function findPreparedForName(text) {
+  const boundedMatch = String(text || "").match(
+    /prepared for\s*\[?([A-Z][A-Za-z.' -]{2,80}?)\]?\s*(?:presented by|created by|inbound client specialist|agreement|summary|$)/i,
+  );
+  if (isLikelyPersonName(boundedMatch?.[1])) {
+    return boundedMatch[1].replace(/\s{2,}/g, " ").trim();
+  }
+
+  const lines = String(text || "")
+    .split(/\n+/)
+    .map((line) => line.replace(/[\[\]]/g, "").replace(/\s{2,}/g, " ").trim())
+    .filter(Boolean);
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!/^prepared for\b/i.test(line)) {
+      continue;
+    }
+
+    const inlineValue = line.replace(/^prepared for\b[:\s-]*/i, "").trim();
+    if (isLikelyPersonName(inlineValue)) {
+      return inlineValue;
+    }
+
+    for (let nextIndex = index + 1; nextIndex < Math.min(lines.length, index + 4); nextIndex += 1) {
+      if (isLikelyPersonName(lines[nextIndex])) {
+        return lines[nextIndex];
+      }
+    }
+  }
+
+  const inlineMatch = String(text || "").match(/prepared for\s*\[?([A-Z][A-Za-z.' -]{2,80})\]?/i);
+  if (isLikelyPersonName(inlineMatch?.[1])) {
+    return inlineMatch[1].replace(/\s{2,}/g, " ").trim();
+  }
+
+  return null;
+}
+
+function findAgreementCounterpartyName(text) {
+  const patterns = [
+    /\band\s+(?:mr\.?|ms\.?|mrs\.?)?\s*\[?([A-Z][A-Za-z.' -]{2,80})\]?\s*,?\s*(?:residing|\(the\s*[“"]?(?:client|receiving party)[”"]?\))/i,
+    /\band\s+\[?([A-Z][A-Za-z.' -]{2,80})\]?\s*\(the\s*[“"]?client[”"]?\)/i,
+  ];
+  for (const pattern of patterns) {
+    const match = String(text || "").match(pattern);
+    if (match?.[1]) {
+      return match[1].replace(/\s{2,}/g, " ").trim();
+    }
+  }
+  return null;
+}
+
 function parseDateFromFragment(value) {
-  const raw = String(value || "").trim();
+  const raw = String(value || "")
+    .replace(/\b(\d{1,2})(st|nd|rd|th)\b/gi, "$1")
+    .trim();
   if (!raw) {
     return null;
   }
@@ -97,6 +224,47 @@ function parseDateFromFragment(value) {
   return formatDateOnly(match);
 }
 
+function extractLeadingDocumentDate(text) {
+  const firstLine = String(text || "").split(/\n+/)[0] ?? "";
+  return parseDateFromFragment(firstLine);
+}
+
+function extractServiceStartDateFromPhrases(text) {
+  const patterns = [
+    /\b(?:agreement|contract)\s+shall\s+begin\s+on\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?\,?\s+\d{4})/i,
+    /\bwork\s+will\s+be\s+started\s+on\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?\,?\s+\d{4})/i,
+    /\bservice\s+start(?:s|ing)?\s+on\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?\,?\s+\d{4})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = String(text || "").match(pattern);
+    const parsed = parseDateFromFragment(match?.[1] ?? null);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
+function extractContractDateFromPhrases(text) {
+  const patterns = [
+    /\bexecuted\s+on\s+this\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?\,?\s+\d{4})/i,
+    /\beffective\s+date\s*[:\-]?\s*([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?\,?\s+\d{4})/i,
+    /\bdated\s+([A-Za-z]+\s+\d{1,2}(?:st|nd|rd|th)?\,?\s+\d{4})/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = String(text || "").match(pattern);
+    const parsed = parseDateFromFragment(match?.[1] ?? null);
+    if (parsed) {
+      return parsed;
+    }
+  }
+
+  return null;
+}
+
 function extractDateAfterLabels(text, labels) {
   for (const label of labels) {
     const pattern = new RegExp(`${label}\\s*[:\\-]?\\s*([^\\n\\r]+)`, "i");
@@ -110,6 +278,11 @@ function extractDateAfterLabels(text, labels) {
 }
 
 function extractClientName(text) {
+  const preparedFor = findPreparedForName(text);
+  if (preparedFor) {
+    return preparedFor;
+  }
+
   const labeled = extractLabeledLineValue(text, [
     "client name",
     "customer name",
@@ -122,16 +295,47 @@ function extractClientName(text) {
     return labeled.replace(/\s{2,}/g, " ").trim();
   }
 
+  const agreementCounterparty = findAgreementCounterpartyName(text);
+  if (agreementCounterparty) {
+    return agreementCounterparty;
+  }
+
   const paragraphMatch = String(text || "").match(
     /\bthis agreement is between\s+([A-Za-z][A-Za-z.' -]{2,80})\s+and\b/i,
   );
   return paragraphMatch?.[1]?.trim() ?? null;
 }
 
+function extractCustomerEmail(text) {
+  const labeled = extractLabeledLineValue(text, [
+    "client email",
+    "customer email",
+    "email of client",
+    "email",
+  ]);
+  const labeledEmail = labeled ? extractEmails(labeled)[0] ?? null : null;
+  if (labeledEmail && !/@ascendhsi\.com$/i.test(labeledEmail)) {
+    return labeledEmail;
+  }
+  return null;
+}
+
+function extractCustomerPhone(text) {
+  const labeled = extractLabeledLineValue(text, [
+    "client phone",
+    "customer phone",
+    "mobile phone",
+    "phone",
+  ]);
+  return labeled ? extractPhoneValue(labeled) : null;
+}
+
 function extractTotalFee(text) {
   const patterns = [
+    /total\s+ascend\s+fee[^$\n\r]{0,40}\$([0-9,]+(?:\.[0-9]{2})?)/i,
     /(?:total|professional|legal|engagement|program)\s+fee[^$\n\r]{0,40}\$([0-9,]+(?:\.[0-9]{2})?)/i,
-    /(?:fee|price)[^$\n\r]{0,25}\$([0-9,]+(?:\.[0-9]{2})?)/i,
+    /(?:fee|price|cost|package)[^$\n\r]{0,30}\$([0-9,]+(?:\.[0-9]{2})?)/i,
+    /(?:drafting\s*&\s*filing|lor\s+assistance\s+package)[^$\n\r]{0,40}\$([0-9,]+(?:\.[0-9]{2})?)/i,
   ];
 
   for (const pattern of patterns) {
@@ -174,6 +378,32 @@ function detectBillingCadence({ installments, serviceStartDate }) {
   return serviceStartDate ? "custom" : "per_milestone";
 }
 
+function detectFeeType({ billingCadence, installments = [], text = "" }) {
+  const normalizedCadence = String(billingCadence || "").trim().toLowerCase();
+  if (normalizedCadence === "monthly") {
+    return "recurring";
+  }
+
+  const normalizedText = normalizeInlineText(text).toLowerCase();
+  if (
+    /\b(recurring|subscription|monthly fee|monthly billing|ongoing monthly|auto-renew)\b/i.test(
+      normalizedText,
+    )
+  ) {
+    return "recurring";
+  }
+
+  if (normalizedCadence === "per_milestone" || normalizedCadence === "custom") {
+    return "one_time";
+  }
+
+  if ((Array.isArray(installments) ? installments : []).length > 1) {
+    return "one_time";
+  }
+
+  return "one_time";
+}
+
 function extractBillingCadence(text) {
   const labeled = extractLabeledLineValue(text, [
     "billing cadence",
@@ -210,12 +440,73 @@ function splitIntoCandidateLines(text) {
   const rawLines = normalized
     .split(/\n+/)
     .flatMap((line) =>
-      line.split(/(?=(?:installment|milestone|payment)\s+\d+)/gi),
+      line
+        .split(/(?=(?:installment|milestone|payment)\s+\d+)/gi)
+        .flatMap((part) => part.split(/(?=\b\d+\.\s)/g))
+        .flatMap((part) => part.split(/(?=●\s)/g)),
     )
     .map((line) => line.trim())
     .filter(Boolean);
 
   return rawLines;
+}
+
+function classifyContractDocument({ fileName, text }) {
+  const normalized = normalizeInlineText(`${String(fileName || "")}\n${String(text || "")}`).toLowerCase();
+
+  if (
+    normalized.includes("retainer agreement") ||
+    normalized.includes("drafting & filing agreement") ||
+    normalized.includes("drafting and filing agreement") ||
+    normalized.includes("service agreement")
+  ) {
+    return CONTRACT_KIND_DEFINITIONS.service_agreement;
+  }
+
+  if (normalized.includes("proposal") || normalized.includes("work summary")) {
+    return CONTRACT_KIND_DEFINITIONS.proposal;
+  }
+
+  if (
+    normalized.includes("confidentiality") ||
+    normalized.includes("non-disclosure") ||
+    normalized.includes("non disclosure") ||
+    normalized.includes("data privacy")
+  ) {
+    return CONTRACT_KIND_DEFINITIONS.nda;
+  }
+
+  return CONTRACT_KIND_DEFINITIONS.supporting;
+}
+
+function extractContractSpecificServices(text, contractKind) {
+  const normalized = normalizeInlineText(String(text || "")).toLowerCase();
+  const services = [];
+
+  if (normalized.includes("lor assistance package")) {
+    services.push("LOR package");
+  }
+
+  if (normalized.includes("drafting & filing") || normalized.includes("drafting and filing")) {
+    services.push("Drafting & filing");
+  }
+
+  if (
+    contractKind.code !== "nda" &&
+    (normalized.includes("original contribution criteria") || normalized.includes("original contribution"))
+  ) {
+    services.push("Contributions");
+  }
+
+  return Array.from(new Set(services)).map((serviceName) => {
+    const description = describeService(serviceName);
+    return {
+      code: description.code,
+      name: description.shortLabel,
+      longLabel: description.longLabel,
+      isCustom: description.isCustom,
+    };
+  });
 }
 
 function findServiceMention(text) {
@@ -227,7 +518,7 @@ function findServiceMention(text) {
       definition.longLabel,
       ...(definition.aliases ?? []),
     ];
-    if (candidates.some((candidate) => normalized.includes(String(candidate).toLowerCase()))) {
+    if (candidates.some((candidate) => containsNormalizedPhrase(normalized, candidate))) {
       return definition.shortLabel;
     }
   }
@@ -235,8 +526,14 @@ function findServiceMention(text) {
 }
 
 function extractServiceMentions(text) {
+  const contractKind = classifyContractDocument({ text });
+  if (!contractKind.prefillProfile) {
+    return [];
+  }
+
   const catalog = getServiceCatalog();
-  const normalized = String(text || "").toLowerCase();
+  const scopedText = String(text || "").slice(0, 2200);
+  const normalized = scopedText.toLowerCase();
   const matches = [];
 
   for (const definition of catalog) {
@@ -245,7 +542,7 @@ function extractServiceMentions(text) {
       definition.longLabel,
       ...(definition.aliases ?? []),
     ];
-    if (candidates.some((candidate) => normalized.includes(String(candidate).toLowerCase()))) {
+    if (candidates.some((candidate) => containsNormalizedPhrase(normalized, candidate))) {
       matches.push({
         code: definition.code,
         name: definition.shortLabel,
@@ -255,15 +552,43 @@ function extractServiceMentions(text) {
     }
   }
 
-  return matches;
+  const specific = extractContractSpecificServices(scopedText, contractKind);
+  const combined = Array.from(
+    new Map(
+      [...specific, ...matches].map((service) => [service.code ?? service.name, service]),
+    ).values(),
+  );
+
+  if (combined.some((service) => service.code === "drafting-filing")) {
+    return combined.filter((service) => service.code !== "filing-support");
+  }
+
+  return combined;
 }
 
-function extractInstallments(text, { services, totalFee, serviceStartDate }) {
+function extractInstallments(text, { services, totalFee, serviceStartDate, contractKind }) {
+  if (!contractKind?.prefillBilling) {
+    return [];
+  }
+
   const lines = splitIntoCandidateLines(text);
   const entries = [];
 
   for (const line of lines) {
-    if (!/\$[0-9]/.test(line) || !/(installment|milestone|payment|due)/i.test(line)) {
+    if (
+      /(government fees?|premium processing|i-140|i-485|late payment|penalty|asylum program|responsibility of the client)/i.test(
+        line,
+      )
+    ) {
+      continue;
+    }
+
+    if (
+      !/\$[0-9]/.test(line) ||
+      !/(installment\s*\d+|final installment|milestone\s*\d+|payment\s*\d+|phase\s*\d+|due date|initiation fee|administrative fee|package)/i.test(
+        line,
+      )
+    ) {
       continue;
     }
 
@@ -275,10 +600,19 @@ function extractInstallments(text, { services, totalFee, serviceStartDate }) {
 
     const dueDate = parseDateFromFragment(line) ?? serviceStartDate ?? null;
     const labelMatch = line.match(
-      /\b((?:installment|milestone|payment)\s*(?:#)?\s*\d+[^$]*)/i,
+      /\b((?:initiation fee|administrative fee|final installment|installment|milestone|payment|phase|package)\s*(?:#)?\s*\d*[^$]*)/i,
     );
-    const label = labelMatch?.[1]?.replace(/\s+/g, " ").trim() ?? `Installment ${entries.length + 1}`;
-    const matchedService = findServiceMention(line) ?? services[0]?.name ?? "General service";
+    let label = labelMatch?.[1]?.replace(/\s+/g, " ").trim() ?? `Installment ${entries.length + 1}`;
+    if (/administrative fee/i.test(label)) {
+      label = "Administrative fee";
+    } else if (/initiation fee/i.test(label)) {
+      label = "Initiation fee";
+    } else if (/final installment/i.test(label)) {
+      label = "Final installment";
+    } else if (/package/i.test(label) && services[0]?.name) {
+      label = `${normalizeServiceLabel(services[0].name)} fee`;
+    }
+    const matchedService = services[0]?.name ?? findServiceMention(line) ?? "General service";
 
     entries.push({
       label,
@@ -290,10 +624,30 @@ function extractInstallments(text, { services, totalFee, serviceStartDate }) {
     });
   }
 
-  const uniqueEntries = entries.filter((entry, index, current) => {
-    const key = `${entry.label}|${entry.amount}|${entry.dueDate ?? ""}`;
-    return current.findIndex((candidate) => `${candidate.label}|${candidate.amount}|${candidate.dueDate ?? ""}` === key) === index;
-  });
+  const uniqueEntries = [];
+  for (const entry of entries) {
+    const existingIndex = uniqueEntries.findIndex((candidate) => {
+      const sameAmount = Number(candidate.amount || 0) === Number(entry.amount || 0);
+      const sameDate = (candidate.dueDate ?? "") === (entry.dueDate ?? "");
+      const sameService = normalizeServiceLabel(candidate.serviceName) === normalizeServiceLabel(entry.serviceName);
+      const normalizedCandidateLabel = candidate.label.toLowerCase();
+      const normalizedEntryLabel = entry.label.toLowerCase();
+      const sameLabel =
+        normalizedCandidateLabel === normalizedEntryLabel ||
+        normalizedCandidateLabel.includes(normalizedEntryLabel) ||
+        normalizedEntryLabel.includes(normalizedCandidateLabel);
+      return sameAmount && sameDate && sameService && sameLabel;
+    });
+
+    if (existingIndex === -1) {
+      uniqueEntries.push(entry);
+      continue;
+    }
+
+    if (entry.label.length < uniqueEntries[existingIndex].label.length) {
+      uniqueEntries[existingIndex] = entry;
+    }
+  }
 
   if (!uniqueEntries.length && totalFee !== null) {
     uniqueEntries.push({
@@ -331,6 +685,10 @@ function normalizeStructuredInstallments(values = []) {
 }
 
 function parseStructuredContract(jsonValue = {}) {
+  const contractKind = classifyContractDocument({
+    fileName: jsonValue.fileName ?? "",
+    text: JSON.stringify(jsonValue),
+  });
   const clientName =
     jsonValue.clientName ??
     jsonValue.customerName ??
@@ -373,7 +731,25 @@ function parseStructuredContract(jsonValue = {}) {
     .filter((service) => service.name);
   const totalFee = parseCurrencyAmount(jsonValue.totalFee ?? jsonValue.fee ?? jsonValue.contract?.totalFee);
   const installments = normalizeStructuredInstallments(jsonValue.installments ?? jsonValue.invoiceSchedule ?? []);
+  const billingCadence =
+    String(jsonValue.billingCadence || "").trim() ||
+    detectBillingCadence({
+      installments,
+      serviceStartDate,
+    });
+  const feeType =
+    String(jsonValue.feeType || "").trim() ||
+    detectFeeType({
+      billingCadence,
+      installments,
+      text: JSON.stringify(jsonValue),
+    });
   return {
+    contractKind: contractKind.code,
+    contractKindLabel: contractKind.label,
+    prefillProfile: contractKind.prefillProfile,
+    prefillBilling: contractKind.prefillBilling,
+    prefillRank: contractKind.rank,
     clientName,
     customerEmail: email,
     customerPhone: phone,
@@ -381,15 +757,11 @@ function parseStructuredContract(jsonValue = {}) {
     contractDate,
     services,
     totalFee,
+    feeType,
     installments: installments.length
       ? installments
-      : extractInstallments("", { services, totalFee, serviceStartDate }),
-    billingCadence:
-      String(jsonValue.billingCadence || "").trim() ||
-      detectBillingCadence({
-        installments,
-        serviceStartDate,
-      }),
+      : extractInstallments("", { services, totalFee, serviceStartDate, contractKind }),
+    billingCadence,
   };
 }
 
@@ -405,13 +777,39 @@ async function extractPdfText(buffer) {
   for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
     const page = await document.getPage(pageNumber);
     const content = await page.getTextContent();
-    const lines = content.items
-      .map((item) => item.str)
-      .join(" ")
-      .replace(/\s{2,}/g, " ")
-      .trim();
-    if (lines) {
-      pages.push(lines);
+    const groupedLines = [];
+    let currentLine = [];
+    let currentY = null;
+
+    for (const item of content.items) {
+      if (!item?.str) {
+        continue;
+      }
+
+      const y = Number(item.transform?.[5] ?? 0);
+      if (currentLine.length && currentY !== null && Math.abs(y - currentY) > 2.5) {
+        const line = currentLine.join(" ").replace(/\s{2,}/g, " ").trim();
+        if (line) {
+          groupedLines.push(line);
+        }
+        currentLine = [item.str];
+        currentY = y;
+        continue;
+      }
+
+      currentLine.push(item.str);
+      currentY = currentY === null ? y : currentY;
+    }
+
+    if (currentLine.length) {
+      const line = currentLine.join(" ").replace(/\s{2,}/g, " ").trim();
+      if (line) {
+        groupedLines.push(line);
+      }
+    }
+
+    if (groupedLines.length) {
+      pages.push(groupedLines.join("\n"));
     }
   }
 
@@ -458,25 +856,27 @@ async function extractContractText({ mimeType, buffer, fileName }) {
 
 function parseContractText(text) {
   const normalizedText = normalizeWhitespace(text);
+  const contractKind = classifyContractDocument({ text: normalizedText });
   const clientName = extractClientName(normalizedText);
   const serviceStartDate = extractDateAfterLabels(normalizedText, [
     "service start date",
     "start date",
     "engagement start",
     "effective date",
-  ]);
+  ]) ?? extractServiceStartDateFromPhrases(normalizedText);
   const contractDate = extractDateAfterLabels(normalizedText, [
     "contract date",
     "agreement date",
     "date of agreement",
     "effective date",
-  ]);
+  ]) ?? extractContractDateFromPhrases(normalizedText) ?? extractLeadingDocumentDate(normalizedText);
   const services = extractServiceMentions(normalizedText);
   const totalFee = extractTotalFee(normalizedText);
   const installments = extractInstallments(normalizedText, {
     services,
     totalFee,
     serviceStartDate,
+    contractKind,
   });
   const billingCadence =
     extractBillingCadence(normalizedText) ||
@@ -484,19 +884,32 @@ function parseContractText(text) {
       installments,
       serviceStartDate,
     });
+  const feeType = detectFeeType({
+    billingCadence,
+    installments,
+    text: normalizedText,
+  });
 
   return {
+    contractKind: contractKind.code,
+    contractKindLabel: contractKind.label,
+    prefillProfile: contractKind.prefillProfile,
+    prefillBilling: contractKind.prefillBilling,
+    prefillRank: contractKind.rank,
     clientName,
-    customerEmail: extractEmail(normalizedText),
-    customerPhone: extractPhone(normalizedText),
+    customerEmail: extractCustomerEmail(normalizedText),
+    customerPhone: extractCustomerPhone(normalizedText),
     serviceStartDate,
     contractDate,
     services,
     totalFee,
+    feeType,
     installments,
     billingCadence,
   };
 }
+
+export { classifyContractDocument };
 
 export async function parseContractUpload({ fileName, mimeType, buffer }) {
   const extractedText = await extractContractText({ fileName, mimeType, buffer });
@@ -517,6 +930,13 @@ export async function parseContractUpload({ fileName, mimeType, buffer }) {
       : [];
 
   const normalizedInstallments = normalizeStructuredInstallments(parsed.installments ?? []);
+  const normalizedTotalFee =
+    parsed.totalFee ??
+    (normalizedInstallments.length
+      ? Math.round(
+          normalizedInstallments.reduce((sum, entry) => sum + Number(entry.amount || 0), 0) * 100,
+        ) / 100
+      : null);
 
   return {
     fileName,
@@ -524,6 +944,11 @@ export async function parseContractUpload({ fileName, mimeType, buffer }) {
     sizeBytes: buffer.length,
     extractedTextPreview: buildPreview(normalizedText),
     parsed: {
+      contractKind: parsed.contractKind ?? null,
+      contractKindLabel: parsed.contractKindLabel ?? null,
+      prefillProfile: Boolean(parsed.prefillProfile),
+      prefillBilling: Boolean(parsed.prefillBilling),
+      prefillRank: Number(parsed.prefillRank || 0),
       clientName: parsed.clientName ?? null,
       customerEmail: parsed.customerEmail ?? null,
       customerPhone: parsed.customerPhone ?? null,
@@ -538,15 +963,19 @@ export async function parseContractUpload({ fileName, mimeType, buffer }) {
           isCustom: service.isCustom ?? description.isCustom,
         };
       }),
-      totalFee: parsed.totalFee ?? null,
+      totalFee: normalizedTotalFee,
+      feeType: parsed.feeType ?? "one_time",
       billingCadence: parsed.billingCadence ?? "",
       installments:
         normalizedInstallments.length
           ? normalizedInstallments
           : extractInstallments(normalizedText, {
               services: fallbackServices,
-              totalFee: parsed.totalFee ?? null,
+              totalFee: normalizedTotalFee,
               serviceStartDate: parsed.serviceStartDate ?? null,
+              contractKind: {
+                prefillBilling: Boolean(parsed.prefillBilling),
+              },
             }),
     },
   };

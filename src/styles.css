@@ -269,6 +269,24 @@ button {
   align-items: flex-start;
 }
 
+.logo-home {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.logo-home:hover .letters,
+.logo-home:focus-visible .letters {
+  color: var(--amber-deep);
+}
+
+.logo-home:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--amber) 65%, white);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
 .letters {
   font-size: 26px;
   font-weight: 400;
@@ -438,6 +456,10 @@ button {
 }
 
 .search-content {
+  max-width: none;
+}
+
+.onboarding-content {
   max-width: none;
 }
 
@@ -1243,6 +1265,7 @@ button {
 .contract-record-actions {
   display: flex;
   justify-content: flex-end;
+  align-self: center;
 }
 
 .admin-form-card {
@@ -1995,6 +2018,8 @@ button {
 }
 
 .onboarding-layout {
+  display: grid;
+  gap: 18px;
   align-items: start;
 }
 
@@ -2013,6 +2038,13 @@ button {
 
 .hidden-file-input {
   display: none;
+}
+
+.contract-upload-trigger {
+  flex: 0 0 auto;
+  min-width: max-content;
+  justify-content: center;
+  padding-inline: 14px;
 }
 
 .onboarding-block-head,
@@ -2157,6 +2189,33 @@ button {
   gap: 12px;
 }
 
+.contract-badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.contract-kind-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--amber-soft) 70%, var(--paper));
+  color: var(--text-1);
+  font-size: 11px;
+  font-family: var(--mono);
+  line-height: 1.15;
+}
+
+.contract-kind-note {
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .contract-upload-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2201,13 +2260,19 @@ button {
 
 .invoice-schedule-row {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 120px 110px 150px auto;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
   align-items: end;
 }
 
 .invoice-schedule-row .field {
   margin-bottom: 0;
+}
+
+.invoice-schedule-row .custom-service-remove {
+  min-height: 0;
+  align-items: flex-end;
+  justify-content: flex-start;
 }
 
 .onboarding-inline-empty {

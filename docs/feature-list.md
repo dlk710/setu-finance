@@ -5,6 +5,7 @@ This is the current end-to-end feature inventory for Setu Finance.
 ## 1. Client Onboarding
 
 - Dedicated contract-first onboarding workflow before billing starts
+- Full-width onboarding experience for cleaner finance intake on laptop screens
 - Multi-contract upload section during onboarding
 - Contract preview parsing for services, fee, installments, service-start date, and key contact details
 - Manual override support before save so admins can correct or add fields after parsing
@@ -15,6 +16,7 @@ This is the current end-to-end feature inventory for Setu Finance.
 - Timestamped service enrollment history
 - Support for later add-on enrollments without losing prior history
 - Compact short-name service list for faster finance intake
+- Fee-type support for one-time and recurring engagements with billing rows generated accordingly
 
 ## 2. Customer Records And Search
 
@@ -97,6 +99,7 @@ This is the current end-to-end feature inventory for Setu Finance.
 ## 7. Dashboard And Reporting
 
 - Finance dashboard with collection metrics and queue visibility
+- Dashboard is the default landing page for signed-in users
 - Time-series received-amount chart
 - Day, week, month, and year drilldowns
 - Duplicate-blocked payments excluded from totals
@@ -114,6 +117,8 @@ This is the current end-to-end feature inventory for Setu Finance.
 ## 9. Admin, Security, And Auditability
 
 - Portal login required before finance data is visible
+- Browser tab uses the product name `Setu.Finance`
+- Sidebar `setu` brand acts as a home link back to the dashboard
 - Activity log for major actions
 - Exception resolution trail with actor attribution
 - Durable transaction history

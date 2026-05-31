@@ -75,6 +75,14 @@ Change them in [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinancePr
 - `PORTAL_PASSWORD`
 - `AUTH_SESSION_SECRET`
 
+## Current portal experience
+
+- default landing page is the dashboard at `/dashboard`
+- the browser tab title is `Setu.Finance`
+- the `setu` brand in the left rail is a home action that returns users to the dashboard
+- onboarding now uses a full-width single-column intake flow instead of a split rail
+- service history appears only when an existing customer is selected for follow-up enrollment
+
 ## Postgres backend
 
 The backend now uses PostgreSQL as the system of record.

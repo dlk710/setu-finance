@@ -82,6 +82,55 @@ function formatDateOnlyOutput(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
 }
 
+function getContractMetaValue(contractLike, key) {
+  return (
+    contractLike?.[key] ??
+    contractLike?.parsed?.[key] ??
+    contractLike?.criticalFields?.[key] ??
+    contractLike?.parsed_fields?.[key] ??
+    null
+  );
+}
+
+function getContractPrefillRank(contractLike) {
+  return Number(getContractMetaValue(contractLike, "prefillRank") || 0) || 0;
+}
+
+function selectPreferredContract(contracts = [], { requireBilling = false, requireProfile = false } = {}) {
+  const filtered = (Array.isArray(contracts) ? contracts : []).filter((contract) => {
+    if (requireBilling && !Boolean(getContractMetaValue(contract, "prefillBilling"))) {
+      return false;
+    }
+    if (requireProfile && !Boolean(getContractMetaValue(contract, "prefillProfile"))) {
+      return false;
+    }
+    return true;
+  });
+
+  return filtered.sort((left, right) => {
+    const rankDiff = getContractPrefillRank(right) - getContractPrefillRank(left);
+    if (rankDiff !== 0) {
+      return rankDiff;
+    }
+
+    const rightTime = new Date(
+      right?.uploadedAt ??
+        right?.created_at ??
+        getContractMetaValue(right, "contractDate") ??
+        getContractMetaValue(right, "serviceStartDate") ??
+        0,
+    ).getTime();
+    const leftTime = new Date(
+      left?.uploadedAt ??
+        left?.created_at ??
+        getContractMetaValue(left, "contractDate") ??
+        getContractMetaValue(left, "serviceStartDate") ??
+        0,
+    ).getTime();
+    return rightTime - leftTime;
+  })[0] ?? null;
+}
+
 function mapInvoiceRow(row) {
   return {
     id: row.id,
@@ -287,6 +336,7 @@ function createEmptyCustomerProfile(overrides = {}) {
     onboardingStatus: "needs_follow_up",
     intakeSource: "invoice",
     preferredPaymentMethod: "zelle",
+    feeType: "one_time",
     billingCadence: "per_milestone",
     referralSource: null,
     billingNotes: null,
@@ -308,6 +358,7 @@ function mapCustomerProfileRow(row) {
     onboardingStatus: row.onboarding_status,
     intakeSource: row.intake_source,
     preferredPaymentMethod: row.preferred_payment_method,
+    feeType: row.fee_type,
     billingCadence: row.billing_cadence,
     referralSource: row.referral_source ?? null,
     billingNotes: row.billing_notes ?? null,
@@ -387,6 +438,7 @@ function mapServiceEnrollmentRow(row) {
 
 function mapContractRow(row) {
   const criticalFields = row.critical_fields ?? {};
+  const parsedFields = row.parsed_fields ?? {};
   const services = Array.isArray(criticalFields.services)
     ? criticalFields.services.map((service) => {
         const description = describeService(service.name ?? service.shortLabel ?? service.longLabel ?? service);
@@ -421,6 +473,11 @@ function mapContractRow(row) {
     serviceStartDate: formatDateOnlyOutput(row.service_start_date),
     totalFee: row.total_fee === null || row.total_fee === undefined ? null : Number(row.total_fee),
     installmentCount: Number(row.installment_count || installments.length || 0),
+    contractKind: parsedFields.contractKind ?? criticalFields.contractKind ?? null,
+    contractKindLabel: parsedFields.contractKindLabel ?? criticalFields.contractKindLabel ?? null,
+    prefillProfile: Boolean(parsedFields.prefillProfile ?? criticalFields.prefillProfile),
+    prefillBilling: Boolean(parsedFields.prefillBilling ?? criticalFields.prefillBilling),
+    prefillRank: Number(parsedFields.prefillRank ?? criticalFields.prefillRank ?? 0) || 0,
     extractedTextPreview: row.extracted_text_preview ?? null,
     services,
     installments,
@@ -476,6 +533,7 @@ async function upsertCustomerProfile(client, customerId, profile) {
         onboarding_status,
         intake_source,
         preferred_payment_method,
+        fee_type,
         billing_cadence,
         referral_source,
         billing_notes,
@@ -490,8 +548,8 @@ async function upsertCustomerProfile(client, customerId, profile) {
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10, $11, $12, $13, $14,
-        COALESCE($15::timestamptz, NOW()),
+        $1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10, $11, $12, $13, $14, $15,
+        COALESCE($16::timestamptz, NOW()),
         NOW()
       )
       ON CONFLICT (customer_id)
@@ -499,6 +557,7 @@ async function upsertCustomerProfile(client, customerId, profile) {
       SET onboarding_status = EXCLUDED.onboarding_status,
           intake_source = EXCLUDED.intake_source,
           preferred_payment_method = EXCLUDED.preferred_payment_method,
+          fee_type = EXCLUDED.fee_type,
           billing_cadence = EXCLUDED.billing_cadence,
           referral_source = EXCLUDED.referral_source,
           billing_notes = EXCLUDED.billing_notes,
@@ -517,6 +576,7 @@ async function upsertCustomerProfile(client, customerId, profile) {
       normalizedProfile.onboardingStatus,
       normalizedProfile.intakeSource,
       normalizedProfile.preferredPaymentMethod,
+      normalizedProfile.feeType,
       normalizedProfile.billingCadence,
       normalizedProfile.referralSource,
       normalizedProfile.billingNotes,
@@ -779,6 +839,11 @@ async function insertContractRecords(
 
     const contractId = `contract-${crypto.randomUUID()}`;
     const criticalFields = {
+      contractKind: contractUpload.parsed?.contractKind ?? null,
+      contractKindLabel: contractUpload.parsed?.contractKindLabel ?? null,
+      prefillProfile: Boolean(contractUpload.parsed?.prefillProfile),
+      prefillBilling: Boolean(contractUpload.parsed?.prefillBilling),
+      prefillRank: Number(contractUpload.parsed?.prefillRank || 0) || 0,
       clientName: contractUpload.parsed?.clientName ?? null,
       customerEmail: contractUpload.parsed?.customerEmail ?? null,
       customerPhone: contractUpload.parsed?.customerPhone ?? null,
@@ -837,6 +902,7 @@ async function insertContractRecords(
     insertedContracts.push({
       id: contractId,
       ...criticalFields,
+      uploadedAt: uploadedAt.toISOString(),
     });
   }
 
@@ -1248,6 +1314,7 @@ async function hydratePortalState(client) {
       onboarding_status,
       intake_source,
       preferred_payment_method,
+      fee_type,
       billing_cadence,
       referral_source,
       billing_notes,
@@ -1462,9 +1529,11 @@ async function hydratePortalState(client) {
 
     const contract = mapContractRow(row);
     customer.contracts.push(contract);
-    if (!customer.activeContract) {
-      customer.activeContract = contract;
-    }
+    customer.activeContract =
+      selectPreferredContract(customer.contracts, { requireBilling: true }) ??
+      selectPreferredContract(customer.contracts, { requireProfile: true }) ??
+      customer.contracts[0] ??
+      null;
   }
 
   const invoices = invoicesResult.rows.map((row) => {
@@ -1739,6 +1808,7 @@ async function fetchCustomerAggregate(client, customerId) {
           onboarding_status,
           intake_source,
           preferred_payment_method,
+          fee_type,
           billing_cadence,
           referral_source,
           billing_notes,
@@ -1774,6 +1844,7 @@ async function fetchCustomerAggregate(client, customerId) {
       [customerId],
     ),
   ]);
+  const mappedContracts = contractsResult.rows.map(mapContractRow);
 
   return {
     id: row.id,
@@ -1801,8 +1872,12 @@ async function fetchCustomerAggregate(client, customerId) {
       phoneLast4: item.phone_last4,
     })),
     invoices: invoicesResult.rows.map((item) => normalizeInvoiceCode(item.invoice_code) ?? item.invoice_code),
-    contracts: contractsResult.rows.map(mapContractRow),
-    activeContract: contractsResult.rows[0] ? mapContractRow(contractsResult.rows[0]) : null,
+    contracts: mappedContracts,
+    activeContract:
+      selectPreferredContract(mappedContracts, { requireBilling: true }) ??
+      selectPreferredContract(mappedContracts, { requireProfile: true }) ??
+      mappedContracts[0] ??
+      null,
     profile: profileResult.rows[0]
       ? {
           ...mapCustomerProfileRow(profileResult.rows[0]),
@@ -2543,14 +2618,25 @@ export async function createCustomerOnboardingRecord({ form, actingUsername = "u
     const customerPhone = form.customerPhone?.trim();
     const serviceEntries = normalizeServiceEntries(form.serviceEntries);
     const normalizedContracts = normalizeContractUploads(form.contractUploads);
-    const contractDerivedBillingCadence = normalizedContracts.find(
-      (contract) => contract.parsed?.billingCadence,
-    )?.parsed?.billingCadence;
-    const contractDerivedServiceStartDate = normalizedContracts.find(
-      (contract) => normalizeDateInput(contract.parsed?.serviceStartDate),
-    )?.parsed?.serviceStartDate;
+    const preferredBillingContract = selectPreferredContract(normalizedContracts, { requireBilling: true });
+    const contractDerivedFeeType = preferredBillingContract?.parsed?.feeType;
+    const contractDerivedBillingCadence = preferredBillingContract?.parsed?.billingCadence;
+    const contractDerivedServiceStartDate = preferredBillingContract?.parsed?.serviceStartDate;
     const preferredPaymentMethod = form.preferredPaymentMethod?.trim();
-    const billingCadence = form.billingCadence?.trim() || contractDerivedBillingCadence?.trim();
+    const feeType =
+      form.feeType?.trim() ||
+      contractDerivedFeeType?.trim() ||
+      (contractDerivedBillingCadence === "monthly" ? "recurring" : "one_time");
+    const requestedBillingCadence = form.billingCadence?.trim() || contractDerivedBillingCadence?.trim();
+    const billingCadence =
+      requestedBillingCadence ||
+      (feeType === "recurring" ? "monthly" : "per_milestone");
+    const normalizedBillingCadence =
+      feeType === "recurring" && billingCadence === "per_milestone"
+        ? "monthly"
+        : feeType === "one_time" && billingCadence === "monthly"
+          ? "per_milestone"
+          : billingCadence;
     const serviceStartDate = normalizeDateInput(
       form.serviceStartDate,
       contractDerivedServiceStartDate ?? form.onboardedAt ?? new Date(),
@@ -2601,7 +2687,8 @@ export async function createCustomerOnboardingRecord({ form, actingUsername = "u
       onboardingStatus: "complete",
       intakeSource: "onboarding",
       preferredPaymentMethod: preferredPaymentMethod || "zelle",
-      billingCadence: billingCadence || "per_milestone",
+      feeType,
+      billingCadence: normalizedBillingCadence || "per_milestone",
       referralSource: form.referralSource?.trim() || null,
       billingNotes: form.billingNotes?.trim() || null,
       onboardedAt: form.onboardedAt || new Date().toISOString(),
