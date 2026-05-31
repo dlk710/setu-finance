@@ -4,9 +4,11 @@ import {
   normalizeCustomerCode,
   normalizeInvoiceCode,
 } from "../shared/seedState.js";
+import { describeService, normalizeServiceLabel } from "../shared/serviceCatalog.js";
 import { prepareDatabase } from "./db/seed.js";
 import { buildInitials, normalizeDigits, normalizeEmail, normalizeName } from "./db/normalizers.js";
 import { withTransaction } from "./db/pool.js";
+import { loadStoredContractBinary, storeContractBinary } from "./services/contractStorage.js";
 import { matchPaymentToState } from "./services/matching.js";
 
 const DASHBOARD_PERIOD_KEY = "current";
@@ -56,6 +58,28 @@ function formatTimestamp(value) {
   }
 
   return new Date(value).toISOString();
+}
+
+function formatDateOnlyOutput(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+
+  const raw = String(value).trim();
+  if (!raw) {
+    return null;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    return raw;
+  }
+
+  const parsed = new Date(raw.includes("T") ? raw : `${raw}T12:00:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
 }
 
 function mapInvoiceRow(row) {
@@ -267,6 +291,7 @@ function createEmptyCustomerProfile(overrides = {}) {
     referralSource: null,
     billingNotes: null,
     onboardedAt: null,
+    serviceStartDate: null,
     referredByCustomerId: null,
     homeAddressLine1: null,
     homeAddressLine2: null,
@@ -287,6 +312,7 @@ function mapCustomerProfileRow(row) {
     referralSource: row.referral_source ?? null,
     billingNotes: row.billing_notes ?? null,
     onboardedAt: formatTimestamp(row.onboarded_at),
+    serviceStartDate: formatDateOnlyOutput(row.service_start_date),
     homeAddressLine1: row.home_address_line1 ?? null,
     homeAddressLine2: row.home_address_line2 ?? null,
     homeCity: row.home_city ?? null,
@@ -297,7 +323,12 @@ function mapCustomerProfileRow(row) {
 }
 
 function normalizeServiceName(value) {
-  return String(value || "").replace(/\s+/g, " ").trim();
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+
+  return normalizeServiceLabel(normalized);
 }
 
 function normalizeServiceEntries(serviceEntries = [], fallbackService = null, fallbackEnrolledAt = null) {
@@ -311,8 +342,8 @@ function normalizeServiceEntries(serviceEntries = [], fallbackService = null, fa
 
       return {
         name,
-        code: entry?.code ? String(entry.code).trim() : null,
-        isCustom: Boolean(entry?.isCustom),
+        code: entry?.code ? String(entry.code).trim() : describeService(name).code ?? null,
+        isCustom: entry?.isCustom ?? describeService(name).isCustom,
         enrolledAt: formatTimestamp(entry?.enrolledAt || fallbackEnrolledAt || new Date()),
       };
     })
@@ -338,18 +369,62 @@ function appendServiceSummary(customer, serviceName) {
     return;
   }
 
-  if (!customer.services.includes(serviceName)) {
-    customer.services.push(serviceName);
+  const normalizedServiceName = normalizeServiceLabel(serviceName);
+  if (!customer.services.includes(normalizedServiceName)) {
+    customer.services.push(normalizedServiceName);
   }
 }
 
 function mapServiceEnrollmentRow(row) {
   return {
     id: row.id,
-    name: row.service_name,
-    code: row.service_code ?? null,
+    name: normalizeServiceLabel(row.service_name),
+    code: row.service_code ?? describeService(row.service_name).code ?? null,
     isCustom: row.is_custom,
     enrolledAt: formatTimestamp(row.enrolled_at),
+  };
+}
+
+function mapContractRow(row) {
+  const criticalFields = row.critical_fields ?? {};
+  const services = Array.isArray(criticalFields.services)
+    ? criticalFields.services.map((service) => {
+        const description = describeService(service.name ?? service.shortLabel ?? service.longLabel ?? service);
+        return {
+          code: service.code ?? description.code,
+          name: description.shortLabel,
+          longLabel: service.longLabel ?? description.longLabel,
+          isCustom: service.isCustom ?? description.isCustom,
+        };
+      })
+    : [];
+  const installments = Array.isArray(criticalFields.installments)
+    ? criticalFields.installments.map((entry) => ({
+        label: entry.label ?? entry.milestone ?? "Installment",
+        serviceName: normalizeServiceLabel(entry.serviceName ?? entry.service ?? "General service"),
+        milestone: entry.milestone ?? entry.label ?? null,
+        amount: Number(entry.amount || 0),
+        discountPct: Number(entry.discountPct || 0),
+        dueDate: entry.dueDate ?? null,
+      }))
+    : [];
+
+  return {
+    id: row.id,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    fileSizeBytes: Number(row.file_size_bytes || 0),
+    storageProvider: row.storage_provider,
+    uploadedByUsername: row.uploaded_by_username ?? null,
+    uploadedAt: formatTimestamp(row.created_at),
+    contractDate: formatDateOnlyOutput(row.contract_date),
+    serviceStartDate: formatDateOnlyOutput(row.service_start_date),
+    totalFee: row.total_fee === null || row.total_fee === undefined ? null : Number(row.total_fee),
+    installmentCount: Number(row.installment_count || installments.length || 0),
+    extractedTextPreview: row.extracted_text_preview ?? null,
+    services,
+    installments,
+    downloadPath: `/api/contracts/${row.id}/download`,
   };
 }
 
@@ -404,6 +479,7 @@ async function upsertCustomerProfile(client, customerId, profile) {
         billing_cadence,
         referral_source,
         billing_notes,
+        service_start_date,
         home_address_line1,
         home_address_line2,
         home_city,
@@ -414,8 +490,8 @@ async function upsertCustomerProfile(client, customerId, profile) {
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-        COALESCE($14::timestamptz, NOW()),
+        $1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10, $11, $12, $13, $14,
+        COALESCE($15::timestamptz, NOW()),
         NOW()
       )
       ON CONFLICT (customer_id)
@@ -426,6 +502,7 @@ async function upsertCustomerProfile(client, customerId, profile) {
           billing_cadence = EXCLUDED.billing_cadence,
           referral_source = EXCLUDED.referral_source,
           billing_notes = EXCLUDED.billing_notes,
+          service_start_date = EXCLUDED.service_start_date,
           home_address_line1 = EXCLUDED.home_address_line1,
           home_address_line2 = EXCLUDED.home_address_line2,
           home_city = EXCLUDED.home_city,
@@ -443,6 +520,7 @@ async function upsertCustomerProfile(client, customerId, profile) {
       normalizedProfile.billingCadence,
       normalizedProfile.referralSource,
       normalizedProfile.billingNotes,
+      normalizedProfile.serviceStartDate,
       normalizedProfile.homeAddressLine1,
       normalizedProfile.homeAddressLine2,
       normalizedProfile.homeCity,
@@ -572,6 +650,260 @@ async function insertServiceEnrollments(client, customerId, serviceEntries) {
       ],
     );
   }
+}
+
+function normalizeDateInput(value, fallbackValue = null) {
+  if (!value && !fallbackValue) {
+    return null;
+  }
+
+  const candidate = value || fallbackValue;
+  const parsed =
+    candidate instanceof Date
+      ? candidate
+      : new Date(String(candidate).includes("T") ? String(candidate) : `${candidate}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) {
+    return null;
+  }
+  return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeInvoiceScheduleEntries(
+  scheduleEntries = [],
+  serviceEntries = [],
+  fallbackServiceStartDate = null,
+) {
+  const defaultServiceName = serviceEntries[0]?.name ?? "General service";
+  return (Array.isArray(scheduleEntries) ? scheduleEntries : [])
+    .map((entry, index) => {
+      const amount = Number(entry?.amount || 0);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return null;
+      }
+
+      const serviceName = normalizeServiceName(
+        entry?.serviceName ?? entry?.service ?? defaultServiceName,
+      );
+      const milestone = String(
+        entry?.milestone ?? entry?.label ?? `Installment ${index + 1}`,
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+      return {
+        label: milestone,
+        serviceName: serviceName || defaultServiceName,
+        milestone,
+        amount: Math.round(amount * 100) / 100,
+        discountPct: Number(entry?.discountPct || 0) || 0,
+        dueDate:
+          normalizeDateInput(entry?.dueDate, fallbackServiceStartDate) ??
+          normalizeDateInput(new Date()),
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeContractUploads(contractUploads = []) {
+  return (Array.isArray(contractUploads) ? contractUploads : [])
+    .map((contractUpload) => {
+      const fileName = String(contractUpload?.fileName || "").trim();
+      const mimeType = String(contractUpload?.mimeType || "application/octet-stream").trim();
+      const contentBase64 = String(contractUpload?.contentBase64 || "").trim();
+      if (!fileName || !contentBase64) {
+        return null;
+      }
+
+      const normalizedBase64 = contentBase64.includes(",")
+        ? contentBase64.slice(contentBase64.indexOf(",") + 1)
+        : contentBase64;
+      const buffer = Buffer.from(normalizedBase64, "base64");
+      if (!buffer.length) {
+        return null;
+      }
+
+      return {
+        fileName,
+        mimeType,
+        buffer,
+        parsed: contractUpload?.parsed ?? {},
+        extractedTextPreview: String(contractUpload?.extractedTextPreview || "").trim() || null,
+      };
+    })
+    .filter(Boolean);
+}
+
+async function insertContractRecords(
+  client,
+  { customerId, customerCode, contractUploads, uploadedByUsername = null },
+) {
+  const normalizedUploads = normalizeContractUploads(contractUploads);
+  const insertedContracts = [];
+
+  for (const contractUpload of normalizedUploads) {
+    const uploadedAt = new Date();
+    const storeResult = await storeContractBinary({
+      customerCode,
+      fileName: contractUpload.fileName,
+      mimeType: contractUpload.mimeType,
+      buffer: contractUpload.buffer,
+      uploadedAt,
+    });
+
+    const parsedServices = normalizeServiceEntries(
+      (contractUpload.parsed?.services ?? []).map((service) => ({
+        name: service.name ?? service.shortLabel ?? service.longLabel ?? service,
+        code: service.code ?? null,
+        isCustom: service.isCustom ?? false,
+        enrolledAt: contractUpload.parsed?.serviceStartDate ?? uploadedAt.toISOString(),
+      })),
+    ).map((service) => ({
+      code: service.code,
+      name: service.name,
+      longLabel: describeService(service.name).longLabel,
+      isCustom: service.isCustom,
+    }));
+
+    const parsedInstallments = normalizeInvoiceScheduleEntries(
+      contractUpload.parsed?.installments ?? [],
+      parsedServices,
+      contractUpload.parsed?.serviceStartDate ?? null,
+    );
+    const totalFee =
+      Number(contractUpload.parsed?.totalFee || 0) ||
+      (parsedInstallments.length
+        ? Math.round(
+            parsedInstallments.reduce((sum, entry) => sum + Number(entry.amount || 0), 0) * 100,
+          ) / 100
+        : null);
+
+    const contractId = `contract-${crypto.randomUUID()}`;
+    const criticalFields = {
+      clientName: contractUpload.parsed?.clientName ?? null,
+      customerEmail: contractUpload.parsed?.customerEmail ?? null,
+      customerPhone: contractUpload.parsed?.customerPhone ?? null,
+      contractDate: normalizeDateInput(contractUpload.parsed?.contractDate),
+      serviceStartDate: normalizeDateInput(contractUpload.parsed?.serviceStartDate),
+      totalFee,
+      services: parsedServices,
+      installments: parsedInstallments,
+      billingCadence: contractUpload.parsed?.billingCadence ?? "",
+    };
+
+    await client.query(
+      `
+        INSERT INTO customer_contracts (
+          id,
+          customer_id,
+          file_name,
+          mime_type,
+          file_size_bytes,
+          storage_provider,
+          storage_key,
+          extracted_text_preview,
+          contract_date,
+          service_start_date,
+          total_fee,
+          installment_count,
+          parsed_fields,
+          critical_fields,
+          uploaded_by_username,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9::date, $10::date, $11, $12, $13::jsonb, $14::jsonb, $15, NOW(), NOW()
+        )
+      `,
+      [
+        contractId,
+        customerId,
+        contractUpload.fileName,
+        contractUpload.mimeType,
+        contractUpload.buffer.length,
+        storeResult.storageProvider,
+        storeResult.storageKey,
+        contractUpload.extractedTextPreview,
+        criticalFields.contractDate,
+        criticalFields.serviceStartDate,
+        totalFee,
+        parsedInstallments.length,
+        JSON.stringify(contractUpload.parsed ?? {}),
+        JSON.stringify(criticalFields),
+        uploadedByUsername,
+      ],
+    );
+
+    insertedContracts.push({
+      id: contractId,
+      ...criticalFields,
+    });
+  }
+
+  return insertedContracts;
+}
+
+async function insertContractInvoiceSchedule(
+  client,
+  { customerId, customerName, customerEmail, scheduleEntries },
+) {
+  const normalizedSchedule = normalizeInvoiceScheduleEntries(scheduleEntries);
+  const createdInvoices = [];
+
+  for (const entry of normalizedSchedule) {
+    const { invoiceCode } = await reserveNextInvoiceCode(client);
+    const invoiceId = `inv-${crypto.randomUUID()}`;
+    const baseAmount = Math.round(Number(entry.amount || 0) * 100) / 100;
+    const discountPct = Number(entry.discountPct || 0) || 0;
+    const zelleAmount = calculateZelleAmount(baseAmount, discountPct);
+
+    await client.query(
+      `
+        INSERT INTO invoices (
+          id,
+          invoice_code,
+          customer_id,
+          delivery_email,
+          service_name,
+          milestone,
+          base_amount,
+          discount_pct,
+          zelle_amount,
+          card_amount,
+          due_date,
+          status,
+          source,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft', 'contract', NOW(), NOW())
+      `,
+      [
+        invoiceId,
+        invoiceCode,
+        customerId,
+        customerEmail ?? null,
+        normalizeServiceName(entry.serviceName),
+        entry.milestone ?? entry.label ?? null,
+        baseAmount,
+        discountPct,
+        zelleAmount,
+        baseAmount,
+        entry.dueDate,
+      ],
+    );
+
+    createdInvoices.push({
+      id: invoiceId,
+      invoiceCode,
+      customerName,
+      service: normalizeServiceName(entry.serviceName),
+      dueDate: entry.dueDate,
+      amount: baseAmount,
+    });
+  }
+
+  return createdInvoices;
 }
 
 async function upsertZelleAlias(client, customerId, zelleAlias, customerName) {
@@ -919,6 +1251,7 @@ async function hydratePortalState(client) {
       billing_cadence,
       referral_source,
       billing_notes,
+      service_start_date,
       home_address_line1,
       home_address_line2,
       home_city,
@@ -928,6 +1261,11 @@ async function hydratePortalState(client) {
       onboarded_at
     FROM customer_profiles
     ORDER BY onboarded_at DESC, customer_id ASC
+  `);
+  const contractsResult = await client.query(`
+    SELECT *
+    FROM customer_contracts
+    ORDER BY customer_id, created_at DESC, id DESC
   `);
   const invoicesResult = await client.query(`
     SELECT
@@ -1068,6 +1406,8 @@ async function hydratePortalState(client) {
     phones: [],
     aliases: [],
     invoices: [],
+    contracts: [],
+    activeContract: null,
     profile: createEmptyCustomerProfile(),
   }));
   const customerMap = new Map(customers.map((customer) => [customer.id, customer]));
@@ -1111,6 +1451,19 @@ async function hydratePortalState(client) {
     const customer = customerMap.get(row.customer_id);
     if (customer) {
       customer.profile = mapCustomerProfileRow(row);
+    }
+  }
+
+  for (const row of contractsResult.rows) {
+    const customer = customerMap.get(row.customer_id);
+    if (!customer) {
+      continue;
+    }
+
+    const contract = mapContractRow(row);
+    customer.contracts.push(contract);
+    if (!customer.activeContract) {
+      customer.activeContract = contract;
     }
   }
 
@@ -1334,7 +1687,7 @@ async function fetchCustomerAggregate(client, customerId) {
     return null;
   }
 
-  const [servicesResult, emailsResult, phonesResult, aliasesResult, invoicesResult, profileResult, referralResult] = await Promise.all([
+  const [servicesResult, emailsResult, phonesResult, aliasesResult, invoicesResult, profileResult, referralResult, contractsResult] = await Promise.all([
     client.query(
       `
         SELECT id, service_name, service_code, is_custom, enrolled_at
@@ -1389,6 +1742,7 @@ async function fetchCustomerAggregate(client, customerId) {
           billing_cadence,
           referral_source,
           billing_notes,
+          service_start_date,
           home_address_line1,
           home_address_line2,
           home_city,
@@ -1407,6 +1761,15 @@ async function fetchCustomerAggregate(client, customerId) {
         FROM customer_referrals
         WHERE referred_customer_id = $1
         LIMIT 1
+      `,
+      [customerId],
+    ),
+    client.query(
+      `
+        SELECT *
+        FROM customer_contracts
+        WHERE customer_id = $1
+        ORDER BY created_at DESC, id DESC
       `,
       [customerId],
     ),
@@ -1438,6 +1801,8 @@ async function fetchCustomerAggregate(client, customerId) {
       phoneLast4: item.phone_last4,
     })),
     invoices: invoicesResult.rows.map((item) => normalizeInvoiceCode(item.invoice_code) ?? item.invoice_code),
+    contracts: contractsResult.rows.map(mapContractRow),
+    activeContract: contractsResult.rows[0] ? mapContractRow(contractsResult.rows[0]) : null,
     profile: profileResult.rows[0]
       ? {
           ...mapCustomerProfileRow(profileResult.rows[0]),
@@ -1445,6 +1810,20 @@ async function fetchCustomerAggregate(client, customerId) {
         }
       : createEmptyCustomerProfile(),
   };
+}
+
+async function fetchContractRecord(client, contractId) {
+  const result = await client.query(
+    `
+      SELECT *
+      FROM customer_contracts
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [contractId],
+  );
+
+  return result.rows[0] ?? null;
 }
 
 async function reserveSequenceValue(client, sequenceName, startingValue = 1) {
@@ -2052,6 +2431,30 @@ export async function loadState() {
   return withTransaction((client) => hydratePortalState(client), { readOnly: true });
 }
 
+export async function loadContractDownloadRecord(contractId) {
+  return withTransaction(
+    async (client) => {
+      const record = await fetchContractRecord(client, contractId);
+      if (!record) {
+        throw new Error("Contract record not found.");
+      }
+
+      const file = await loadStoredContractBinary({
+        storageProvider: record.storage_provider,
+        storageKey: record.storage_key,
+        mimeType: record.mime_type,
+        fileName: record.file_name,
+      });
+
+      return {
+        contract: mapContractRow(record),
+        file,
+      };
+    },
+    { readOnly: true },
+  );
+}
+
 export async function listDueInvoiceIds() {
   return withTransaction(
     async (client) => {
@@ -2126,9 +2529,12 @@ export async function sendQueuedInvoice(invoiceId, deliverInvoice) {
   });
 }
 
-export async function createCustomerOnboardingRecord({ form }) {
+export async function createCustomerOnboardingRecord({ form, actingUsername = "unknown" }) {
   return withTransaction(async (client) => {
     const selectedCustomerId = form.selectedCustomerId?.trim() || null;
+    const existingCustomer = selectedCustomerId
+      ? await fetchCustomerAggregate(client, selectedCustomerId)
+      : null;
     const referringCustomerId = form.referringCustomerId?.trim() || null;
     const firstName = form.firstName?.trim();
     const lastName = form.lastName?.trim();
@@ -2136,8 +2542,24 @@ export async function createCustomerOnboardingRecord({ form }) {
     const customerEmail = form.customerEmail?.trim();
     const customerPhone = form.customerPhone?.trim();
     const serviceEntries = normalizeServiceEntries(form.serviceEntries);
+    const normalizedContracts = normalizeContractUploads(form.contractUploads);
+    const contractDerivedBillingCadence = normalizedContracts.find(
+      (contract) => contract.parsed?.billingCadence,
+    )?.parsed?.billingCadence;
+    const contractDerivedServiceStartDate = normalizedContracts.find(
+      (contract) => normalizeDateInput(contract.parsed?.serviceStartDate),
+    )?.parsed?.serviceStartDate;
     const preferredPaymentMethod = form.preferredPaymentMethod?.trim();
-    const billingCadence = form.billingCadence?.trim();
+    const billingCadence = form.billingCadence?.trim() || contractDerivedBillingCadence?.trim();
+    const serviceStartDate = normalizeDateInput(
+      form.serviceStartDate,
+      contractDerivedServiceStartDate ?? form.onboardedAt ?? new Date(),
+    );
+    const invoiceSchedule = normalizeInvoiceScheduleEntries(
+      form.invoiceSchedule,
+      serviceEntries,
+      serviceStartDate,
+    );
     const addressProfile = {
       homeAddressLine1: form.homeAddressLine1?.trim() || null,
       homeAddressLine2: form.homeAddressLine2?.trim() || null,
@@ -2167,9 +2589,13 @@ export async function createCustomerOnboardingRecord({ form }) {
       throw new Error("Select at least one enrolled service.");
     }
 
+    if (selectedCustomerId && !existingCustomer) {
+      throw new Error("Existing customer record could not be found.");
+    }
+
     const customerId = selectedCustomerId || `customer-${crypto.randomUUID()}`;
     const customerCode = selectedCustomerId
-      ? null
+      ? existingCustomer.customerCode
       : (await reserveNextCustomerCode(client)).customerCode;
     const profile = {
       onboardingStatus: "complete",
@@ -2179,6 +2605,7 @@ export async function createCustomerOnboardingRecord({ form }) {
       referralSource: form.referralSource?.trim() || null,
       billingNotes: form.billingNotes?.trim() || null,
       onboardedAt: form.onboardedAt || new Date().toISOString(),
+      serviceStartDate,
       ...addressProfile,
     };
     const zelleAlias = {
@@ -2218,6 +2645,24 @@ export async function createCustomerOnboardingRecord({ form }) {
       await insertActivity(client, `Client onboarded: ${customerName}`);
     }
 
+    const insertedContracts = normalizedContracts.length
+      ? await insertContractRecords(client, {
+          customerId,
+          customerCode,
+          contractUploads: form.contractUploads,
+          uploadedByUsername: actingUsername,
+        })
+      : [];
+
+    const createdInvoices = invoiceSchedule.length
+      ? await insertContractInvoiceSchedule(client, {
+          customerId,
+          customerName,
+          customerEmail,
+          scheduleEntries: invoiceSchedule,
+        })
+      : [];
+
     await upsertCustomerReferral(client, {
       referrerCustomerId: referringCustomerId,
       referredCustomerId: customerId,
@@ -2226,11 +2671,27 @@ export async function createCustomerOnboardingRecord({ form }) {
 
     await reconcileOpenTransactions(client);
 
+    if (insertedContracts.length) {
+      await insertActivity(
+        client,
+        `${insertedContracts.length} contract${insertedContracts.length === 1 ? "" : "s"} uploaded for ${customerName}`,
+        actingUsername,
+      );
+    }
+
+    if (createdInvoices.length) {
+      await insertActivity(
+        client,
+        `${createdInvoices.length} draft invoice${createdInvoices.length === 1 ? "" : "s"} generated from contract for ${customerName}`,
+        actingUsername,
+      );
+    }
+
     return {
       state: await hydratePortalState(client),
       message: selectedCustomerId
-        ? `${customerName} updated${serviceEntries.length ? ` with ${serviceEntries.length} new service enrollment${serviceEntries.length === 1 ? "" : "s"}` : ""}.`
-        : `${customerName} onboarded and ready for invoicing.`,
+        ? `${customerName} updated${serviceEntries.length ? ` with ${serviceEntries.length} new service enrollment${serviceEntries.length === 1 ? "" : "s"}` : ""}${insertedContracts.length ? `, ${insertedContracts.length} contract${insertedContracts.length === 1 ? "" : "s"} stored` : ""}${createdInvoices.length ? `, and ${createdInvoices.length} draft invoice${createdInvoices.length === 1 ? "" : "s"} created` : ""}.`
+        : `${customerName} onboarded${insertedContracts.length ? ` with ${insertedContracts.length} contract${insertedContracts.length === 1 ? "" : "s"} stored` : ""}${createdInvoices.length ? ` and ${createdInvoices.length} draft invoice${createdInvoices.length === 1 ? "" : "s"} created` : ""}.`,
     };
   });
 }
@@ -2241,6 +2702,7 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
     const existingCustomer = isNewCustomer
       ? null
       : await fetchCustomerAggregate(client, form.selectedCustomerId);
+    const normalizedServiceName = normalizeServiceName(form.service);
     const customerName = isNewCustomer ? form.customerName?.trim() : existingCustomer?.name;
 
     if (!customerName) {
@@ -2266,8 +2728,8 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
         customerEmail,
         customerPhone,
         serviceEntries: normalizeServiceEntries(
-          [{ name: form.service, isCustom: form.service === "Custom" }],
-          form.service,
+          [{ name: normalizedServiceName, isCustom: normalizedServiceName === "Custom" }],
+          normalizedServiceName,
           new Date(),
         ),
         profile: {
@@ -2281,12 +2743,12 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
         },
       });
     } else {
-      const hasService = existingCustomer.services.includes(form.service);
+      const hasService = existingCustomer.services.includes(normalizedServiceName);
       if (!hasService) {
         await insertServiceEnrollments(client, customerId, [
           {
-            name: form.service,
-            isCustom: form.service === "Custom",
+            name: normalizedServiceName,
+            isCustom: normalizedServiceName === "Custom",
             enrolledAt: new Date(),
           },
         ]);
@@ -2313,7 +2775,7 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
       customerId,
       customerName,
       email: customerEmail ?? null,
-      service: form.service,
+      service: normalizedServiceName,
       milestone: form.milestone ?? null,
       baseAmount: amount,
       discountPct,
@@ -2330,7 +2792,7 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
           customerCode,
           initials: buildInitials(customerName),
           name: customerName,
-          services: [form.service],
+          services: [normalizedServiceName],
           emails: customerEmail
             ? [{ value: customerEmail, label: "personal", isPrimary: true }]
             : [],
@@ -2340,8 +2802,8 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
           aliases: [],
           invoices: [],
           serviceHistory: normalizeServiceEntries(
-            [{ name: form.service, isCustom: form.service === "Custom" }],
-            form.service,
+            [{ name: normalizedServiceName, isCustom: normalizedServiceName === "Custom" }],
+            normalizedServiceName,
             new Date(),
           ).map((entry, index) => ({
             id: `svc-${customerId}-${index + 1}`,
@@ -2357,17 +2819,17 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
         }
       : {
           ...existingCustomer,
-          services: existingCustomer.services.includes(form.service)
+          services: existingCustomer.services.includes(normalizedServiceName)
             ? existingCustomer.services
-            : [...existingCustomer.services, form.service],
-          serviceHistory: existingCustomer.services.includes(form.service)
+            : [...existingCustomer.services, normalizedServiceName],
+          serviceHistory: existingCustomer.services.includes(normalizedServiceName)
             ? existingCustomer.serviceHistory
             : [
                 {
                   id: `svc-${customerId}-${crypto.randomUUID()}`,
-                  name: form.service,
+                  name: normalizedServiceName,
                   code: null,
-                  isCustom: form.service === "Custom",
+                  isCustom: normalizedServiceName === "Custom",
                   enrolledAt: formatTimestamp(new Date()),
                 },
                 ...existingCustomer.serviceHistory,

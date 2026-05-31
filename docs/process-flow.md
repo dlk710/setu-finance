@@ -6,23 +6,30 @@ This is the current business workflow for Setu Finance, written for operations a
 
 ```mermaid
 flowchart TD
-    A["Onboard client"] --> B["Create customer record"]
-    B --> C["Create and send invoice"]
-    C --> D["Capture payment from Zelle email or manual review"]
-    D --> E{"Match confidence"}
-    E -->|"Clear"| F["Payments to confirm"]
-    E -->|"Unclear"| G["Exceptions"]
-    G --> H["Finance resolves and assigns the right customer / action"]
-    H --> F
-    F --> I["Apply transaction"]
-    I --> J["Completed transactions"]
-    J --> K["Send or re-send PDF receipt"]
-    K --> L["Update dashboard and history"]
+    A["Upload signed contract"] --> B["Parse client, services, fee, installments, and start date"]
+    B --> C["Admin reviews and overrides anything needed"]
+    C --> D["Create or update customer record"]
+    D --> E["Store contract and key extracted fields"]
+    E --> F["Generate draft invoices from the contract schedule"]
+    F --> G["Send invoice"]
+    G --> H["Capture payment from Zelle email or manual review"]
+    H --> I{"Match confidence"}
+    I -->|"Clear"| J["Payments to confirm"]
+    I -->|"Unclear"| K["Exceptions"]
+    K --> L["Finance resolves and assigns the right customer / action"]
+    L --> J
+    J --> M["Apply transaction"]
+    M --> N["Completed transactions"]
+    N --> O["Send or re-send PDF receipt"]
+    O --> P["Update dashboard, customer 360, and history"]
 ```
 
 ### In Plain English
 
-- First create the client record.
+- First upload the signed contract.
+- Let Setu prefill services, fee, installments, and dates.
+- Adjust anything manually if the contract needs a finance override.
+- Save the client and the generated draft invoices.
 - Then send the invoice.
 - When money shows up, save it as a transaction record.
 - If the portal is confident, finance applies it from `Payments to confirm`.
@@ -33,31 +40,37 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A["1. Onboard client"] --> B["Create stable customer ID and searchable profile"]
-    B --> C["Capture enrolled services with date/time history"]
-    C --> D["Create invoice"]
-    D --> E["Send invoice email"]
-    E --> F{"How does payment appear?"}
-    F -->|"Zelle email synced"| G["Capture structured transaction details from inbox"]
-    F -->|"Manual awareness"| H["Finance reviews payment details manually"]
-    G --> I["Matching engine identifies customer and invoice"]
-    H --> J["Save transaction record"]
-    I -->|"Clear match"| K["Payments to confirm"]
-    I -->|"Mismatch / ambiguity / duplicate"| L["Exceptions queue"]
-    J --> K
-    L --> M["Human resolves, reassigns, credits, or archives"]
-    M --> K
-    K --> N["Human clicks Apply transaction"]
-    N --> O["Mark payment applied and update invoice / account state"]
-    O --> P["Move record to Completed transactions"]
-    P --> Q["Send or re-send PDF receipt to primary customer email"]
-    Q --> R["Update dashboard, activity history, and referral progress"]
+    A["1. Upload signed contract"] --> B["Read key contract fields"]
+    B --> C["Prefill customer profile + short-name services"]
+    C --> D["Admin overrides or adds missing data"]
+    D --> E["Create stable customer ID and searchable profile"]
+    E --> F["Store contract file and parsed contract summary"]
+    F --> G["Generate draft invoice schedule"]
+    G --> H["Send invoice email"]
+    H --> I{"How does payment appear?"}
+    I -->|"Zelle email synced"| J["Capture structured transaction details from inbox"]
+    I -->|"Manual awareness"| K["Finance reviews payment details manually"]
+    J --> L["Matching engine identifies customer and invoice"]
+    K --> M["Save transaction record"]
+    L -->|"Clear match"| N["Payments to confirm"]
+    L -->|"Mismatch / ambiguity / duplicate"| O["Exceptions queue"]
+    M --> N
+    O --> P["Human resolves, reassigns, credits, or archives"]
+    P --> N
+    N --> Q["Human clicks Apply transaction"]
+    Q --> R["Mark payment applied and update invoice / account state"]
+    R --> S["Move record to Completed transactions"]
+    S --> T["Send or re-send PDF receipt to primary customer email"]
+    T --> U["Update dashboard, customer 360, activity history, and referral progress"]
 ```
 
 ## What This Means Operationally
 
-- Onboarding is the first step. Finance should create the client record before invoicing begins.
+- Contract upload is the first step. Finance should start from the signed agreement before invoicing begins.
+- Parsed contract details should prefill the client record, services, billing cadence, fee, installments, and service-start date wherever possible.
+- Admins can manually override contract-derived values before the record is saved.
 - Every service enrollment is timestamped so later add-on services remain historically traceable.
+- Contract binaries and extracted critical fields stay linked to the customer record and are visible in the full customer 360 page.
 - Synced Zelle emails are converted into durable transaction records with captured details such as amount, transaction number, memo, dates, source emails, and raw extracted text.
 - The system does not auto-post money blindly. A human still decides when to apply a prepared transaction.
 - Applying a payment and sending a receipt are now separate actions.

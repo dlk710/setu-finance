@@ -4,13 +4,17 @@ This is the current end-to-end feature inventory for Setu Finance.
 
 ## 1. Client Onboarding
 
-- Dedicated onboarding-first workflow before billing starts
+- Dedicated contract-first onboarding workflow before billing starts
+- Multi-contract upload section during onboarding
+- Contract preview parsing for services, fee, installments, service-start date, and key contact details
+- Manual override support before save so admins can correct or add fields after parsing
 - Required fields: first name, last name, primary email, mobile phone, and at least one service
 - Optional home address capture
 - Optional billing notes, referral source, and Zelle identity hints
 - Stable numeric customer IDs for reuse across future products
 - Timestamped service enrollment history
 - Support for later add-on enrollments without losing prior history
+- Compact short-name service list for faster finance intake
 
 ## 2. Customer Records And Search
 
@@ -21,17 +25,21 @@ This is the current end-to-end feature inventory for Setu Finance.
   - signup and onboarding details
   - contact details
   - home address
+  - contract records and downloadable contract files
+  - contract-derived critical fields such as start date, fee, and installment count
   - service history
   - invoice ledger
   - transaction ledger
   - referral relationships and rewards
   - current billing context
+- Full-page routed 360 view instead of a popout, so browser back and forward work cleanly
 
 ## 3. Invoicing
 
 - New invoice flow linked to existing customer records
 - Searchable customer picker in invoice creation
 - Service choices limited to the customer’s enrolled services plus `Custom`
+- Contract-derived invoice schedule generation during onboarding
 - Draft, sent, paid, and overdue invoice states
 - Numeric invoice numbers
 - Invoice email sending support
@@ -117,6 +125,8 @@ This is the current end-to-end feature inventory for Setu Finance.
 - React + Vite frontend
 - Express API backend
 - PostgreSQL as the system of record
+- Local contract binary storage in development
+- Private S3-ready contract storage path for cloud environments
 - Gmail OAuth inbox integration
 - SMTP-based outbound email
 - Normalized data model designed to expand into a larger product suite

@@ -38,6 +38,12 @@ import {
   summarizeContacts,
 } from "./lib/finance";
 import { apiRequest, loadApiState, loadAuthStatus } from "./lib/api";
+import {
+  describeService,
+  getCriteriaCatalog,
+  normalizeServiceLabel,
+  summarizeServiceLabels,
+} from "../shared/serviceCatalog.js";
 
 const DEFAULT_FORM = {
   selectedCustomerId: "",
@@ -45,55 +51,18 @@ const DEFAULT_FORM = {
   customerEmail: "",
   customerPhone: "",
   selectedEmail: "",
-  service: "Authorship of scholarly articles",
+  service: "Authorship",
   milestone: "",
   amount: 1500,
   discountPct: 5,
   dueDate: "2026-06-10",
 };
 
-const EB1A_CRITERIA_OPTIONS = [
-  {
-    code: "awards",
-    label: "Lesser nationally or internationally recognized prizes or awards",
-  },
-  {
-    code: "memberships",
-    label: "Membership in associations that demand outstanding achievement",
-  },
-  {
-    code: "published-material",
-    label: "Published material about the client in major media",
-  },
-  {
-    code: "judging",
-    label: "Participation as a judge of the work of others",
-  },
-  {
-    code: "original-contributions",
-    label: "Original contributions of major significance",
-  },
-  {
-    code: "authorship",
-    label: "Authorship of scholarly articles",
-  },
-  {
-    code: "exhibitions",
-    label: "Display of work at artistic exhibitions or showcases",
-  },
-  {
-    code: "critical-role",
-    label: "Leading or critical role for distinguished organizations",
-  },
-  {
-    code: "high-salary",
-    label: "High salary or other significantly high remuneration",
-  },
-  {
-    code: "commercial-success",
-    label: "Commercial success in the performing arts",
-  },
-];
+const EB1A_CRITERIA_OPTIONS = getCriteriaCatalog().map((definition) => ({
+  code: definition.code,
+  label: definition.shortLabel,
+  longLabel: definition.longLabel,
+}));
 
 const DEFAULT_SERVICE_OPTIONS = [
   ...EB1A_CRITERIA_OPTIONS.map((option) => option.label),
@@ -104,6 +73,44 @@ const DEFAULT_AUTH_FORM = {
   username: "admin",
   password: "",
 };
+
+const PORTAL_VIEW_PATHS = {
+  onboarding: "/onboarding",
+  dashboard: "/dashboard",
+  console: "/billing",
+  search: "/customers",
+  admin: "/admin",
+};
+
+function createPortalRoute(view = "onboarding", customerId = "") {
+  return {
+    view,
+    customerId,
+  };
+}
+
+function buildPortalPath(route) {
+  if (route?.view === "customer360" && route.customerId) {
+    return `/customers/${encodeURIComponent(route.customerId)}`;
+  }
+
+  return PORTAL_VIEW_PATHS[route?.view] ?? PORTAL_VIEW_PATHS.onboarding;
+}
+
+function parsePortalRoute(pathname = "/") {
+  const normalizedPath = String(pathname || "/").replace(/\/+$/, "") || "/";
+  const customerMatch = normalizedPath.match(/^\/customers\/([^/]+)$/);
+  if (customerMatch) {
+    return createPortalRoute("customer360", decodeURIComponent(customerMatch[1]));
+  }
+
+  const entry = Object.entries(PORTAL_VIEW_PATHS).find(([, path]) => path === normalizedPath);
+  if (entry) {
+    return createPortalRoute(entry[0]);
+  }
+
+  return createPortalRoute("onboarding");
+}
 
 function createAskSetuMessage(role, text) {
   return {
@@ -141,6 +148,27 @@ function createCustomServiceEntry() {
   };
 }
 
+function createInvoiceScheduleEntry(overrides = {}) {
+  return {
+    id: crypto.randomUUID(),
+    label: overrides.label ?? "",
+    serviceName: overrides.serviceName ?? "Authorship",
+    milestone: overrides.milestone ?? "",
+    amount: overrides.amount ?? 0,
+    discountPct: overrides.discountPct ?? 0,
+    dueDate: overrides.dueDate ?? new Date().toISOString().slice(0, 10),
+  };
+}
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = () => reject(reader.error || new Error(`Could not read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
 const DEFAULT_ONBOARDING_FORM = {
   selectedCustomerId: "",
   referringCustomerId: "",
@@ -149,6 +177,7 @@ const DEFAULT_ONBOARDING_FORM = {
   customerEmail: "",
   customerPhone: "",
   onboardedAt: "",
+  serviceStartDate: "",
   homeAddressLine1: "",
   homeAddressLine2: "",
   homeCity: "",
@@ -164,6 +193,7 @@ const DEFAULT_ONBOARDING_FORM = {
   billingNotes: "",
   criteriaSelections: [],
   customServices: [],
+  invoiceSchedule: [],
 };
 
 const LEGACY_CRITERION_CODE_BY_NAME = {
@@ -201,6 +231,7 @@ function createOnboardingFormFromCustomer(customer) {
     customerEmail: primaryEmail,
     customerPhone: primaryPhone,
     onboardedAt: customer?.profile?.onboardedAt ?? "",
+    serviceStartDate: customer?.profile?.serviceStartDate ?? customer?.activeContract?.serviceStartDate ?? "",
     preferredPaymentMethod: customer?.profile?.preferredPaymentMethod ?? DEFAULT_ONBOARDING_FORM.preferredPaymentMethod,
     billingCadence: customer?.profile?.billingCadence ?? DEFAULT_ONBOARDING_FORM.billingCadence,
     zelleSenderName: zelleAlias?.name ?? "",
@@ -216,6 +247,65 @@ function createOnboardingFormFromCustomer(customer) {
     homePostalCode: customer?.profile?.homePostalCode ?? "",
     homeCountry: customer?.profile?.homeCountry ?? "",
   };
+}
+
+function buildServiceSelectionsFromParsedServices(services = []) {
+  const criteriaSelections = [];
+  const customServices = [];
+
+  for (const service of services) {
+    const definition = describeService(service.name ?? service.shortLabel ?? service.longLabel ?? service);
+    if (definition.type === "criteria" && definition.code) {
+      if (!criteriaSelections.some((selection) => selection.code === definition.code)) {
+        criteriaSelections.push(createServiceSelectionEntry(definition.code));
+      }
+      continue;
+    }
+
+    customServices.push({
+      ...createCustomServiceEntry(),
+      name: definition.shortLabel,
+    });
+  }
+
+  return {
+    criteriaSelections,
+    customServices,
+  };
+}
+
+function buildInvoiceScheduleFromParsedContract(parsed = {}, fallbackServiceStartDate = "") {
+  const fallbackDate = parsed.serviceStartDate || fallbackServiceStartDate || new Date().toISOString().slice(0, 10);
+  const services = (parsed.services ?? []).map((service) => normalizeServiceLabel(service.name ?? service.shortLabel ?? service.longLabel ?? service));
+  const primaryService = services[0] ?? "Authorship";
+  const installments = Array.isArray(parsed.installments) ? parsed.installments : [];
+
+  if (installments.length) {
+    return installments.map((entry) =>
+      createInvoiceScheduleEntry({
+        label: entry.label ?? entry.milestone ?? "",
+        serviceName: normalizeServiceLabel(entry.serviceName ?? entry.service ?? primaryService),
+        milestone: entry.milestone ?? entry.label ?? "",
+        amount: Number(entry.amount || 0),
+        discountPct: Number(entry.discountPct || 0) || 0,
+        dueDate: entry.dueDate || fallbackDate,
+      }),
+    );
+  }
+
+  if (Number(parsed.totalFee || 0) > 0) {
+    return [
+      createInvoiceScheduleEntry({
+        label: "Contract fee",
+        serviceName: primaryService,
+        milestone: "Contract fee",
+        amount: Number(parsed.totalFee || 0),
+        dueDate: fallbackDate,
+      }),
+    ];
+  }
+
+  return [];
 }
 
 function buildOnboardingServiceEntries(form) {
@@ -255,21 +345,18 @@ function buildOnboardingServiceEntries(form) {
 }
 
 function findCriterionOptionByServiceName(serviceName) {
-  const normalized = String(serviceName || "").trim().toLowerCase();
-  if (!normalized) {
+  const definition = describeService(serviceName);
+  if (!definition?.code) {
     return null;
   }
 
-  return (
-    EB1A_CRITERIA_OPTIONS.find((option) => option.label.toLowerCase() === normalized) ??
-    EB1A_CRITERIA_OPTIONS.find((option) => option.code === LEGACY_CRITERION_CODE_BY_NAME[normalized]) ??
-    null
-  );
+  return EB1A_CRITERIA_OPTIONS.find((option) => option.code === definition.code) ?? null;
 }
 
 function createOnboardingPrefillFromInvoice(form) {
   const { firstName, lastName } = splitCustomerName(form.customerName);
   const criterion = findCriterionOptionByServiceName(form.service);
+  const normalizedService = normalizeServiceLabel(form.service);
 
   return {
     ...DEFAULT_ONBOARDING_FORM,
@@ -279,8 +366,8 @@ function createOnboardingPrefillFromInvoice(form) {
     customerPhone: form.customerPhone,
     criteriaSelections: criterion ? [createServiceSelectionEntry(criterion.code)] : [],
     customServices:
-      form.service && !criterion
-        ? [{ ...createCustomServiceEntry(), name: form.service }]
+      normalizedService && !criterion
+        ? [{ ...createCustomServiceEntry(), name: normalizedService }]
         : [],
   };
 }
@@ -397,6 +484,7 @@ function getPrimaryCustomerPhone(customer) {
 
 function summarizeCustomerServices(customer) {
   const services = customer?.services ?? [];
+  const summary = summarizeServiceLabels(services, 4);
   if (!services.length) {
     return {
       primary: "No enrolled services yet",
@@ -405,11 +493,11 @@ function summarizeCustomerServices(customer) {
   }
 
   return {
-    primary: services[0],
+    primary: summary.visible.join(" · "),
     detail:
-      services.length === 1
-        ? "1 enrolled service"
-        : `${services.length} enrolled services · +${services.length - 1} more`,
+      summary.overflowCount
+        ? `${services.length} enrolled services · +${summary.overflowCount} more`
+        : `${services.length} enrolled service${services.length === 1 ? "" : "s"}`,
   };
 }
 
@@ -531,7 +619,7 @@ function buildCustomerLedgerStatus(customer, { dueInvoices = [], invoices = [], 
 }
 
 function App() {
-  const [view, setView] = useState("onboarding");
+  const [route, setRoute] = useState(() => parsePortalRoute(window.location.pathname));
   const [state, setState] = useState(createInitialState);
   const [searchQuery, setSearchQuery] = useState("");
   const [toasts, setToasts] = useState([]);
@@ -540,6 +628,8 @@ function App() {
   const [invoiceCustomerQuery, setInvoiceCustomerQuery] = useState("");
   const [onboardingCustomerQuery, setOnboardingCustomerQuery] = useState("");
   const [onboardingForm, setOnboardingForm] = useState(DEFAULT_ONBOARDING_FORM);
+  const [contractUploads, setContractUploads] = useState([]);
+  const [uploadingContract, setUploadingContract] = useState(false);
   const [savingOnboarding, setSavingOnboarding] = useState(false);
   const [savingReferralProgram, setSavingReferralProgram] = useState(false);
   const [saveAlias, setSaveAlias] = useState(true);
@@ -569,6 +659,8 @@ function App() {
     confirm: state.pendingPayments.length,
     exceptions: state.exceptions.length,
   };
+  const view = route.view;
+  const navView = route.view === "customer360" ? "search" : route.view;
 
   const searchResults = searchCustomers(state.customers, searchQuery);
   const needsAttention = buildAttentionItems(state.exceptions);
@@ -583,8 +675,11 @@ function App() {
   const selectedOnboardingCustomer =
     state.customers.find((customer) => customer.id === onboardingForm.selectedCustomerId) ?? null;
   const selectedCustomer360 =
-    modal.type === "customer-360"
-      ? state.customers.find((customer) => customer.id === modal.payload) ?? null
+    route.view === "customer360"
+      ? state.customers.find(
+          (customer) =>
+            customer.id === route.customerId || customer.customerCode === route.customerId,
+        ) ?? null
       : null;
   const onboardingCustomerResults = onboardingCustomerQuery.trim()
     ? searchCustomersByIdentity(state.customers, onboardingCustomerQuery)
@@ -610,6 +705,38 @@ function App() {
     qualificationMonths: 6,
   };
 
+  function navigateToRoute(nextRoute, { replace = false } = {}) {
+    const targetPath = buildPortalPath(nextRoute);
+    const currentPath = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (currentPath !== targetPath) {
+      const method = replace ? "replaceState" : "pushState";
+      window.history[method]({}, "", targetPath);
+    }
+    setRoute(nextRoute);
+  }
+
+  function navigateToView(nextView, { replace = false } = {}) {
+    navigateToRoute(createPortalRoute(nextView), { replace });
+  }
+
+  function openCustomer360(customer) {
+    const customerRouteKey = customer?.customerCode ?? customer?.id ?? "";
+    if (!customerRouteKey) {
+      return;
+    }
+
+    navigateToRoute(createPortalRoute("customer360", customerRouteKey));
+  }
+
+  function closeCustomer360() {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
+    navigateToView("search", { replace: true });
+  }
+
   useEffect(() => {
     setReferralProgramForm(createReferralProgramForm(state.admin?.referralProgram));
   }, [
@@ -623,8 +750,26 @@ function App() {
     setSaveAlias(true);
   }, [modal.type, modal.payload?.id]);
 
+  useEffect(() => {
+    const canonicalRoute = parsePortalRoute(window.location.pathname);
+    const canonicalPath = buildPortalPath(canonicalRoute);
+    if (window.location.pathname !== canonicalPath) {
+      window.history.replaceState({}, "", canonicalPath);
+    }
+    setRoute(canonicalRoute);
+
+    function handlePopState() {
+      setRoute(parsePortalRoute(window.location.pathname));
+    }
+
+    window.addEventListener("popstate", handlePopState);
+    return () => {
+      window.removeEventListener("popstate", handlePopState);
+    };
+  }, []);
+
   function resetPortalUi() {
-    setView("onboarding");
+    setRoute(createPortalRoute("onboarding"));
     setState(createInitialState());
     setSearchQuery("");
     setModal({ type: null, payload: null });
@@ -632,6 +777,8 @@ function App() {
     setInvoiceCustomerQuery("");
     setOnboardingCustomerQuery("");
     setOnboardingForm({ ...DEFAULT_ONBOARDING_FORM });
+    setContractUploads([]);
+    setUploadingContract(false);
     setSavingOnboarding(false);
     setSavingReferralProgram(false);
     setSaveAlias(true);
@@ -745,13 +892,14 @@ function App() {
   }
 
   function openOnboarding(prefill = null) {
-    setView("onboarding");
+    navigateToView("onboarding");
     setModal({ type: null, payload: null });
     setOnboardingCustomerQuery("");
     setOnboardingForm({
       ...DEFAULT_ONBOARDING_FORM,
       ...(prefill ?? {}),
     });
+    setContractUploads([]);
   }
 
   function openSendPreview(invoiceId) {
@@ -1007,6 +1155,106 @@ function App() {
     }));
   }
 
+  function updateInvoiceScheduleEntry(id, field, value) {
+    setOnboardingForm((current) => ({
+      ...current,
+      invoiceSchedule: current.invoiceSchedule.map((entry) =>
+        entry.id === id ? { ...entry, [field]: value } : entry,
+      ),
+    }));
+  }
+
+  function addInvoiceScheduleEntry() {
+    setOnboardingForm((current) => ({
+      ...current,
+      invoiceSchedule: [
+        ...current.invoiceSchedule,
+        createInvoiceScheduleEntry({
+          dueDate: current.serviceStartDate || new Date().toISOString().slice(0, 10),
+          serviceName: buildOnboardingServiceEntries(current)[0]?.name ?? "Authorship",
+        }),
+      ],
+    }));
+  }
+
+  function removeInvoiceScheduleEntry(id) {
+    setOnboardingForm((current) => ({
+      ...current,
+      invoiceSchedule: current.invoiceSchedule.filter((entry) => entry.id !== id),
+    }));
+  }
+
+  function applyContractPreviewToForm(preview) {
+    const parsed = preview?.parsed ?? {};
+    const nextSchedule = buildInvoiceScheduleFromParsedContract(parsed, parsed.serviceStartDate);
+    const nextServices = buildServiceSelectionsFromParsedServices(parsed.services ?? []);
+    const parsedName = splitCustomerName(parsed.clientName);
+
+    setOnboardingForm((current) => ({
+      ...current,
+      firstName: parsedName.firstName || current.firstName,
+      lastName: parsedName.lastName || current.lastName,
+      customerEmail: parsed.customerEmail || current.customerEmail,
+      customerPhone: parsed.customerPhone || current.customerPhone,
+      serviceStartDate: parsed.serviceStartDate || current.serviceStartDate,
+      billingCadence: parsed.billingCadence || current.billingCadence,
+      criteriaSelections: nextServices.criteriaSelections.length
+        ? nextServices.criteriaSelections
+        : current.criteriaSelections,
+      customServices: nextServices.customServices.length
+        ? nextServices.customServices
+        : current.customServices,
+      invoiceSchedule: nextSchedule.length ? nextSchedule : current.invoiceSchedule,
+    }));
+  }
+
+  async function uploadContracts(files) {
+    const fileList = Array.from(files || []).filter(Boolean);
+    if (!fileList.length) {
+      return;
+    }
+
+    setUploadingContract(true);
+    try {
+      for (const file of fileList) {
+        const contentBase64 = await readFileAsDataUrl(file);
+        const data = await apiRequest("/api/contracts/preview", {
+          method: "POST",
+          body: {
+            fileName: file.name,
+            mimeType: file.type || "application/octet-stream",
+            contentBase64,
+          },
+        });
+
+        const uploadRecord = {
+          id: crypto.randomUUID(),
+          fileName: data.preview.fileName,
+          mimeType: data.preview.mimeType,
+          sizeBytes: data.preview.sizeBytes,
+          extractedTextPreview: data.preview.extractedTextPreview,
+          parsed: data.preview.parsed,
+          contentBase64,
+        };
+
+        setContractUploads((current) => [...current, uploadRecord]);
+        applyContractPreviewToForm(uploadRecord);
+        pushToast(`${file.name} parsed and added to onboarding.`);
+      }
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setUploadingContract(false);
+    }
+  }
+
+  function removeContractUpload(uploadId) {
+    setContractUploads((current) => current.filter((contract) => contract.id !== uploadId));
+  }
+
   function updateOnboardingCustomerQuery(value) {
     setOnboardingCustomerQuery(value);
 
@@ -1022,6 +1270,7 @@ function App() {
         customerEmail: current.customerEmail,
         customerPhone: current.customerPhone,
         onboardedAt: current.onboardedAt,
+        serviceStartDate: current.serviceStartDate,
         homeAddressLine1: current.homeAddressLine1,
         homeAddressLine2: current.homeAddressLine2,
         homeCity: current.homeCity,
@@ -1036,6 +1285,7 @@ function App() {
         referringCustomerId: current.referringCustomerId,
         referralSource: current.referralSource,
         billingNotes: current.billingNotes,
+        invoiceSchedule: current.invoiceSchedule,
       }));
     }
   }
@@ -1044,6 +1294,7 @@ function App() {
     if (!customerId) {
       setOnboardingCustomerQuery("");
       setOnboardingForm(DEFAULT_ONBOARDING_FORM);
+      setContractUploads([]);
       return;
     }
 
@@ -1242,12 +1493,15 @@ function App() {
           form: {
             ...onboardingForm,
             serviceEntries,
+            contractUploads,
+            invoiceSchedule: onboardingForm.invoiceSchedule,
           },
         },
       });
       setState(data.state);
       setOnboardingForm(DEFAULT_ONBOARDING_FORM);
       setOnboardingCustomerQuery("");
+      setContractUploads([]);
       pushToast(data.message);
     } catch (error) {
       if (handleUnauthorized(error)) {
@@ -1333,37 +1587,37 @@ function App() {
         </div>
         <div className="nav-label">Finance</div>
         <button
-          className={`nav-item ${view === "onboarding" ? "active" : ""}`}
-          onClick={() => setView("onboarding")}
+          className={`nav-item ${navView === "onboarding" ? "active" : ""}`}
+          onClick={() => navigateToView("onboarding")}
         >
           <IconUsers size={17} />
           Client onboarding
         </button>
         <button
-          className={`nav-item ${view === "dashboard" ? "active" : ""}`}
-          onClick={() => setView("dashboard")}
+          className={`nav-item ${navView === "dashboard" ? "active" : ""}`}
+          onClick={() => navigateToView("dashboard")}
         >
           <IconLayoutDashboard size={17} />
           Dashboard
         </button>
         <button
-          className={`nav-item ${view === "console" ? "active" : ""}`}
-          onClick={() => setView("console")}
+          className={`nav-item ${navView === "console" ? "active" : ""}`}
+          onClick={() => navigateToView("console")}
         >
           <IconFileInvoice size={17} />
           Billing console
           <span className="badge">{counts.due + counts.confirm + counts.exceptions}</span>
         </button>
         <button
-          className={`nav-item ${view === "search" ? "active" : ""}`}
-          onClick={() => setView("search")}
+          className={`nav-item ${navView === "search" ? "active" : ""}`}
+          onClick={() => navigateToView("search")}
         >
           <IconSearch size={17} />
           Customer search
         </button>
         <button
-          className={`nav-item ${view === "admin" ? "active" : ""}`}
-          onClick={() => setView("admin")}
+          className={`nav-item ${navView === "admin" ? "active" : ""}`}
+          onClick={() => navigateToView("admin")}
         >
           <IconTable size={17} />
           Program admin
@@ -1383,6 +1637,7 @@ function App() {
       <main className="main">
         {view === "onboarding" && (
           <OnboardingView
+            contractUploads={contractUploads}
             currentHistory={currentOnboardingHistory}
             counts={counts}
             customers={state.customers}
@@ -1391,9 +1646,14 @@ function App() {
             currentCustomer={selectedOnboardingCustomer}
             needsFollowUp={onboardingNeedsFollowUp}
             onAddCustomService={addCustomServiceEntry}
+            onAddInvoiceScheduleEntry={addInvoiceScheduleEntry}
             onCriteriaChange={updateCriteriaSelection}
             onCustomerQueryChange={updateOnboardingCustomerQuery}
+            onContractUpload={uploadContracts}
+            onInvoiceScheduleChange={updateInvoiceScheduleEntry}
             recentCustomers={recentOnboardedCustomers}
+            onRemoveContract={removeContractUpload}
+            onRemoveInvoiceScheduleEntry={removeInvoiceScheduleEntry}
             saving={savingOnboarding}
             onCustomServiceChange={updateCustomServiceEntry}
             onRemoveCustomService={removeCustomServiceEntry}
@@ -1402,9 +1662,10 @@ function App() {
             onSelectCustomer={selectOnboardingCustomer}
             zelleReadyCount={zelleReadyCount}
             onFormChange={updateOnboardingForm}
-            onOpenConsole={() => setView("console")}
+            onOpenConsole={() => navigateToView("console")}
             onSubmit={submitOnboarding}
             onToggleCriteria={toggleCriteriaSelection}
+            uploadingContract={uploadingContract}
           />
         )}
         {view === "dashboard" && (
@@ -1412,8 +1673,8 @@ function App() {
             dashboard={state.dashboard}
             payments={state.payments}
             needsAttention={needsAttention}
-            onOpenOnboarding={() => setView("onboarding")}
-            onOpenConsole={() => setView("console")}
+            onOpenOnboarding={() => navigateToView("onboarding")}
+            onOpenConsole={() => navigateToView("console")}
           />
         )}
         {view === "console" && (
@@ -1449,7 +1710,21 @@ function App() {
             query={searchQuery}
             results={searchResults}
             onQueryChange={setSearchQuery}
-            onOpenCustomer={(customer) => setModal({ type: "customer-360", payload: customer.id })}
+            onOpenCustomer={(customer) => openCustomer360(customer)}
+          />
+        )}
+        {view === "customer360" && (
+          <Customer360Page
+            customer={selectedCustomer360}
+            customers={state.customers}
+            invoices={state.invoices}
+            payments={state.payments}
+            pendingPayments={state.pendingPayments}
+            exceptions={state.exceptions}
+            exceptionHistory={state.exceptionHistory ?? []}
+            referrals={state.admin?.referrals ?? []}
+            rewards={state.admin?.rewards ?? []}
+            onBack={closeCustomer360}
           />
         )}
         {view === "admin" && (
@@ -1533,21 +1808,6 @@ function App() {
               "Potential duplicate archived. It will not be counted or applied again.",
             )
           }
-        />
-      </ModalShell>
-
-      <ModalShell show={modal.type === "customer-360"} onClose={closeModal} size="wide">
-        <Customer360Modal
-          customer={selectedCustomer360}
-          customers={state.customers}
-          invoices={state.invoices}
-          payments={state.payments}
-          pendingPayments={state.pendingPayments}
-          exceptions={state.exceptions}
-          exceptionHistory={state.exceptionHistory ?? []}
-          referrals={state.admin?.referrals ?? []}
-          rewards={state.admin?.rewards ?? []}
-          onClose={closeModal}
         />
       </ModalShell>
 
@@ -1701,6 +1961,7 @@ function WorkflowStrip({ activeStep }) {
 }
 
 function OnboardingView({
+  contractUploads,
   customers,
   currentCustomer,
   currentHistory,
@@ -1710,18 +1971,24 @@ function OnboardingView({
   form,
   needsFollowUp,
   onAddCustomService,
+  onAddInvoiceScheduleEntry,
   onCriteriaChange,
+  onContractUpload,
   onCustomerQueryChange,
   onCustomServiceChange,
   onFormChange,
+  onInvoiceScheduleChange,
   onOpenConsole,
+  onRemoveContract,
   onRemoveCustomService,
+  onRemoveInvoiceScheduleEntry,
   onSelectCustomer,
   onSubmit,
   onToggleCriteria,
   referralProgram,
   recentCustomers,
   saving,
+  uploadingContract,
   zelleReadyCount,
 }) {
   const customerSearchId = useId();
@@ -1730,6 +1997,10 @@ function OnboardingView({
     .sort((left, right) => left.name.localeCompare(right.name));
   const selectedCriteriaCodes = new Set(form.criteriaSelections.map((selection) => selection.code));
   const selectedServiceCount = buildOnboardingServiceEntries(form).length;
+  const invoiceScheduleTotal = form.invoiceSchedule.reduce(
+    (sum, entry) => sum + Number(entry.amount || 0),
+    0,
+  );
   const hasRequiredFields =
     form.firstName.trim() &&
     form.lastName.trim() &&
@@ -1776,8 +2047,127 @@ function OnboardingView({
             </div>
             <div className="chart-card onboarding-card">
               <form onSubmit={onSubmit}>
+                <div className="onboarding-block onboarding-contract-block">
+                  <div className="onboarding-block-head">
+                    <div>
+                      <h3>1. Contract intake</h3>
+                      <div className="sub">
+                        Start here. Upload signed contracts so Setu can prefill services, fees,
+                        installments, and service-start dates before onboarding is saved.
+                      </div>
+                    </div>
+                    <label className={`btn btn-sm btn-primary ${uploadingContract ? "is-disabled" : ""}`}>
+                      <input
+                        className="hidden-file-input"
+                        type="file"
+                        accept=".pdf,.docx,.txt,.md,.html,.json"
+                        multiple
+                        onChange={(event) => {
+                          void onContractUpload(event.target.files);
+                          event.target.value = "";
+                        }}
+                        disabled={uploadingContract}
+                      />
+                      {uploadingContract ? "Reading contract…" : "Upload contract"}
+                    </label>
+                  </div>
+
+                  <div className="autofill-note">
+                    Contracts are stored with the customer record after onboarding is saved. On AWS,
+                    the same upload path can be directed into a private S3 bucket by customer ID and date.
+                  </div>
+
+                  {contractUploads.length ? (
+                    <div className="contract-upload-list">
+                      {contractUploads.map((contract) => (
+                        <div className="contract-upload-card" key={contract.id}>
+                          <div className="contract-upload-head">
+                            <div>
+                              <div className="cust">{contract.fileName}</div>
+                              <div className="sub">
+                                {(contract.sizeBytes / 1024).toFixed(1)} KB ·{" "}
+                                {contract.parsed?.serviceStartDate
+                                  ? `Start ${formatShortDate(contract.parsed.serviceStartDate)}`
+                                  : "Start date not parsed yet"}
+                              </div>
+                            </div>
+                            <button
+                              className="btn btn-sm btn-ghost"
+                              onClick={() => onRemoveContract(contract.id)}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                          <div className="contract-upload-grid">
+                            <div>
+                              <div className="detail-label">Services</div>
+                              <div className="contract-service-cloud">
+                                {summarizeServiceLabels(
+                                  contract.parsed?.services?.map(
+                                    (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
+                                  ) ?? [],
+                                  6,
+                                ).visible.length
+                                  ? summarizeServiceLabels(
+                                      contract.parsed?.services?.map(
+                                        (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
+                                      ) ?? [],
+                                      6,
+                                    ).visible.map((service) => (
+                                      <span className="compact-service-pill" key={`${contract.id}-${service}`}>
+                                        {service}
+                                      </span>
+                                    ))
+                                  : <span className="sub">No services parsed yet</span>}
+                                {summarizeServiceLabels(
+                                  contract.parsed?.services?.map(
+                                    (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
+                                  ) ?? [],
+                                  6,
+                                ).overflowCount ? (
+                                  <span className="compact-service-pill muted">
+                                    +{summarizeServiceLabels(
+                                      contract.parsed?.services?.map(
+                                        (service) => service.name ?? service.shortLabel ?? service.longLabel ?? service,
+                                      ) ?? [],
+                                      6,
+                                    ).overflowCount} more
+                                  </span>
+                                ) : null}
+                              </div>
+                            </div>
+                            <div>
+                              <div className="detail-label">Fee + installments</div>
+                              <div className="sub">
+                                {contract.parsed?.totalFee
+                                  ? `${formatCurrency(contract.parsed.totalFee)} total fee`
+                                  : "Total fee not parsed yet"}
+                                {Array.isArray(contract.parsed?.installments) &&
+                                contract.parsed.installments.length
+                                  ? ` · ${contract.parsed.installments.length} installment${
+                                      contract.parsed.installments.length === 1 ? "" : "s"
+                                    }`
+                                  : ""}
+                              </div>
+                            </div>
+                          </div>
+                          <div className="contract-upload-preview">
+                            {contract.extractedTextPreview}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="picker-empty onboarding-inline-empty">
+                      No contracts uploaded yet. You can still onboard manually, but contract-first
+                      intake gives the cleanest prefills.
+                    </div>
+                  )}
+                </div>
+
                 <div className="field">
-                  <label htmlFor={customerSearchId}>Existing client search</label>
+                  <label htmlFor={customerSearchId}>2. Existing client search</label>
                   <div className="search-wrap modal-search">
                     <IconSearch size={18} />
                     <input
@@ -1878,10 +2268,34 @@ function OnboardingView({
                   </div>
                 </div>
 
+                <div className="field-row">
+                  <div className="field">
+                    <label>Service start date</label>
+                    <input
+                      type="date"
+                      value={form.serviceStartDate}
+                      onChange={(event) => onFormChange("serviceStartDate", event.target.value)}
+                    />
+                  </div>
+                  <div className="field">
+                    <label>Onboarded date/time</label>
+                    <input
+                      type="datetime-local"
+                      value={form.onboardedAt ? createDateTimeLocalValue(form.onboardedAt) : ""}
+                      onChange={(event) =>
+                        onFormChange(
+                          "onboardedAt",
+                          event.target.value ? new Date(event.target.value).toISOString() : "",
+                        )
+                      }
+                    />
+                  </div>
+                </div>
+
                 <div className="onboarding-block">
                   <div className="onboarding-block-head">
                     <div>
-                      <h3>Services enrolled in this step</h3>
+                      <h3>3. Services enrolled in this step</h3>
                       <div className="sub">
                         Select every EB1A criterion or custom service enrolled right now. Each one gets
                         its own timestamped history entry.
@@ -1910,12 +2324,14 @@ function OnboardingView({
                               disabled={Boolean(existingEnrollment)}
                               onChange={() => onToggleCriteria(option.code)}
                             />
-                            <div>
+                            <div className="service-picker-copy">
                               <div className="cust">{option.label}</div>
-                              <div className="sub">
+                              <div className="sub service-picker-caption">
                                 {existingEnrollment
-                                  ? `Already enrolled on ${formatEnrollmentTimestamp(existingEnrollment.enrolledAt)}`
-                                  : "Add this to the member's enrolled services"}
+                                  ? `Recorded ${formatEnrollmentTimestamp(existingEnrollment.enrolledAt)}`
+                                  : selected
+                                    ? "Selected for this intake step"
+                                    : "Tap to add in this intake step"}
                               </div>
                             </div>
                           </label>
@@ -1995,7 +2411,107 @@ function OnboardingView({
                 <div className="onboarding-block">
                   <div className="onboarding-block-head">
                     <div>
-                      <h3>Home address</h3>
+                      <h3>4. Billing schedule</h3>
+                      <div className="sub">
+                        These rows become draft invoices when onboarding is saved. Contract uploads
+                        prefill this automatically, and admins can override any field here.
+                      </div>
+                    </div>
+                    <div className="topbar-right">
+                      <span className="chip onboarding-chip">{formatCurrency(invoiceScheduleTotal)}</span>
+                      <button className="btn btn-sm" type="button" onClick={onAddInvoiceScheduleEntry}>
+                        <IconPlus size={14} />
+                        Add row
+                      </button>
+                    </div>
+                  </div>
+
+                  {form.invoiceSchedule.length ? (
+                    <div className="invoice-schedule-list">
+                      {form.invoiceSchedule.map((entry) => (
+                        <div className="invoice-schedule-row" key={entry.id}>
+                          <div className="field">
+                            <label>Service</label>
+                            <input
+                              value={entry.serviceName}
+                              onChange={(event) =>
+                                onInvoiceScheduleChange(
+                                  entry.id,
+                                  "serviceName",
+                                  normalizeServiceLabel(event.target.value),
+                                )
+                              }
+                              placeholder="Authorship"
+                            />
+                          </div>
+                          <div className="field">
+                            <label>Milestone / installment</label>
+                            <input
+                              value={entry.milestone}
+                              onChange={(event) =>
+                                onInvoiceScheduleChange(entry.id, "milestone", event.target.value)
+                              }
+                              placeholder="Installment 1"
+                            />
+                          </div>
+                          <div className="field">
+                            <label>Amount</label>
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={entry.amount}
+                              onChange={(event) =>
+                                onInvoiceScheduleChange(entry.id, "amount", event.target.value)
+                              }
+                            />
+                          </div>
+                          <div className="field">
+                            <label>Discount %</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.5"
+                              value={entry.discountPct}
+                              onChange={(event) =>
+                                onInvoiceScheduleChange(entry.id, "discountPct", event.target.value)
+                              }
+                            />
+                          </div>
+                          <div className="field">
+                            <label>Due date</label>
+                            <input
+                              type="date"
+                              value={entry.dueDate}
+                              onChange={(event) =>
+                                onInvoiceScheduleChange(entry.id, "dueDate", event.target.value)
+                              }
+                            />
+                          </div>
+                          <div className="custom-service-remove">
+                            <button
+                              className="btn btn-sm btn-ghost"
+                              type="button"
+                              onClick={() => onRemoveInvoiceScheduleEntry(entry.id)}
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="picker-empty onboarding-inline-empty">
+                      No billing schedule rows yet. Upload a contract or add manual installments now.
+                    </div>
+                  )}
+                </div>
+
+                <div className="onboarding-block">
+                  <div className="onboarding-block-head">
+                    <div>
+                      <h3>5. Home address</h3>
                       <div className="sub">Optional, but useful for complete client records.</div>
                     </div>
                   </div>
@@ -2172,10 +2688,12 @@ function OnboardingView({
                   <button
                     className="btn btn-primary"
                     type="submit"
-                    disabled={saving || !hasRequiredFields}
+                    disabled={saving || uploadingContract || !hasRequiredFields}
                   >
                     {saving
                       ? "Saving…"
+                      : uploadingContract
+                        ? "Waiting for contract…"
                       : currentCustomer
                         ? "Save profile + enroll services"
                         : "Onboard client"}
@@ -2201,7 +2719,7 @@ function OnboardingView({
                 currentHistory.map((service) => (
                   <div className="history-row" key={service.id}>
                     <div className="result-copy">
-                      <div className="cust">{service.name}</div>
+                      <div className="cust">{normalizeServiceLabel(service.name)}</div>
                       <div className="sub">
                         {service.isCustom ? "Custom service" : service.code ? "EB1A criterion" : "Service"}
                       </div>
@@ -2240,7 +2758,9 @@ function OnboardingView({
                       </div>
                     </div>
                     <div className="result-meta">
-                      <div className="sub">{customer.services[0] ?? "Service not set"}</div>
+                      <div className="sub">
+                        {customer.services[0] ? normalizeServiceLabel(customer.services[0]) : "Service not set"}
+                      </div>
                       <div className="mono">
                         {customer.profile.onboardedAt
                           ? new Date(customer.profile.onboardedAt).toLocaleDateString()
@@ -3621,7 +4141,7 @@ function buildServiceOptions(customer) {
     return DEFAULT_SERVICE_OPTIONS;
   }
 
-  const options = [...customer.services];
+  const options = Array.from(new Set(customer.services.map((service) => normalizeServiceLabel(service))));
   if (!options.includes("Custom")) {
     options.push("Custom");
   }
@@ -3723,7 +4243,7 @@ function formatRewardStatusTone(value) {
   return tones[value] ?? "neutral";
 }
 
-function Customer360Modal({
+function Customer360Page({
   customer,
   customers,
   invoices,
@@ -3733,7 +4253,7 @@ function Customer360Modal({
   exceptionHistory,
   referrals,
   rewards,
-  onClose,
+  onBack,
 }) {
   if (!customer) {
     return null;
@@ -3785,6 +4305,10 @@ function Customer360Modal({
   const serviceHistory = [...(customer.serviceHistory ?? [])].sort(
     (left, right) => getComparableTime(right.enrolledAt) - getComparableTime(left.enrolledAt),
   );
+  const contractRecords = [...(customer.contracts ?? [])].sort(
+    (left, right) => getComparableTime(right.uploadedAt) - getComparableTime(left.uploadedAt),
+  );
+  const activeContract = contractRecords[0] ?? customer.activeContract ?? null;
   const financeSnapshot = {
     openInvoices: customerInvoices.filter((invoice) => invoice.status === "sent" || invoice.status === "overdue")
       .length,
@@ -3795,20 +4319,22 @@ function Customer360Modal({
   const contractNote = customer.profile?.billingNotes?.trim();
 
   return (
-    <>
-      <div className="modal-head">
+    <div>
+      <div className="topbar">
         <div>
-          <h3>Customer 360</h3>
-          <div className="sub modal-sub">
+          <h1>Customer 360</h1>
+          <div className="sub">
             Full record view for onboarding, billing, payment history, referrals, and working
             contract context.
           </div>
         </div>
-        <button className="x" onClick={onClose}>
-          <IconX size={18} />
-        </button>
+        <div className="topbar-right">
+          <button className="btn btn-sm" onClick={onBack}>
+            Back to customer search
+          </button>
+        </div>
       </div>
-      <div className="modal-body customer360-layout">
+      <div className="content customer360-layout customer360-page-layout">
         <div className="customer360-hero">
           <div>
             <div className="detail-label">Customer snapshot</div>
@@ -3846,9 +4372,17 @@ function Customer360Modal({
             <div className="detail-label">Contract and billing setup</div>
             <div className="detail-kv"><span>Billing cadence</span><strong>{formatBillingCadence(customer.profile?.billingCadence)}</strong></div>
             <div className="detail-kv"><span>Preferred payment</span><strong>{formatPaymentMethod(customer.profile?.preferredPaymentMethod)}</strong></div>
-            <div className="detail-kv"><span>Enrolled services</span><strong>{customer.services.length ? customer.services.join(" · ") : "Not captured"}</strong></div>
-            <div className="detail-kv"><span>Working contract record</span><strong>Onboarding profile + service history + invoice ledger</strong></div>
-            {contractNote ? <div className="detail-note">{contractNote}</div> : <div className="detail-note">No separate contract note is stored yet. This prototype currently uses onboarding and billing settings as the working contract context.</div>}
+            <div className="detail-kv"><span>Service start</span><strong>{customer.profile?.serviceStartDate ? formatLongDate(customer.profile.serviceStartDate) : activeContract?.serviceStartDate ? formatLongDate(activeContract.serviceStartDate) : "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Enrolled services</span><strong>{customer.services.length ? summarizeServiceLabels(customer.services, 8).all.join(" · ") : "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Active contract</span><strong>{activeContract ? activeContract.fileName : "No contract uploaded yet"}</strong></div>
+            <div className="detail-kv"><span>Contract fee</span><strong>{activeContract?.totalFee ? formatCurrency(activeContract.totalFee) : "Not captured"}</strong></div>
+            <div className="detail-kv"><span>Installments</span><strong>{activeContract ? `${activeContract.installmentCount} planned` : "Not captured"}</strong></div>
+            {activeContract ? (
+              <a className="btn btn-sm" href={activeContract.downloadPath} rel="noreferrer" target="_blank">
+                Open uploaded contract
+              </a>
+            ) : null}
+            {contractNote ? <div className="detail-note">{contractNote}</div> : <div className="detail-note">No separate contract note is stored yet. Uploading a contract on onboarding keeps the billing setup, fees, and installments together with the client record.</div>}
           </div>
 
           <div className="detail-card">
@@ -3858,6 +4392,64 @@ function Customer360Modal({
             <div className="detail-kv"><span>Open invoices</span><strong>{String(financeSnapshot.openInvoices)}</strong></div>
             <div className="detail-kv"><span>Saved transactions</span><strong>{String(financeSnapshot.savedTransactions)}</strong></div>
             <div className="detail-kv"><span>Open reviews</span><strong>{String(financeSnapshot.openReviews)}</strong></div>
+          </div>
+        </div>
+
+        <div className="customer360-section">
+          <div className="section-head">
+            <h2>Contract records</h2>
+          </div>
+          <div className="section-desc">
+            Uploaded agreements, extracted critical fields, and the billing schedule that Setu used
+            to prefill onboarding and invoice drafts.
+          </div>
+          <div className="tcard">
+            {contractRecords.length ? (
+              contractRecords.map((contract) => (
+                <div className="contract-record-row" key={contract.id}>
+                  <div>
+                    <div className="cust">{contract.fileName}</div>
+                    <div className="sub">
+                      Uploaded {formatDateTimeValue(contract.uploadedAt)}
+                      {contract.uploadedByUsername ? ` · by ${contract.uploadedByUsername}` : ""}
+                    </div>
+                  </div>
+                  <div className="contract-record-meta">
+                    <div className="sub">
+                      {contract.serviceStartDate
+                        ? `Start ${formatLongDate(contract.serviceStartDate)}`
+                        : "Start date not captured"}
+                    </div>
+                    <div className="sub">
+                      {contract.totalFee ? formatCurrency(contract.totalFee) : "Fee pending"} ·{" "}
+                      {contract.installmentCount} installment
+                      {contract.installmentCount === 1 ? "" : "s"}
+                    </div>
+                    <div className="contract-service-cloud">
+                      {contract.services.length ? (
+                        summarizeServiceLabels(
+                          contract.services.map((service) => normalizeServiceLabel(service.name)),
+                          6,
+                        ).visible.map((service) => (
+                          <span className="compact-service-pill" key={`${contract.id}-${service}`}>
+                            {service}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="sub">No services extracted</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="contract-record-actions">
+                    <a className="btn btn-sm" href={contract.downloadPath} rel="noreferrer" target="_blank">
+                      Open
+                    </a>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <div className="empty">No contracts have been uploaded for this customer yet.</div>
+            )}
           </div>
         </div>
 
@@ -3873,7 +4465,7 @@ function Customer360Modal({
               serviceHistory.map((entry) => (
                 <div className="trow customer360-service-row" key={entry.id}>
                   <div>
-                    <div className="cust">{entry.serviceName}</div>
+                    <div className="cust">{normalizeServiceLabel(entry.name)}</div>
                     <div className="sub">{entry.isCustom ? "Custom service" : "EB1A criterion / standard service"}</div>
                   </div>
                   <div className="mono">{formatEnrollmentTimestamp(entry.enrolledAt)}</div>
@@ -4077,12 +4669,7 @@ function Customer360Modal({
           ) : null}
         </div>
       </div>
-      <div className="modal-foot">
-        <button className="btn" onClick={onClose}>
-          Close
-        </button>
-      </div>
-    </>
+    </div>
   );
 }
 

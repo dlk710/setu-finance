@@ -2,12 +2,14 @@
 
 Local full-stack prototype for:
 
-- onboarding clients before billing starts
+- uploading and parsing signed contracts before billing starts
+- prefilling onboarding, services, fees, installments, and service-start dates from contract data
+- letting admins override contract-derived details before saving the client record
 - sending invoice emails and PDF receipt emails through SMTP
 - polling a Gmail inbox for Zelle-like confirmation emails
 - matching parsed payments into `Payments to confirm` or `Exceptions`
 - preserving resolved exception history with action, actor, and timestamp
-- giving finance a spreadsheet-style customer register with a full 360 customer view
+- giving finance a spreadsheet-style customer register with a full-page 360 customer view
 - summarizing saved received amounts on the dashboard by day, week, month, or year
 - persisting the operational backend in PostgreSQL instead of a file store
 
@@ -15,23 +17,29 @@ Local full-stack prototype for:
 
 ```mermaid
 flowchart TD
-    A["Onboard client"] --> B["Create customer record"]
-    B --> C["Create and send invoice"]
-    C --> D["Capture payment from Zelle email or manual review"]
-    D --> E{"Match confidence"}
-    E -->|"Clear"| F["Payments to confirm"]
-    E -->|"Unclear"| G["Exceptions"]
-    G --> H["Finance resolves and assigns the right customer / action"]
-    H --> F
-    F --> I["Apply transaction"]
-    I --> J["Completed transactions"]
-    J --> K["Send or re-send PDF receipt"]
-    K --> L["Update dashboard and history"]
+    A["Upload signed contract"] --> B["Parse services, fee, installments, and service start date"]
+    B --> C["Admin reviews and overrides anything needed"]
+    C --> D["Save customer + contract record"]
+    D --> E["Generate draft invoices from contract schedule"]
+    E --> F["Send invoice"]
+    F --> G["Capture payment from Zelle email or manual review"]
+    G --> H{"Match confidence"}
+    H -->|"Clear"| I["Payments to confirm"]
+    H -->|"Unclear"| J["Exceptions"]
+    J --> K["Finance resolves and assigns the right customer / action"]
+    K --> I
+    I --> L["Apply transaction"]
+    L --> M["Completed transactions"]
+    M --> N["Send or re-send PDF receipt"]
+    N --> O["Update dashboard, customer 360, and history"]
 ```
 
 Plain-English version:
 
-- onboard the client
+- upload the contract first
+- let Setu prefill the client and billing schedule
+- make manual corrections if needed
+- save the client and draft invoices
 - send the invoice
 - capture the payment
 - review it in `Payments to confirm` or `Exceptions`
@@ -59,7 +67,7 @@ The portal requires a local username and password before finance data loads.
 Default local credentials:
 
 - username: `admin`
-- password: `setu-local-demo`
+- password: set through `PORTAL_PASSWORD` in your local `.env`
 
 Change them in [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/.env) with:
 
@@ -103,8 +111,9 @@ The current backend is designed as a small but scalable product foundation:
   - [server/db/pool.js](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/pool.js)
   - [server/db/migrations.js](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations.js)
   - [server/db/seed.js](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/seed.js)
-- Core schema is normalized across customers, contacts, aliases, invoices, payments, exceptions, activity, sequences, integrations, and dashboard projections in [server/db/migrations/001_portal_core.sql](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations/001_portal_core.sql)
+- Core schema is normalized across customers, contacts, aliases, invoices, payments, exceptions, activity, sequences, integrations, dashboard projections, and customer contracts in [server/db/migrations/001_portal_core.sql](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations/001_portal_core.sql)
 - onboarding and billing preferences are stored alongside customer identity through [server/db/migrations/002_customer_profiles.sql](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations/002_customer_profiles.sql)
+- contract intake, service-start dates, and contract route support extend that model through [server/db/migrations/009_contract_intake_and_customer_routes.sql](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations/009_contract_intake_and_customer_routes.sql)
 
 Performance and cost choices:
 
@@ -113,6 +122,7 @@ Performance and cost choices:
 - connection pooling with configurable limits
 - JSONB reserved only for low-volume integration state
 - derived read model assembly for the current portal while keeping the write model ready for more APIs later
+- contract binaries stored locally in development and redirectable to a private S3 bucket in cloud environments without changing the portal workflow
 
 Suite-readiness notes:
 
@@ -181,6 +191,24 @@ Current exception-review flow:
 - unresolved items stay in `Exceptions`
 - manual customer assignment immediately attaches the transaction to that customer record and moves it into `Payments to confirm`
 - resolved exceptions stay in history with the action taken, the resolving user, and the resolution timestamp
+
+## Configure contract storage
+
+Local development stores uploaded contract binaries under:
+
+- `server/storage/contracts/`
+
+Cloud environments can redirect the same upload path into a private S3 bucket with:
+
+- `CONTRACTS_S3_BUCKET`
+- `CONTRACTS_S3_PREFIX` (optional, defaults to `contracts`)
+- `AWS_REGION` or `AWS_DEFAULT_REGION`
+
+Storage behavior:
+
+- object keys are segmented by `customerCode / year / month / day / timestamp-fileName`
+- S3 writes use server-side encryption (`AES256`)
+- the customer 360 page links directly to the stored contract and shows critical parsed fields like service start date, fee, installments, and extracted services
 
 ## Configure Gmail inbox sync
 

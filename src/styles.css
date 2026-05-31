@@ -1145,6 +1145,10 @@ button {
   gap: 18px;
 }
 
+.customer360-page-layout {
+  padding-bottom: 28px;
+}
+
 .customer360-hero {
   display: flex;
   align-items: flex-start;
@@ -1216,6 +1220,29 @@ button {
 
 .customer360-review-card {
   margin-top: 4px;
+}
+
+.contract-record-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 0.5px solid var(--border-1);
+}
+
+.contract-record-row:last-child {
+  border-bottom: none;
+}
+
+.contract-record-meta {
+  display: grid;
+  gap: 6px;
+}
+
+.contract-record-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .admin-form-card {
@@ -1979,6 +2006,15 @@ button {
   margin-bottom: 18px;
 }
 
+.onboarding-contract-block {
+  padding-bottom: 4px;
+  border-bottom: 0.5px solid var(--border-1);
+}
+
+.hidden-file-input {
+  display: none;
+}
+
 .onboarding-block-head,
 .custom-service-head {
   display: flex;
@@ -1998,17 +2034,23 @@ button {
   flex-shrink: 0;
 }
 
+.service-picker-caption {
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
 .service-picker-list {
   display: grid;
   gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .service-picker-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border: 0.5px solid var(--border-1);
   border-radius: var(--radius);
   background: var(--paper);
@@ -2025,14 +2067,17 @@ button {
 
 .service-picker-check {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 10px;
   cursor: pointer;
   flex: 1;
 }
 
+.service-picker-copy {
+  min-width: 0;
+}
+
 .service-picker-check input {
-  margin-top: 3px;
   width: 15px;
   height: 15px;
   accent-color: var(--amber);
@@ -2089,6 +2134,80 @@ button {
   display: flex;
   align-items: center;
   min-height: 38px;
+}
+
+.contract-upload-list,
+.invoice-schedule-list {
+  display: grid;
+  gap: 12px;
+}
+
+.contract-upload-card,
+.invoice-schedule-row {
+  padding: 12px 14px;
+  border: 0.5px solid var(--border-1);
+  border-radius: var(--radius);
+  background: var(--paper-3);
+}
+
+.contract-upload-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.contract-upload-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.contract-upload-preview {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 0.5px solid color-mix(in srgb, var(--border-1) 88%, transparent);
+  background: color-mix(in srgb, var(--paper) 90%, white);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.contract-service-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.compact-service-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--amber-soft) 75%, var(--paper));
+  color: var(--text-1);
+  font-size: 11px;
+  font-family: var(--mono);
+  line-height: 1.2;
+}
+
+.compact-service-pill.muted {
+  background: var(--paper);
+  color: var(--text-2);
+}
+
+.invoice-schedule-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) 120px 110px 150px auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.invoice-schedule-row .field {
+  margin-bottom: 0;
 }
 
 .onboarding-inline-empty {
@@ -2283,6 +2402,7 @@ button {
 
   .service-picker-item,
   .custom-service-row,
+  .contract-upload-head,
   .onboarding-block-head,
   .custom-service-head,
   .history-row,
@@ -2294,8 +2414,18 @@ button {
     align-items: flex-start;
   }
 
+  .service-picker-list {
+    grid-template-columns: 1fr;
+  }
+
   .service-date-input {
     width: 100%;
+  }
+
+  .contract-upload-grid,
+  .invoice-schedule-row,
+  .contract-record-row {
+    grid-template-columns: 1fr;
   }
 
   .detail-score-wrap,

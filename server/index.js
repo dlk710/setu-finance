@@ -5,6 +5,7 @@ import {
   createCustomerOnboardingRecord,
   createInvoiceRecord,
   listDueInvoiceIds,
+  loadContractDownloadRecord,
   listPendingPaymentIds,
   loadState,
   prepareStateStore,
@@ -20,13 +21,18 @@ import {
   readAuthenticatedSession,
   setAuthCookie,
 } from "./services/auth.js";
+import { parseContractUpload } from "./services/contractParser.js";
 import { buildGmailClientStatus, syncGmailInbox } from "./services/gmailSync.js";
 import { getEmailIntegrationStatus, sendInvoiceEmail, sendReceiptEmail } from "./services/email.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
 
-app.use(express.json());
+app.use(express.json({ limit: "18mb" }));
+app.use("/api", (_request, response, next) => {
+  response.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 function createHttpError(statusCode, message) {
   const error = new Error(message);
@@ -202,12 +208,59 @@ app.post("/api/customers", async (request, response, next) => {
       throw new Error("Client onboarding data is required.");
     }
 
-    const result = await createCustomerOnboardingRecord({ form });
+    const result = await createCustomerOnboardingRecord({
+      form,
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
 
     response.json({
       message: result.message,
       state: formatApiState(result.state),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/contracts/preview", async (request, response, next) => {
+  try {
+    const { fileName, mimeType, contentBase64 } = request.body ?? {};
+    if (!fileName || !contentBase64) {
+      throw new Error("Contract file content is required for preview.");
+    }
+
+    const normalizedBase64 = String(contentBase64).includes(",")
+      ? String(contentBase64).slice(String(contentBase64).indexOf(",") + 1)
+      : String(contentBase64);
+    const buffer = Buffer.from(normalizedBase64, "base64");
+    if (!buffer.length) {
+      throw new Error("Uploaded contract could not be read.");
+    }
+
+    const preview = await parseContractUpload({
+      fileName: String(fileName),
+      mimeType: String(mimeType || "application/octet-stream"),
+      buffer,
+    });
+
+    response.json({
+      message: `Contract preview ready for ${fileName}.`,
+      preview,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/contracts/:contractId/download", async (request, response, next) => {
+  try {
+    const result = await loadContractDownloadRecord(request.params.contractId);
+    response.setHeader("Content-Type", result.file.mimeType || "application/octet-stream");
+    response.setHeader(
+      "Content-Disposition",
+      `inline; filename="${result.file.fileName.replace(/"/g, "")}"`,
+    );
+    response.send(result.file.buffer);
   } catch (error) {
     next(error);
   }

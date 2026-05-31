@@ -13,6 +13,7 @@
    - SMTP mail
    - Gmail auth and inbox parsing
    - payment matching
+   - contract parsing and contract storage routing
 5. `server/db/`
    Database runtime:
    - connection pooling
@@ -29,6 +30,7 @@
 - `customer_emails`
 - `customer_phones`
 - `customer_aliases`
+- `customer_contracts`
 - `invoices`
 - `payments`
 - `exceptions`
@@ -43,10 +45,11 @@
 
 ## Why this shape
 
-- Customers, contacts, aliases, and invoices are normalized because they will be reused across future modules.
+- Customers, contacts, aliases, contracts, and invoices are normalized because they will be reused across future modules.
 - Payments and exceptions are modeled as operational queues instead of frontend-only arrays.
 - Dashboard data is stored as projection tables so analytics can later move to dedicated pipelines without rewriting the UI contract immediately.
 - Integration metadata stays in JSONB because it is low-volume, sparse, and not latency-critical.
+- Contract binaries are abstracted behind a storage layer so local development can use the filesystem while cloud environments can move to private S3 without changing the onboarding API contract.
 
 ## Performance choices
 
@@ -60,6 +63,7 @@
   - exception status
 - Connection pooling is configurable through `.env`.
 - Request handlers stay thin; data shaping happens in the store layer so future endpoints can reuse the same transactional operations.
+- Customer 360 uses route-based navigation, which keeps browser back/forward behavior intact while still reading from the same transactional store.
 
 ## Product-suite growth path
 
@@ -83,6 +87,7 @@ The recommended first production deployment is intentionally different from the 
 - static frontend on S3 + CloudFront
 - Node/Express API on App Runner
 - PostgreSQL on RDS
+- contract files in a private S3 bucket keyed by customer code and upload date
 - background work through SQS + Lambda
 - scheduled Gmail sync through EventBridge Scheduler
 - outbound email through SES

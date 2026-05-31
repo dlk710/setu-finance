@@ -950,7 +950,7 @@
       <div class="deck"></div>
     </div>
     <h1>Updated Current State Wireframes</h1>
-    <p class="lead">These clickable wireframes now reflect the product as it exists today: login-protected portal access, onboarding-first client intake, dated service history, customer IDs, searchable invoicing, full Zelle transaction capture, human-reviewed payment application, referral program administration, and search across customer identities and invoices.</p>
+    <p class="lead">These clickable wireframes now reflect the product as it exists today: login-protected portal access, contract-first onboarding, contract-derived service and billing prefills, numeric customer IDs, searchable invoicing, full Zelle transaction capture, human-reviewed payment application, referral program administration, and full-page customer 360 navigation.</p>
     <div class="meta">
       <span class="pill">Internal finance portal</span>
       <span class="pill">Onboarding before billing</span>
@@ -981,7 +981,7 @@
         <div class="kicker">Finance Portal</div>
         <h2>Access is protected before money data loads.</h2>
         <p class="login-copy">Operators sign in before they can view customers, invoices, transactions, exceptions, or referral controls. This keeps the internal finance workspace gated from the start.</p>
-        <div class="benefit">Client onboarding and service history live in one system.</div>
+        <div class="benefit">Contracts, onboarding, billing schedules, and customer history live in one system.</div>
         <div class="benefit">Zelle confirmations are captured into a structured transaction record.</div>
         <div class="benefit">Human review still controls the final apply step before receipts send.</div>
       </div>
@@ -1026,7 +1026,7 @@
         <div class="topbar">
           <div>
             <h1>Client onboarding</h1>
-            <div class="sub">Required identity fields first, then service enrollment, referral context, and optional address details.</div>
+            <div class="sub">Start from the signed contract, let Setu prefill the client and billing setup, then override anything needed before saving.</div>
           </div>
           <div class="topbar-right">
             <span class="status good">Customer code assigned</span>
@@ -1037,58 +1037,88 @@
           <div class="metrics c4">
             <div class="metric">
               <div class="label">Clients onboarded</div>
-              <div class="value">7</div>
+              <div class="value">12</div>
               <div class="note">Search-ready records</div>
             </div>
             <div class="metric">
-              <div class="label">Zelle match hints captured</div>
-              <div class="value">5</div>
-              <div class="note">Improves later matching</div>
+              <div class="label">Contracts imported</div>
+              <div class="value">3</div>
+              <div class="note">Stored with customer records</div>
             </div>
             <div class="metric">
               <div class="label">Services with dated history</div>
-              <div class="value">19</div>
+              <div class="value">25</div>
               <div class="note">Original and later add-ons preserved</div>
             </div>
             <div class="metric">
-              <div class="label">Referred clients</div>
-              <div class="value">2</div>
-              <div class="note">Rule snapshot stored</div>
+              <div class="label">Draft invoices from contracts</div>
+              <div class="value">9</div>
+              <div class="note">Generated automatically, editable before send</div>
             </div>
           </div>
 
           <div class="grid-2">
             <div class="panel">
-              <h3>Required profile information</h3>
-              <div class="desc">First name, last name, primary email, phone, and at least one service are mandatory. Everything else is optional but useful downstream.</div>
+              <h3>1. Contract intake and prefill</h3>
+              <div class="desc">Upload the signed agreement first. Setu reads the contract, captures key fields, and stages the onboarding form with editable defaults.</div>
+              <div class="field">
+                <label>Uploaded contracts</label>
+                <div class="fake-input">arjun-contract.txt · parsed · stored under customer/date path</div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label>Parsed services</label>
+                  <div class="fake-input">Authorship · Media package</div>
+                </div>
+                <div class="field">
+                  <label>Parsed total fee</label>
+                  <div class="fake-input mono">$4,200.00</div>
+                </div>
+              </div>
+              <div class="field-row">
+                <div class="field">
+                  <label>Service start date</label>
+                  <input value="2026-06-14">
+                </div>
+                <div class="field">
+                  <label>Installments detected</label>
+                  <div class="fake-input">3 rows ready for invoice generation</div>
+                </div>
+              </div>
+              <div class="hint">Admins can override any parsed value before save. The contract stays linked to the customer record and later appears in Customer 360.</div>
+            </div>
+
+            <div class="panel">
+              <h3>2. Profile details and overrides</h3>
+              <div class="desc">First name, last name, primary email, phone, and at least one service remain required. Address, notes, and Zelle hints are optional.</div>
               <div class="field-row">
                 <div class="field">
                   <label>First name</label>
-                  <input value="Karthik">
+                  <input value="Arjun">
                 </div>
                 <div class="field">
                   <label>Last name</label>
-                  <input value="Pamaraju">
+                  <input value="Das">
                 </div>
               </div>
               <div class="field-row">
                 <div class="field">
                   <label>Primary email</label>
-                  <input value="k.pamaraju@email.com">
+                  <input value="arjun.das@example.com">
                 </div>
                 <div class="field">
                   <label>Mobile phone</label>
-                  <input value="(630) 555-0124">
+                  <input value="(312) 555-0144">
                 </div>
               </div>
               <div class="field">
                 <label>Customer ID</label>
-                <div class="fake-input mono">100009</div>
+                <div class="fake-input mono">100012</div>
               </div>
               <div class="field">
                 <label>Home address</label>
-                <textarea>4126 Westridge Drive
-Naperville, IL 60563
+                <textarea>100 State Street
+Chicago, IL 60602
 United States</textarea>
               </div>
               <div class="field-row">
@@ -1104,41 +1134,69 @@ United States</textarea>
             </div>
 
             <div class="panel">
-              <h3>Service enrollment capture</h3>
-              <div class="desc">The default checklist uses EB1A criteria. Each selected service keeps its own enrollment timestamp, and custom services can be added alongside them.</div>
+              <h3>3. Compact service selection</h3>
+              <div class="desc">The onboarding list stays short and finance-friendly. Setu uses simple service labels and keeps the detailed criterion text behind the scenes.</div>
               <div class="service-grid">
                 <div class="service-item">
                   <div>
-                    <div class="title">Authorship of scholarly articles</div>
-                    <div class="note">Selected on May 29, 2026 at 8:15 AM</div>
+                    <div class="title">Authorship</div>
+                    <div class="note">Selected for this intake step</div>
                   </div>
-                  <span class="chip selected">Required</span>
+                  <span class="chip selected">Contract</span>
                 </div>
                 <div class="service-item">
                   <div>
-                    <div class="title">Participation as a judge of the work of others</div>
-                    <div class="note">Selected on May 29, 2026 at 8:15 AM</div>
+                    <div class="title">Media package</div>
+                    <div class="note">Selected for this intake step</div>
                   </div>
-                  <span class="chip selected">Selected</span>
+                  <span class="chip selected">Contract</span>
                 </div>
                 <div class="service-item">
                   <div>
-                    <div class="title">Custom service: Premium profile rewrite</div>
-                    <div class="note">Free-form entry with its own timestamp</div>
+                    <div class="title">RFE support</div>
+                    <div class="note">Admin-added custom service</div>
                   </div>
                   <span class="chip selected">Custom</span>
                 </div>
               </div>
               <div class="field" style="margin-top:12px;">
                 <label>Optional billing notes</label>
-                <textarea>Prefers receipt to primary email. If Zelle memo is missing, ops usually verifies by phone before applying.</textarea>
+                <textarea>Contract prefills the billing schedule, but ops can still adjust labels, fee split, and due dates before invoices go out.</textarea>
               </div>
             </div>
           </div>
 
           <div class="grid-2">
             <div class="panel">
-              <h3>Referral and payment identity</h3>
+              <h3>4. Billing schedule generated from contract</h3>
+              <div class="desc">Each parsed installment becomes a draft invoice row. Finance can change the milestone label, service, amount, discount, or due date before save.</div>
+              <div class="timeline">
+                <div class="timeline-item">
+                  <div class="timeline-head">
+                    <strong>Installment 1 · Authorship kickoff</strong>
+                    <span class="mono">$1,700 · Jun 14</span>
+                  </div>
+                  <div class="sub">Manual override applied before the draft invoice was created</div>
+                </div>
+                <div class="timeline-item">
+                  <div class="timeline-head">
+                    <strong>Installment 2 · Media package drafting</strong>
+                    <span class="mono">$1,400 · Jul 14</span>
+                  </div>
+                  <div class="sub">Generated from the uploaded contract</div>
+                </div>
+                <div class="timeline-item">
+                  <div class="timeline-head">
+                    <strong>Installment 3 · Media package filing</strong>
+                    <span class="mono">$1,100 · Aug 14</span>
+                  </div>
+                  <div class="sub">Draft invoice row ready for send</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="panel">
+              <h3>5. Referral and payment identity</h3>
               <div class="desc">Optional details here make the later finance workflow faster without blocking onboarding.</div>
               <div class="field-row">
                 <div class="field">
@@ -1153,16 +1211,16 @@ United States</textarea>
               <div class="field-row">
                 <div class="field">
                   <label>Zelle sender name</label>
-                  <input value="KARTHIK PAMARAJU">
+                  <input value="ARJUN DAS">
                 </div>
                 <div class="field">
                   <label>Zelle sender email</label>
-                  <input value="">
+                  <input value="arjun.das@example.com">
                 </div>
               </div>
               <div class="field">
                 <label>Zelle sender phone last 4</label>
-                <input value="0124">
+                <input value="0144">
               </div>
               <div class="hint">These hints improve matching later, but the system still stores the full synced transaction separately.</div>
             </div>
@@ -1173,24 +1231,24 @@ United States</textarea>
               <div class="timeline">
                 <div class="timeline-item">
                   <div class="timeline-head">
-                    <strong>Authorship of scholarly articles</strong>
-                    <span class="mono">May 29, 2026 8:15 AM</span>
+                    <strong>Authorship</strong>
+                    <span class="mono">Jun 14, 2026 9:00 AM</span>
                   </div>
-                  <div class="sub">Original onboarding enrollment</div>
+                  <div class="sub">Imported from the signed contract</div>
                 </div>
                 <div class="timeline-item">
                   <div class="timeline-head">
-                    <strong>Participation as a judge of the work of others</strong>
-                    <span class="mono">May 29, 2026 8:15 AM</span>
+                    <strong>Media package</strong>
+                    <span class="mono">Jun 14, 2026 9:00 AM</span>
                   </div>
-                  <div class="sub">Captured in the same intake session</div>
+                  <div class="sub">Imported from the signed contract</div>
                 </div>
                 <div class="timeline-item">
                   <div class="timeline-head">
-                    <strong>Premium profile rewrite</strong>
-                    <span class="mono">Aug 17, 2026 2:42 PM</span>
+                    <strong>RFE support</strong>
+                    <span class="mono">Jun 14, 2026 9:00 AM</span>
                   </div>
-                  <div class="sub">Later service add-on</div>
+                  <div class="sub">Admin-added custom service during override</div>
                 </div>
               </div>
             </div>
@@ -1788,32 +1846,32 @@ Memo camping</div>
                 <h3>Customer 360 preview</h3>
                 <span class="status danger">Mismatch</span>
               </div>
-              <div class="desc">Clicking a customer opens the full finance record without leaving the search context. This view brings onboarding, billing, payments, referrals, and contract context into one place.</div>
+              <div class="desc">Clicking a customer opens a dedicated 360 page with its own URL, so browser back and forward work normally while finance reviews onboarding, billing, contracts, and payments.</div>
               <div class="service-grid">
                 <div class="detail-box">
-                  <h3>Rahul Kapoor</h3>
-                  <div class="kv"><span class="k">Customer ID</span><span class="mono">100007</span></div>
-                  <div class="kv"><span class="k">Signed up</span><span>May 23, 2026 · 12:00 PM</span></div>
+                  <h3>Arjun Das</h3>
+                  <div class="kv"><span class="k">Customer ID</span><span class="mono">100012</span></div>
+                  <div class="kv"><span class="k">Signed up</span><span>May 31, 2026 · 11:00 AM</span></div>
                   <div class="kv"><span class="k">Preferred payment</span><span>Zelle first</span></div>
                   <div class="kv"><span class="k">Billing cadence</span><span>Per milestone</span></div>
                 </div>
                 <div class="detail-box">
-                  <h3>Invoice ledger</h3>
-                  <div class="kv"><span class="k">500058</span><span class="status">Sent</span></div>
-                  <div class="kv"><span class="k">Service</span><span>Judging · M1</span></div>
-                  <div class="kv"><span class="k">Expected</span><span class="mono">$1,710</span></div>
+                  <h3>Contract record</h3>
+                  <div class="kv"><span class="k">File</span><span>arjun-contract.txt</span></div>
+                  <div class="kv"><span class="k">Start date</span><span>Jun 14, 2026</span></div>
+                  <div class="kv"><span class="k">Fee</span><span class="mono">$4,200.00</span></div>
                 </div>
                 <div class="detail-box">
-                  <h3>Transaction history</h3>
-                  <div class="kv"><span class="k">Received</span><span>May 25, 2026</span></div>
-                  <div class="kv"><span class="k">Amount</span><span class="mono">$1,800</span></div>
-                  <div class="kv"><span class="k">Transaction #</span><span class="mono">ZELLE-RAH-20260525-0830</span></div>
+                  <h3>Draft invoice ledger</h3>
+                  <div class="kv"><span class="k">500097</span><span class="status">Draft</span></div>
+                  <div class="kv"><span class="k">Service</span><span>Authorship · Installment 1</span></div>
+                  <div class="kv"><span class="k">Expected</span><span class="mono">$1,700.00</span></div>
                 </div>
                 <div class="detail-box">
-                  <h3>Referrals and contract</h3>
+                  <h3>Operational context</h3>
                   <div class="kv"><span class="k">Referred by</span><span>Direct</span></div>
-                  <div class="kv"><span class="k">Billing notes</span><span>Milestone references required in memo</span></div>
-                  <div class="kv"><span class="k">Working contract</span><span>Onboarding + invoice ledger</span></div>
+                  <div class="kv"><span class="k">Billing notes</span><span>Contract prefills were manually reviewed before save</span></div>
+                  <div class="kv"><span class="k">Working route</span><span class="mono">/customers/100012</span></div>
                 </div>
               </div>
             </div>
@@ -1826,7 +1884,7 @@ Memo camping</div>
   <section class="footer-cards">
     <div class="footer-card">
       <h4>Workflow order</h4>
-      <p>Onboard client, capture service history, create invoice, capture transaction, review, apply, and send the receipt PDF from completed transactions.</p>
+      <p>Upload contract, prefill and override onboarding, generate draft invoices, capture transaction, review, apply, and send the receipt PDF from completed transactions.</p>
     </div>
     <div class="footer-card">
       <h4>Transaction safety</h4>

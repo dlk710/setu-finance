@@ -417,24 +417,29 @@
 
       <h4>Client onboarding</h4>
       <ul>
-        <li>The first step in the workflow must be client onboarding.</li>
+        <li>The first step in the workflow must be contract upload and client onboarding.</li>
+        <li>The system should parse uploaded contracts and prefill services, total fee, installments, billing cadence, and service-start date whenever possible.</li>
+        <li>Admins must be able to override or add fields manually before saving the record.</li>
         <li>First name, last name, primary email, phone, and at least one enrolled service must be required.</li>
         <li>Home address should be available as an optional field.</li>
         <li>Every client must receive a stable customer ID.</li>
         <li>Service history must preserve the date and time when each service was enrolled.</li>
+        <li>Cloud deployments must store contracts in a private S3 bucket organized by customer ID and date.</li>
       </ul>
 
       <h4>Customer search and record view</h4>
       <ul>
         <li>The customer register should feel dense and operational, similar to a finance worksheet rather than a loose card list.</li>
         <li>Each customer row should show a clear status so finance can see whether the record is active, awaiting payment, overdue, or needs review.</li>
-        <li>Clicking a customer should open a 360 view with signup date, contacts, service history, invoices, payments, referrals, rewards, and working contract or billing information.</li>
+        <li>Clicking a customer should open a full-page 360 view with signup date, contacts, service history, invoices, payments, referrals, rewards, uploaded contracts, and working billing information.</li>
+        <li>The 360 view should show critical contract fields such as service start date, fee, installment count, and contract file link.</li>
       </ul>
 
       <h4>Invoices and billing</h4>
       <ul>
         <li>Finance users must be able to create invoices from the client record.</li>
         <li>The invoice flow should reuse the client’s enrolled services as the default selection set.</li>
+        <li>Parsed contract installments should be able to generate draft invoices automatically during onboarding.</li>
         <li>The system must support invoice statuses such as draft, sent, paid, and overdue.</li>
         <li>The system must support invoice email delivery.</li>
       </ul>

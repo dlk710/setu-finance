@@ -139,6 +139,7 @@ async function truncatePortalTables(client) {
       customer_reward_ledger,
       customer_referrals,
       invoices,
+      customer_contracts,
       customer_service_enrollments,
       customer_profiles,
       customer_aliases,
@@ -286,6 +287,7 @@ export async function replaceStateInDatabase(client, state) {
           billing_cadence,
           referral_source,
           billing_notes,
+          service_start_date,
           home_address_line1,
           home_address_line2,
           home_city,
@@ -296,8 +298,8 @@ export async function replaceStateInDatabase(client, state) {
           updated_at
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
-          COALESCE($14::timestamptz, NOW()),
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14::date,
+          COALESCE($15::timestamptz, NOW()),
           NOW()
         )
       `,
@@ -309,6 +311,7 @@ export async function replaceStateInDatabase(client, state) {
         profile.billingCadence ?? "per_milestone",
         profile.referralSource ?? null,
         profile.billingNotes ?? null,
+        profile.serviceStartDate ?? null,
         profile.homeAddressLine1 ?? null,
         profile.homeAddressLine2 ?? null,
         profile.homeCity ?? null,

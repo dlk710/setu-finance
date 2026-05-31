@@ -13,6 +13,7 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 ## Business Outcomes
 
 - Reduce manual re-entry between onboarding, invoicing, payment review, and receipt sending
+- Start intake from the signed contract instead of retyping billing setup from scratch
 - Keep a durable history of client enrollments, billing activity, and payment decisions
 - Make Zelle-based collections easier to reconcile without removing human control over final posting
 - Support future expansion into a broader product suite by using stable customer IDs and reusable customer records
@@ -21,11 +22,15 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 
 ### 1. Client onboarding must happen first
 
+- The system must let staff upload one or more signed contracts as the starting point before invoicing begins.
+- The system must parse key contract fields such as services, fees, installments, and service-start date when possible.
+- Staff must be able to override or add fields manually before saving the onboarding record.
 - The system must let staff create or update a client profile before invoicing begins.
 - First name, last name, primary email, phone number, and at least one service enrollment must be required.
 - Home address should be available as an optional field for future billing and compliance needs.
 - Each enrolled service must keep the date and time when that service was added.
 - The system must allow clients to enroll in additional services later without losing historical enrollment records.
+- The service list shown during onboarding should stay compact and use short service labels that finance can scan quickly.
 
 ### 2. Client records must be reusable
 
@@ -33,12 +38,14 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - The client record must support multiple contact details and payment identity hints.
 - Search must work across name, email, phone, aliases, and invoice references.
 - The customer register should show a clearly defined status for each customer so finance can tell at a glance whether the record is active, awaiting payment, overdue, or needs review.
-- Clicking a customer should open a full 360 view with signup date, contact details, service history, invoices, transaction history, referrals, rewards, and current billing or contract context.
+- Clicking a customer should open a full 360 page with signup date, contact details, service history, invoices, transaction history, referrals, rewards, and current billing or contract context.
+- The customer 360 page must show uploaded contracts and critical extracted fields such as fee, service-start date, installment count, and contract file link.
 
 ### 3. Invoicing must be fast and controlled
 
 - Staff must be able to create invoices from an existing client record.
 - The invoice flow should use the client’s enrolled services as the default choices.
+- Contract-derived installment schedules should be able to create draft invoices automatically during onboarding.
 - The system should support draft, sent, paid, and overdue invoice states.
 - The system must support invoice email sending.
 
@@ -92,6 +99,7 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - The portal must require login before finance data is visible.
 - Payment application must stay human-controlled.
 - Important state changes should be traceable in system history.
+- In cloud environments, uploaded contracts must be stored in a private S3 bucket organized by customer ID and date.
 
 ## Non-Functional Expectations
 

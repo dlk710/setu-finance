@@ -817,6 +817,12 @@ export function normalizeSeedIdentifiers(state) {
       ...customer,
       customerCode: normalizedCustomerCode,
       invoices: normalizedInvoices,
+      contracts: customer.contracts ?? [],
+      activeContract: customer.activeContract ?? customer.contracts?.[0] ?? null,
+      profile: {
+        serviceStartDate: null,
+        ...(customer.profile ?? {}),
+      },
     };
   });
 
