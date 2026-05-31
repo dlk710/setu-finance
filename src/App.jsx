@@ -25,6 +25,7 @@ import {
   buildAskSetuAnswer,
 } from "./lib/askSetu";
 import {
+  buildReferralTrend,
   buildTransactionTrend,
   calculateZelleAmount,
   formatCompactCurrency,
@@ -185,6 +186,7 @@ function readFileAsDataUrl(file) {
 const DEFAULT_ONBOARDING_FORM = {
   selectedCustomerId: "",
   referringCustomerId: "",
+  referralRelationship: "",
   firstName: "",
   lastName: "",
   customerEmail: "",
@@ -253,6 +255,7 @@ function createOnboardingFormFromCustomer(customer) {
     zelleSenderEmail: zelleAlias?.email ?? "",
     zelleSenderPhoneLast4: zelleAlias?.phoneLast4 ?? "",
     referringCustomerId: customer?.profile?.referredByCustomerId ?? "",
+    referralRelationship: customer?.profile?.referralRelationshipLabel ?? "",
     referralSource: customer?.profile?.referralSource ?? "",
     billingNotes: customer?.profile?.billingNotes ?? "",
     homeAddressLine1: customer?.profile?.homeAddressLine1 ?? "",
@@ -488,9 +491,23 @@ const DASHBOARD_TRANSACTION_FILTERS = [
   { key: "year", label: "Year" },
 ];
 
+const REFERRAL_RELATIONSHIP_OPTIONS = [
+  { value: "", label: "Select relationship" },
+  { value: "friend", label: "Friend" },
+  { value: "family", label: "Family" },
+  { value: "colleague", label: "Colleague" },
+  { value: "community", label: "Community" },
+  { value: "former client", label: "Former client" },
+  { value: "other", label: "Other" },
+];
+
 function createReferralProgramForm(config = {}) {
   return {
     enabled: config.enabled !== false,
+    programName: config.programName ?? "Standard referral program",
+    programDescription:
+      config.programDescription ??
+      "Referral bonuses are earned when the referred client reaches the payment or time threshold, then applied as a discount on the referrer's next eligible draft invoice.",
     bonusAmount: String(config.bonusAmount ?? 500),
     qualifyingPaidAmount: String(config.qualifyingPaidAmount ?? 3000),
     qualificationMonths: String(config.qualificationMonths ?? 6),
@@ -708,6 +725,7 @@ function App() {
   const [uploadingContract, setUploadingContract] = useState(false);
   const [savingOnboarding, setSavingOnboarding] = useState(false);
   const [savingReferralProgram, setSavingReferralProgram] = useState(false);
+  const [applyingReferralRewardId, setApplyingReferralRewardId] = useState("");
   const [saveAlias, setSaveAlias] = useState(true);
   const [syncingInbox, setSyncingInbox] = useState(false);
   const [sendingReceiptId, setSendingReceiptId] = useState("");
@@ -769,10 +787,19 @@ function App() {
   const currentOnboardingHistory = selectedOnboardingCustomer?.serviceHistory ?? [];
   const referralProgram = state.admin?.referralProgram ?? {
     enabled: true,
+    programName: "Standard referral program",
+    programDescription:
+      "Referral bonuses are earned when the referred client reaches the payment or time threshold, then applied as a discount on the referrer's next eligible draft invoice.",
     bonusAmount: 500,
     qualifyingPaidAmount: 3000,
     qualificationMonths: 6,
   };
+  const referralInsights = buildReferralProgramInsights({
+    referrals: state.admin?.referrals ?? [],
+    rewards: state.admin?.rewards ?? [],
+    invoices: state.invoices ?? [],
+  });
+  const referralTrend = buildReferralTrend(state.admin?.referrals ?? [], state.admin?.rewards ?? [], "month");
 
   function navigateToRoute(nextRoute, { replace = false } = {}) {
     const targetPath = buildPortalPath(nextRoute);
@@ -810,6 +837,8 @@ function App() {
     setReferralProgramForm(createReferralProgramForm(state.admin?.referralProgram));
   }, [
     state.admin?.referralProgram?.enabled,
+    state.admin?.referralProgram?.programName,
+    state.admin?.referralProgram?.programDescription,
     state.admin?.referralProgram?.bonusAmount,
     state.admin?.referralProgram?.qualifyingPaidAmount,
     state.admin?.referralProgram?.qualificationMonths,
@@ -850,6 +879,7 @@ function App() {
     setUploadingContract(false);
     setSavingOnboarding(false);
     setSavingReferralProgram(false);
+    setApplyingReferralRewardId("");
     setSaveAlias(true);
     setSyncingInbox(false);
     setSendingReceiptId("");
@@ -1172,16 +1202,20 @@ function App() {
   }
 
   async function saveReferralProgram() {
+    const programName = referralProgramForm.programName.trim();
+    const programDescription = referralProgramForm.programDescription.trim();
     const bonusAmount = Number(referralProgramForm.bonusAmount);
     const qualifyingPaidAmount = Number(referralProgramForm.qualifyingPaidAmount);
     const qualificationMonths = Number(referralProgramForm.qualificationMonths);
 
     if (
+      !programName ||
+      !programDescription ||
       !Number.isFinite(bonusAmount) ||
       !Number.isFinite(qualifyingPaidAmount) ||
       !Number.isFinite(qualificationMonths)
     ) {
-      pushToast("Enter valid referral rule values before saving.");
+      pushToast("Enter a rule name, rule description, and valid referral values before saving.");
       return;
     }
 
@@ -1192,6 +1226,8 @@ function App() {
         body: {
           config: {
             enabled: referralProgramForm.enabled,
+            programName,
+            programDescription,
             bonusAmount,
             qualifyingPaidAmount,
             qualificationMonths,
@@ -1207,6 +1243,24 @@ function App() {
       pushToast(error.message);
     } finally {
       setSavingReferralProgram(false);
+    }
+  }
+
+  async function applyReferralReward(rewardId) {
+    setApplyingReferralRewardId(rewardId);
+    try {
+      const data = await apiRequest(`/api/admin/referral-rewards/${rewardId}/apply`, {
+        method: "POST",
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setApplyingReferralRewardId("");
     }
   }
 
@@ -1734,7 +1788,7 @@ function updateOnboardingForm(field, value) {
           onClick={() => navigateToView("admin")}
         >
           <IconTable size={17} />
-          Program admin
+          Referral Program
         </button>
         <div className="sidebar-foot">
           <div className="row">
@@ -1785,6 +1839,9 @@ function updateOnboardingForm(field, value) {
           <DashboardView
             dashboard={state.dashboard}
             payments={state.payments}
+            referrals={state.admin?.referrals ?? []}
+            rewards={state.admin?.rewards ?? []}
+            referralTrend={referralTrend}
             needsAttention={needsAttention}
             onOpenOnboarding={() => navigateToView("onboarding")}
             onOpenConsole={() => navigateToView("console")}
@@ -1844,9 +1901,12 @@ function updateOnboardingForm(field, value) {
           <AdminView
             referralProgram={referralProgram}
             referralProgramForm={referralProgramForm}
+            invoices={state.invoices}
             referrals={state.admin?.referrals ?? []}
             rewards={state.admin?.rewards ?? []}
+            insights={referralInsights}
             saving={savingReferralProgram}
+            applyingRewardId={applyingReferralRewardId}
             onFormChange={(field, value) =>
               setReferralProgramForm((current) => ({
                 ...current,
@@ -1854,6 +1914,7 @@ function updateOnboardingForm(field, value) {
               }))
             }
             onSave={saveReferralProgram}
+            onApplyReward={applyReferralReward}
           />
         )}
       </main>
@@ -2797,21 +2858,40 @@ function OnboardingView({
                     </select>
                     <div className="autofill-note">
                       {referralProgram.enabled
-                        ? `Active rule: ${formatCurrency(referralProgram.bonusAmount)} after ${formatCurrency(
-                            referralProgram.qualifyingPaidAmount,
-                          )} paid or ${referralProgram.qualificationMonths} months.`
+                        ? `${referralProgram.programName}: ${formatCurrency(
+                            referralProgram.bonusAmount,
+                          )} after ${formatCurrency(referralProgram.qualifyingPaidAmount)} paid or ${referralProgram.qualificationMonths} months.`
                         : "Referral program is disabled for new enrollments right now."}
                     </div>
                   </div>
                 </div>
 
-                <div className="field">
-                  <label>Referral source</label>
-                  <input
-                    value={form.referralSource}
-                    onChange={(event) => onFormChange("referralSource", event.target.value)}
-                    placeholder="Referral, direct, website, partner…"
-                  />
+                <div className="field-row">
+                  <div className="field">
+                    <label>Referral relationship</label>
+                    <select
+                      value={form.referralRelationship}
+                      onChange={(event) => onFormChange("referralRelationship", event.target.value)}
+                      disabled={!form.referringCustomerId}
+                    >
+                      {REFERRAL_RELATIONSHIP_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <div className="autofill-note">
+                      Capture whether the lead came from a friend, family member, colleague, or another relationship so reporting stays readable later.
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label>Referral source</label>
+                    <input
+                      value={form.referralSource}
+                      onChange={(event) => onFormChange("referralSource", event.target.value)}
+                      placeholder="Referral, direct, website, partner…"
+                    />
+                  </div>
                 </div>
 
                 <div className="field">
@@ -3035,7 +3115,75 @@ function TransactionTrendSection({ payments }) {
   );
 }
 
-function DashboardView({ dashboard, payments, needsAttention, onOpenConsole, onOpenOnboarding }) {
+function ReferralProgramTrendSection({ trend, referrals, rewards }) {
+  const maxSpent = trend?.maxBonusSpent || 1;
+
+  return (
+    <section className="section no-gap">
+      <div className="section-head">
+        <h2>Referral program trend</h2>
+      </div>
+      <div className="section-desc">
+        Referrals created and bonus dollars already spent through invoice discounts over the last 12
+        months.
+      </div>
+      <div className="chart-card referral-chart-card">
+        <div className="trend-summary-strip">
+          <div>
+            <div className="detail-label">Relationships tracked</div>
+            <div className="cust">{referrals.length}</div>
+          </div>
+          <div>
+            <div className="detail-label">Bonuses applied</div>
+            <div className="cust">{rewards.filter((reward) => reward.status === "applied").length}</div>
+          </div>
+          <div>
+            <div className="detail-label">Total bonus spent</div>
+            <div className="cust">{formatCurrency(trend?.totals?.bonusSpent ?? 0)}</div>
+          </div>
+        </div>
+        {trend?.empty ? (
+          <div className="empty">
+            <IconCheck size={14} />
+            No referral activity recorded yet
+          </div>
+        ) : (
+          <div className="referral-bars">
+            {trend.buckets.map((bucket) => {
+              const height = maxSpent > 0 ? (bucket.bonusSpent / maxSpent) * 100 : 0;
+              return (
+                <div className="referral-bar-col" key={`${bucket.key}`}>
+                  <div className="referral-count-pill">
+                    {bucket.referralCount ? `${bucket.referralCount} referral${bucket.referralCount === 1 ? "" : "s"}` : "0 referrals"}
+                  </div>
+                  <div className="referral-bar-track">
+                    <div
+                      className="referral-bar-fill"
+                      style={{ height: bucket.bonusSpent ? `${Math.max(height, 4)}%` : "0%" }}
+                    />
+                  </div>
+                  <div className="referral-bar-amount">{bucket.bonusSpent ? formatCompactCurrency(bucket.bonusSpent) : "$0"}</div>
+                  <div className="bar-label">{bucket.axisLabel}</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function DashboardView({
+  dashboard,
+  payments,
+  referrals,
+  rewards,
+  referralTrend,
+  needsAttention,
+  onOpenConsole,
+  onOpenOnboarding,
+}) {
   return (
     <div>
       <div className="topbar">
@@ -3087,6 +3235,8 @@ function DashboardView({ dashboard, payments, needsAttention, onOpenConsole, onO
         </div>
 
         <TransactionTrendSection payments={payments} />
+
+        <ReferralProgramTrendSection trend={referralTrend} referrals={referrals} rewards={rewards} />
 
         <div className="two-col">
           <section className="section no-gap">
@@ -3315,7 +3465,10 @@ function ConsoleView({
                 </div>
                 <div>
                   {invoice.service} {invoice.milestone}
-                  <div className="sub">due {formatShortDate(invoice.dueDate)}</div>
+                  <div className="sub">
+                    due {formatShortDate(invoice.dueDate)}
+                    {invoice.referralBonusAmount ? ` · includes ${formatCurrency(invoice.referralBonusAmount)} referral bonus` : ""}
+                  </div>
                 </div>
                 <div className="mono">{formatCurrency(invoice.zelleAmount)}</div>
                 <div>
@@ -3604,45 +3757,62 @@ function ConsoleView({
 function AdminView({
   referralProgram,
   referralProgramForm,
+  insights,
   referrals,
   rewards,
+  applyingRewardId,
   saving,
+  onApplyReward,
   onFormChange,
   onSave,
 }) {
-  const availableRewards = rewards.filter((reward) => reward.status === "available");
-  const awardedRewards = rewards.filter((reward) => reward.status === "applied");
+  const availableRewards = insights?.qualifiedRewards ?? [];
+  const awardedRewards = insights?.appliedRewards ?? [];
+  const topReferrers = insights?.topReferrers ?? [];
 
   return (
     <div>
       <div className="topbar">
         <div>
-          <h1>Program admin</h1>
+          <h1>Referral Program</h1>
           <div className="sub">
-            Configure the referral rule once and keep each customer referral on its own historical
-            snapshot for future product-suite growth.
+            Define the rules once, track who referred whom, and apply qualified bonuses as discounts
+            on the next eligible invoice.
           </div>
         </div>
       </div>
       <div className="content">
-        <div className="metrics c3">
+        <div className="metrics c4">
           <MetricCard accent label="Program status" value={referralProgram.enabled ? "Active" : "Disabled"} />
-          <MetricCard label="Tracked referrals" value={referrals.length} />
-          <MetricCard label="Rewards available" value={availableRewards.length} />
+          <MetricCard label="Tracked relationships" value={referrals.length} />
+          <MetricCard label="Qualified bonuses" value={availableRewards.length} />
+          <MetricCard label="Bonus spent" value={formatCurrency(insights?.totalBonusSpent ?? 0)} />
         </div>
 
         <section className="section">
           <div className="section-head">
-            <h2>Referral rule</h2>
+            <h2>Referral rules</h2>
             <button className="btn btn-primary btn-sm" onClick={onSave} disabled={saving}>
               {saving ? "Saving…" : "Save settings"}
             </button>
           </div>
           <div className="section-desc">
-            Changes affect new referrals going forward. Existing referral records keep their own
-            captured rule snapshot.
+            Keep the current program name, rule summary, and special campaign note here. Any changes
+            only affect new referrals going forward, while each existing relationship keeps its own
+            recorded rule snapshot.
           </div>
           <div className="chart-card admin-form-card">
+            <div className="admin-rule-preview admin-rule-preview-hero">
+              <div className="detail-label">{referralProgramForm.programName || "Referral program"}</div>
+              <div className="cust">
+                {referralProgramForm.enabled
+                  ? `${formatCurrency(Number(referralProgramForm.bonusAmount || 0))} bonus after ${formatCurrency(
+                      Number(referralProgramForm.qualifyingPaidAmount || 0),
+                    )} in paid invoices or ${referralProgramForm.qualificationMonths || 0} months, whichever comes first.`
+                  : "Program currently disabled for new referrals."}
+              </div>
+              <div className="sub">{referralProgramForm.programDescription}</div>
+            </div>
             <label className="check-row admin-check-row">
               <input
                 type="checkbox"
@@ -3651,6 +3821,25 @@ function AdminView({
               />
               Enable referral program for new client enrollments
             </label>
+            <div className="field-row">
+              <div className="field">
+                <label>Program name</label>
+                <input
+                  value={referralProgramForm.programName}
+                  onChange={(event) => onFormChange("programName", event.target.value)}
+                  placeholder="Standard referral program"
+                />
+              </div>
+              <div className="field">
+                <label>Program note</label>
+                <textarea
+                  value={referralProgramForm.programDescription}
+                  onChange={(event) => onFormChange("programDescription", event.target.value)}
+                  rows={3}
+                  placeholder="Example: Summer growth campaign or family referral drive"
+                />
+              </div>
+            </div>
             <div className="field-row">
               <div className="field">
                 <label>Bonus amount ($)</label>
@@ -3690,7 +3879,7 @@ function AdminView({
                   {referralProgramForm.enabled
                     ? `${formatCurrency(Number(referralProgramForm.bonusAmount || 0))} bonus after ${formatCurrency(
                         Number(referralProgramForm.qualifyingPaidAmount || 0),
-                      )} paid or ${referralProgramForm.qualificationMonths || 0} months.`
+                      )} paid or ${referralProgramForm.qualificationMonths || 0} months, whichever comes first.`
                     : "Disabled for new referrals."}
                 </div>
               </div>
@@ -3703,12 +3892,14 @@ function AdminView({
             <h2>Referral relationships</h2>
           </div>
           <div className="section-desc">
-            Each relationship snapshots the rule active at the time the referral was recorded.
+            Every relationship keeps the referrer, the referred customer, the relationship type, the
+            referral date, and the rule active at the time it was recorded.
           </div>
           <div className="tcard">
             <div className="trow head admin-grid">
               <div>Referrer</div>
               <div>Referred client</div>
+              <div>Relationship + date</div>
               <div>Rule snapshot</div>
               <div>Status</div>
             </div>
@@ -3723,13 +3914,20 @@ function AdminView({
                   <div className="sub">{referral.referredCustomerCode}</div>
                 </div>
                 <div className="sub">
+                  {formatReferralRelationshipLabel(referral.relationshipLabel)}
+                  <div>{referral.referredOn ? formatLongDate(referral.referredOn) : "Date not captured"}</div>
+                </div>
+                <div className="sub">
                   {formatCurrency(referral.bonusAmount)} bonus · {formatCurrency(referral.qualifyingPaidAmount)} paid
                   or {referral.qualifyingMonths} months
+                  {referral.notes ? <div>{referral.notes}</div> : null}
                 </div>
                 <div>
-                  <span className={`pill ${referral.status === "awarded" ? "" : "warn"}`}>
-                    {referral.status}
+                  <span className={`search-status-chip tone-${formatReferralStatusTone(referral.status)}`}>
+                    {formatReferralStatusLabel(referral.status)}
                   </span>
+                  {referral.qualifiedAt ? <div className="sub">Qualified {formatDateTimeValue(referral.qualifiedAt)}</div> : null}
+                  {referral.awardedAt ? <div className="sub">Applied {formatDateTimeValue(referral.awardedAt)}</div> : null}
                 </div>
               </div>
             ))}
@@ -3739,51 +3937,122 @@ function AdminView({
 
         <section className="section">
           <div className="section-head">
-            <h2>Reward ledger</h2>
+            <h2>Qualified for bonus</h2>
           </div>
           <div className="section-desc">
-            Available rewards can be applied later as credits or tracked across additional products.
+            Green rows are ready. Applying a bonus reduces the next eligible draft invoice for that
+            customer. No direct cash credits are created.
           </div>
           <div className="tcard">
-            <div className="trow head reward-grid">
-              <div>Customer</div>
-              <div>Reward</div>
-              <div>Status</div>
-              <div>Earned</div>
+            <div className="trow head reward-apply-grid">
+              <div>Referrer</div>
+              <div>Next eligible invoice</div>
+              <div>Bonus</div>
+              <div>Qualified</div>
+              <div>Action</div>
             </div>
-            {rewards.map((reward) => (
-              <div className="trow reward-grid" key={reward.id}>
+            {availableRewards.map((reward) => (
+              <div className="trow reward-apply-grid referral-qualified-row" key={reward.id}>
                 <div>
                   <div className="cust">{reward.customerName}</div>
                   <div className="sub">{reward.customerCode}</div>
                 </div>
                 <div>
-                  <div className="mono">{formatCurrency(reward.amount)}</div>
-                  <div className="sub">{reward.description ?? reward.rewardType}</div>
+                  {reward.nextInvoice ? (
+                    <>
+                      <div className="cust">{reward.nextInvoice.invoiceCode}</div>
+                      <div className="sub">
+                        {reward.nextInvoice.service} · due {formatShortDate(reward.nextInvoice.dueDate)}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="sub">No draft invoice available yet</div>
+                  )}
                 </div>
+                <div className="mono">{formatCurrency(reward.amount)}</div>
+                <div className="sub">{formatDateTimeValue(reward.earnedAt)}</div>
                 <div>
-                  <span className={`pill ${reward.status === "available" ? "warn" : ""}`}>
-                    {reward.status}
-                  </span>
-                </div>
-                <div className="sub">
-                  {formatDateTimeValue(reward.earnedAt)}
-                  {reward.appliedAt ? ` · applied ${formatDateTimeValue(reward.appliedAt)}` : ""}
+                  <button
+                    className="btn btn-sm btn-primary"
+                    onClick={() => onApplyReward(reward.id)}
+                    disabled={!reward.nextInvoice || applyingRewardId === reward.id}
+                  >
+                    {applyingRewardId === reward.id ? "Applying…" : "Apply referral bonus"}
+                  </button>
                 </div>
               </div>
             ))}
-            {!rewards.length && (
+            {!availableRewards.length && (
               <div className="empty">
-                No rewards earned yet. Bonuses appear here once the configured amount or timing rule is met.
+                No referrer has qualified for a bonus yet.
               </div>
             )}
           </div>
+        </section>
 
-          {awardedRewards.length ? (
-            <div className="section-desc admin-reward-footnote">
-              {awardedRewards.length} reward{awardedRewards.length === 1 ? "" : "s"} already applied.
+        <section className="section">
+          <div className="section-head">
+            <h2>Reporting</h2>
+          </div>
+          <div className="section-desc">
+            Simple reporting that shows how the program is performing, who is driving referrals, and
+            how much bonus has already been spent through invoice discounts.
+          </div>
+          <div className="metrics c4">
+            <MetricCard accent label="Relationships tracked" value={referrals.length} />
+            <MetricCard label="Still qualifying" value={insights?.activeReferrals?.length ?? 0} />
+            <MetricCard label="Qualified value" value={formatCurrency(insights?.totalBonusAvailable ?? 0)} />
+            <MetricCard label="Bonus spent" value={formatCurrency(insights?.totalBonusSpent ?? 0)} />
+          </div>
+          <div className="two-col">
+            <div className="tcard">
+              <div className="trow head referral-report-grid">
+                <div>Top referrer</div>
+                <div>Relationships</div>
+                <div>Qualified</div>
+                <div>Bonus spent</div>
+              </div>
+              {topReferrers.length ? (
+                topReferrers.map((referrer) => (
+                  <div className="trow referral-report-grid" key={referrer.referrerCustomerId}>
+                    <div>
+                      <div className="cust">{referrer.referrerCustomerName}</div>
+                      <div className="sub">{referrer.referrerCustomerCode}</div>
+                    </div>
+                    <div className="mono">{referrer.totalReferrals}</div>
+                    <div className="mono">{referrer.qualifiedCount}</div>
+                    <div className="mono">{formatCurrency(referrer.totalBonusSpent)}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="empty">No referrer reporting rows yet.</div>
+              )}
             </div>
-          ) : null}
+
+            <div className="tcard">
+              <div className="trow head reward-grid">
+                <div>Applied bonus</div>
+                <div>Invoice</div>
+                <div>Applied on</div>
+                <div>Applied by</div>
+              </div>
+              {awardedRewards.length ? (
+                awardedRewards.map((reward) => (
+                  <div className="trow reward-grid" key={reward.id}>
+                    <div>
+                      <div className="cust">{reward.customerName}</div>
+                      <div className="sub">{formatCurrency(reward.amount)}</div>
+                    </div>
+                    <div className="mono">{reward.appliedInvoiceCode ?? "Not linked"}</div>
+                    <div className="sub">{formatDateTimeValue(reward.appliedAt)}</div>
+                    <div className="sub">{reward.appliedByUsername ?? "Not captured"}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="empty">No referral bonuses have been applied to invoices yet.</div>
+              )}
+            </div>
+          </div>
         </section>
       </div>
     </div>
@@ -4321,6 +4590,19 @@ function getComparableTime(...values) {
   return 0;
 }
 
+function titleCaseWords(value) {
+  return String(value || "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0].toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function formatReferralRelationshipLabel(value) {
+  const normalized = String(value || "").trim();
+  return normalized ? titleCaseWords(normalized) : "Relationship not captured";
+}
+
 function formatInvoiceStatusLabel(value) {
   const labels = {
     draft: "Draft",
@@ -4345,13 +4627,116 @@ function formatInvoiceStatusTone(value) {
 
 function formatRewardStatusTone(value) {
   const tones = {
-    available: "warn",
+    available: "success",
     applied: "success",
     active: "ink",
     awarded: "success",
   };
 
   return tones[value] ?? "neutral";
+}
+
+function formatReferralStatusLabel(value) {
+  const labels = {
+    active: "Tracking",
+    qualified: "Qualified",
+    awarded: "Bonus applied",
+    disabled: "Disabled",
+  };
+
+  return labels[value] ?? "Unknown";
+}
+
+function formatReferralStatusTone(value) {
+  const tones = {
+    active: "ink",
+    qualified: "success",
+    awarded: "neutral",
+    disabled: "neutral",
+  };
+
+  return tones[value] ?? "neutral";
+}
+
+function getNextEligibleDraftInvoice(invoices, customerId) {
+  return [...(invoices ?? [])]
+    .filter((invoice) => invoice.customerId === customerId && invoice.status === "draft")
+    .sort(
+      (left, right) =>
+        getComparableTime(left.dueDate, left.createdAt) - getComparableTime(right.dueDate, right.createdAt),
+    )[0] ?? null;
+}
+
+function buildReferralProgramInsights({ referrals = [], rewards = [], invoices = [] }) {
+  const referralRewards = rewards.filter((reward) => reward.rewardType === "referral_bonus");
+  const qualifiedRewards = referralRewards
+    .filter((reward) => reward.status === "available")
+    .map((reward) => ({
+      ...reward,
+      nextInvoice: getNextEligibleDraftInvoice(invoices, reward.customerId),
+    }))
+    .sort(
+      (left, right) =>
+        getComparableTime(right.earnedAt, right.createdAt) - getComparableTime(left.earnedAt, left.createdAt),
+    );
+  const appliedRewards = referralRewards
+    .filter((reward) => reward.status === "applied")
+    .sort(
+      (left, right) =>
+        getComparableTime(right.appliedAt, right.earnedAt) - getComparableTime(left.appliedAt, left.earnedAt),
+    );
+
+  const topReferrerMap = new Map();
+  for (const referral of referrals) {
+    const current =
+      topReferrerMap.get(referral.referrerCustomerId) ?? {
+        referrerCustomerId: referral.referrerCustomerId,
+        referrerCustomerName: referral.referrerCustomerName,
+        referrerCustomerCode: referral.referrerCustomerCode,
+        totalReferrals: 0,
+        qualifiedCount: 0,
+        appliedCount: 0,
+        totalBonusSpent: 0,
+      };
+    current.totalReferrals += 1;
+    if (referral.status === "qualified" || referral.status === "awarded") {
+      current.qualifiedCount += 1;
+    }
+    if (referral.status === "awarded") {
+      current.appliedCount += 1;
+    }
+    current.totalBonusSpent = roundDisplayCurrency(
+      current.totalBonusSpent +
+        appliedRewards
+          .filter((reward) => reward.referralId === referral.id)
+          .reduce((sum, reward) => sum + Number(reward.amount || 0), 0),
+    );
+    topReferrerMap.set(referral.referrerCustomerId, current);
+  }
+
+  return {
+    qualifiedRewards,
+    appliedRewards,
+    activeReferrals: referrals.filter((referral) => referral.status === "active"),
+    qualifiedReferrals: referrals.filter((referral) => referral.status === "qualified"),
+    awardedReferrals: referrals.filter((referral) => referral.status === "awarded"),
+    totalBonusAvailable: roundDisplayCurrency(
+      qualifiedRewards.reduce((sum, reward) => sum + Number(reward.amount || 0), 0),
+    ),
+    totalBonusSpent: roundDisplayCurrency(
+      appliedRewards.reduce((sum, reward) => sum + Number(reward.amount || 0), 0),
+    ),
+    topReferrers: [...topReferrerMap.values()].sort((left, right) => {
+      if (right.totalBonusSpent !== left.totalBonusSpent) {
+        return right.totalBonusSpent - left.totalBonusSpent;
+      }
+      return right.totalReferrals - left.totalReferrals;
+    }),
+  };
+}
+
+function roundDisplayCurrency(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
 }
 
 function Customer360Page({
@@ -4431,6 +4816,12 @@ function Customer360Page({
     savedTransactions: customerPayments.length,
     openReviews: customerExceptions.length,
     referralsMade: referralsMade.length,
+    availableBonus: relatedRewards
+      .filter((reward) => reward.status === "available")
+      .reduce((sum, reward) => sum + Number(reward.amount || 0), 0),
+    spentBonus: relatedRewards
+      .filter((reward) => reward.status === "applied")
+      .reduce((sum, reward) => sum + Number(reward.amount || 0), 0),
   };
   const contractNote = customer.profile?.billingNotes?.trim();
 
@@ -4513,6 +4904,8 @@ function Customer360Page({
             <div className="detail-label">Referral and finance snapshot</div>
             <div className="detail-kv"><span>Referred by</span><strong>{referrerCustomer ? `${referrerCustomer.name} · ${formatCustomerReference(referrerCustomer)}` : "Not referred by another client"}</strong></div>
             <div className="detail-kv"><span>Referrals made</span><strong>{String(financeSnapshot.referralsMade)}</strong></div>
+            <div className="detail-kv"><span>Qualified bonus value</span><strong>{formatCurrency(financeSnapshot.availableBonus)}</strong></div>
+            <div className="detail-kv"><span>Bonus spent</span><strong>{formatCurrency(financeSnapshot.spentBonus)}</strong></div>
             <div className="detail-kv"><span>Open invoices</span><strong>{String(financeSnapshot.openInvoices)}</strong></div>
             <div className="detail-kv"><span>Saved transactions</span><strong>{String(financeSnapshot.savedTransactions)}</strong></div>
             <div className="detail-kv"><span>Open reviews</span><strong>{String(financeSnapshot.openReviews)}</strong></div>
@@ -4638,7 +5031,10 @@ function Customer360Page({
                   <div className="mono">{formatShortDate(invoice.dueDate)}</div>
                   <div>
                     <div className="cust">{invoice.service}</div>
-                    <div className="sub">{invoice.milestone} · {invoice.source}</div>
+                    <div className="sub">
+                      {invoice.milestone} · {invoice.source}
+                      {invoice.referralBonusAmount ? ` · bonus ${formatCurrency(invoice.referralBonusAmount)}` : ""}
+                    </div>
                   </div>
                   <div>
                     <span className={`search-status-chip tone-${formatInvoiceStatusTone(invoice.status)}`}>
@@ -4722,14 +5118,27 @@ function Customer360Page({
                       <div className="sub">
                         {referrerCustomer ? `${referrerCustomer.name} · ${formatCustomerReference(referrerCustomer)}` : referralSourceRecord.referrerCustomerName}
                       </div>
+                      <div className="sub">
+                        {formatReferralRelationshipLabel(referralSourceRecord.relationshipLabel)} ·{" "}
+                        {referralSourceRecord.referredOn ? formatLongDate(referralSourceRecord.referredOn) : "Date not captured"}
+                      </div>
                     </div>
                   ) : null}
                   {referralsMade.map((referral) => (
                     <div className="customer360-inline-card" key={referral.id}>
                       <div className="cust">{referral.referredCustomerName}</div>
                       <div className="sub">
+                        {formatReferralRelationshipLabel(referral.relationshipLabel)} ·{" "}
+                        {referral.referredOn ? formatLongDate(referral.referredOn) : "Date not captured"}
+                      </div>
+                      <div className="sub">
                         {formatCurrency(referral.bonusAmount)} bonus · {formatCurrency(referral.qualifyingPaidAmount)} paid or{" "}
                         {referral.qualifyingMonths} months
+                      </div>
+                      <div className="sub">
+                        <span className={`search-status-chip tone-${formatReferralStatusTone(referral.status)}`}>
+                          {formatReferralStatusLabel(referral.status)}
+                        </span>
                       </div>
                     </div>
                   ))}
@@ -4752,6 +5161,9 @@ function Customer360Page({
                           {reward.status}
                         </span>
                       </div>
+                      {reward.appliedInvoiceCode ? (
+                        <div className="sub">Applied to invoice {reward.appliedInvoiceCode}</div>
+                      ) : null}
                     </div>
                   ))}
                 </div>
@@ -4843,9 +5255,15 @@ function SendPreviewModal({ invoice, onClose, onSend }) {
             </span>
           </div>
           <div className="kv">
-            <span className="k">Zelle (5% off)</span>
+            <span className="k">Zelle ({invoice.discountPct}% off)</span>
             <span className="price-accent">{formatCurrency(invoice.zelleAmount)}</span>
           </div>
+          {invoice.referralBonusAmount ? (
+            <div className="kv">
+              <span className="k">Referral bonus discount</span>
+              <span className="mono">-{formatCurrency(invoice.referralBonusAmount)}</span>
+            </div>
+          ) : null}
           <div className="kv">
             <span className="k">Card price</span>
             <span className="mono">{formatCurrency(invoice.cardAmount)}</span>

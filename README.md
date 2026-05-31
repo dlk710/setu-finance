@@ -11,6 +11,7 @@ Local full-stack prototype for:
 - preserving resolved exception history with action, actor, and timestamp
 - giving finance a spreadsheet-style customer register with a full-page 360 customer view
 - summarizing saved received amounts on the dashboard by day, week, month, or year
+- managing a configurable referral program with relationship history, qualification tracking, and invoice discounts
 - persisting the operational backend in PostgreSQL instead of a file store
 
 ## Simple Process Flow
@@ -30,8 +31,10 @@ flowchart TD
     K --> I
     I --> L["Apply transaction"]
     L --> M["Completed transactions"]
-    M --> N["Send or re-send PDF receipt"]
-    N --> O["Update dashboard, customer 360, and history"]
+    M --> N["Check referral qualification"]
+    N --> O["Apply referral bonus to next draft invoice as a discount"]
+    O --> P["Send or re-send PDF receipt"]
+    P --> Q["Update dashboard, customer 360, and history"]
 ```
 
 Plain-English version:
@@ -44,6 +47,7 @@ Plain-English version:
 - capture the payment
 - review it in `Payments to confirm` or `Exceptions`
 - apply it
+- apply any qualified referral bonus to the next draft invoice instead of issuing a direct credit
 - send the receipt
 - keep the full history
 
@@ -82,6 +86,7 @@ Change them in [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinancePr
 - the `setu` brand in the left rail is a home action that returns users to the dashboard
 - onboarding now uses a full-width single-column intake flow instead of a split rail
 - service history appears only when an existing customer is selected for follow-up enrollment
+- the `Referral Program` workspace defines configurable rules, tracks relationship history, and applies earned bonuses as invoice discounts
 
 ## Postgres backend
 
@@ -199,6 +204,15 @@ Current exception-review flow:
 - unresolved items stay in `Exceptions`
 - manual customer assignment immediately attaches the transaction to that customer record and moves it into `Payments to confirm`
 - resolved exceptions stay in history with the action taken, the resolving user, and the resolution timestamp
+
+Current referral-program flow:
+
+- admins define the live rule name, description, bonus amount, and qualification thresholds
+- each referral stores its own snapshot of the rule, relationship label, and referral date
+- once the referred client qualifies, the reward enters a green review queue
+- finance applies the bonus to the next draft invoice for the referrer
+- the invoice reflects a lower payable amount through `referral_bonus_amount`
+- Setu never issues direct customer credits outside the invoice ledger
 
 ## Configure contract storage
 

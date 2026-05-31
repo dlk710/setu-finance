@@ -723,6 +723,9 @@ export async function replaceStateInDatabase(client, state) {
       JSON.stringify(
         state.admin?.referralProgram ?? {
           enabled: true,
+          programName: "Standard referral program",
+          programDescription:
+            "Referral bonuses are earned when the referred client reaches the payment or time threshold, then applied as a discount on the referrer's next eligible draft invoice.",
           bonusAmount: 500,
           qualifyingPaidAmount: 3000,
           qualificationMonths: 6,
@@ -743,6 +746,8 @@ export async function replaceStateInDatabase(client, state) {
           qualifying_paid_amount,
           qualifying_months,
           program_snapshot,
+          relationship_label,
+          referred_on,
           notes,
           qualified_at,
           awarded_at,
@@ -750,7 +755,7 @@ export async function replaceStateInDatabase(client, state) {
           updated_at
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, NOW()
+          $1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, $12, $13, $14, NOW()
         )
       `,
       [
@@ -762,6 +767,8 @@ export async function replaceStateInDatabase(client, state) {
         Number(referral.qualifyingPaidAmount || 0),
         Number(referral.qualifyingMonths || 0),
         JSON.stringify(state.admin?.referralProgram ?? {}),
+        referral.relationshipLabel ?? null,
+        referral.referredOn ?? referral.createdAt ?? new Date().toISOString(),
         referral.notes ?? null,
         referral.qualifiedAt ?? null,
         referral.awardedAt ?? null,
@@ -783,10 +790,12 @@ export async function replaceStateInDatabase(client, state) {
           description,
           earned_at,
           applied_at,
+          applied_invoice_id,
+          applied_by_username,
           created_at
         )
         VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW()
         )
       `,
       [
@@ -799,8 +808,36 @@ export async function replaceStateInDatabase(client, state) {
         reward.description ?? null,
         reward.earnedAt ?? new Date().toISOString(),
         reward.appliedAt ?? null,
+        reward.appliedInvoiceId ?? null,
+        reward.appliedByUsername ?? null,
       ],
     );
+
+    if (reward.status === "applied" && reward.appliedInvoiceId) {
+      await client.query(
+        `
+          INSERT INTO invoice_reward_applications (
+            id,
+            reward_id,
+            invoice_id,
+            amount,
+            application_type,
+            applied_by_username,
+            applied_at,
+            created_at
+          )
+          VALUES ($1, $2, $3, $4, 'referral_bonus', $5, $6, NOW())
+        `,
+        [
+          `ira-${reward.id}`,
+          reward.id,
+          reward.appliedInvoiceId,
+          Number(reward.amount || 0),
+          reward.appliedByUsername ?? "seed",
+          reward.appliedAt ?? reward.earnedAt ?? new Date().toISOString(),
+        ],
+      );
+    }
   }
 
   await client.query(

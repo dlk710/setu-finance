@@ -1,5 +1,6 @@
 import express from "express";
 import {
+  applyReferralRewardToInvoice,
   applyGmailSyncResult,
   confirmPendingPaymentRecord,
   createCustomerOnboardingRecord,
@@ -273,7 +274,25 @@ app.post("/api/admin/referral-program", async (request, response, next) => {
       throw new Error("Referral program settings are required.");
     }
 
-    const result = await updateReferralProgramSettings(config);
+    const result = await updateReferralProgramSettings(
+      config,
+      request.portalUser?.username ?? "unknown",
+    );
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/referral-rewards/:rewardId/apply", async (request, response, next) => {
+  try {
+    const result = await applyReferralRewardToInvoice(
+      request.params.rewardId,
+      request.portalUser?.username ?? "unknown",
+    );
     response.json({
       message: result.message,
       state: formatApiState(result.state),

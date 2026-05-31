@@ -827,11 +827,19 @@ button {
 }
 
 .admin-grid {
-  grid-template-columns: 1.1fr 1.1fr 1.2fr 92px;
+  grid-template-columns: 1.1fr 1.1fr 1fr 1.2fr 128px;
 }
 
 .reward-grid {
   grid-template-columns: 1.1fr 1fr 92px 1.2fr;
+}
+
+.reward-apply-grid {
+  grid-template-columns: 1.1fr 1.1fr 96px 128px 180px;
+}
+
+.referral-report-grid {
+  grid-template-columns: 1.25fr 96px 96px 120px;
 }
 
 .customer-history-grid {
@@ -1286,6 +1294,71 @@ button {
   border: 0.5px solid var(--border-1);
   background: var(--paper-3);
   color: var(--text-2);
+}
+
+.admin-rule-preview-hero {
+  display: grid;
+  gap: 6px;
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--paper) 82%, var(--amber-soft));
+}
+
+.referral-qualified-row {
+  background: color-mix(in srgb, var(--paper) 86%, var(--success-bg));
+}
+
+.referral-chart-card {
+  display: grid;
+  gap: 16px;
+}
+
+.trend-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.referral-bars {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+  min-height: 220px;
+}
+
+.referral-bar-col {
+  display: grid;
+  gap: 8px;
+  align-items: end;
+}
+
+.referral-count-pill {
+  min-height: 32px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-2);
+}
+
+.referral-bar-track {
+  height: 136px;
+  border-radius: var(--radius);
+  background: var(--paper-2);
+  position: relative;
+  overflow: hidden;
+}
+
+.referral-bar-fill {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--success-text) 78%, white), var(--success-text));
+  border-radius: var(--radius);
+}
+
+.referral-bar-amount {
+  font-size: 10.5px;
+  color: var(--text-3);
+  font-family: var(--mono);
 }
 
 .admin-reward-footnote {
@@ -2438,6 +2511,8 @@ button {
   .exception-history-grid,
   .admin-grid,
   .reward-grid,
+  .reward-apply-grid,
+  .referral-report-grid,
   .customer-invoice-grid,
   .customer-payment-grid,
   .customer-review-grid,
@@ -2489,7 +2564,9 @@ button {
 
   .contract-upload-grid,
   .invoice-schedule-row,
-  .contract-record-row {
+  .contract-record-row,
+  .referral-bars,
+  .trend-summary-strip {
     grid-template-columns: 1fr;
   }
 

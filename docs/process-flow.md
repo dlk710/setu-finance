@@ -59,9 +59,11 @@ flowchart LR
     P --> N
     N --> Q["Human clicks Apply transaction"]
     Q --> R["Mark payment applied and update invoice / account state"]
-    R --> S["Move record to Completed transactions"]
-    S --> T["Send or re-send PDF receipt to primary customer email"]
-    T --> U["Update dashboard, customer 360, activity history, and referral progress"]
+    R --> S["Evaluate referral qualification and unlock reward if earned"]
+    S --> T["Finance applies referral bonus to the next draft invoice as a discount"]
+    T --> U["Move record to Completed transactions"]
+    U --> V["Send or re-send PDF receipt to primary customer email"]
+    V --> W["Update dashboard, customer 360, activity history, and referral progress"]
 ```
 
 ## What This Means Operationally
@@ -77,6 +79,8 @@ flowchart LR
 - Completed transactions stay visible after apply so finance can send or re-send a receipt later if needed.
 - Receipts are sent as PDF attachments to the customer’s primary email on file.
 - Referral progress and rewards update only after a payment has actually been applied.
+- Qualified referral bonuses are not paid out as standalone credits. Finance applies them to the next eligible draft invoice so the customer simply sees a lower invoice amount.
+- Special referral campaigns can raise or lower the bonus and qualification thresholds for future enrollments without corrupting historical relationships.
 
 ## Exception Paths
 

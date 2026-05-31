@@ -14,13 +14,31 @@ import { matchPaymentToState } from "./services/matching.js";
 const DASHBOARD_PERIOD_KEY = "current";
 const DEFAULT_REFERRAL_PROGRAM = {
   enabled: true,
+  programName: "Standard referral program",
+  programDescription:
+    "Referral bonuses are earned when the referred client reaches the payment or time threshold, then applied as a discount on the referrer's next eligible draft invoice.",
   bonusAmount: 500,
   qualifyingPaidAmount: 3000,
   qualificationMonths: 6,
 };
 
+function roundCurrency(value) {
+  return Math.round(Number(value || 0) * 100) / 100;
+}
+
 function calculateZelleAmount(amount, discountPct) {
-  return Math.round(Number(amount || 0) * (1 - Number(discountPct || 0) / 100) * 100) / 100;
+  return roundCurrency(Number(amount || 0) * (1 - Number(discountPct || 0) / 100));
+}
+
+function calculateInvoiceAmounts(baseAmount, discountPct, referralBonusAmount = 0) {
+  const roundedBaseAmount = roundCurrency(baseAmount);
+  const roundedReferralBonusAmount = roundCurrency(referralBonusAmount);
+  return {
+    baseAmount: roundedBaseAmount,
+    referralBonusAmount: roundedReferralBonusAmount,
+    zelleAmount: Math.max(0, roundCurrency(calculateZelleAmount(roundedBaseAmount, discountPct) - roundedReferralBonusAmount)),
+    cardAmount: Math.max(0, roundCurrency(roundedBaseAmount - roundedReferralBonusAmount)),
+  };
 }
 
 function formatCurrency(value) {
@@ -142,6 +160,7 @@ function mapInvoiceRow(row) {
     milestone: row.milestone,
     baseAmount: Number(row.base_amount || 0),
     discountPct: Number(row.discount_pct || 0),
+    referralBonusAmount: Number(row.referral_bonus_amount || 0),
     zelleAmount: Number(row.zelle_amount || 0),
     cardAmount: Number(row.card_amount || 0),
     dueDate: row.due_date,
@@ -233,6 +252,10 @@ function mapExceptionHistoryRow(row) {
 }
 
 function normalizeReferralProgramConfig(config = {}) {
+  const programName = String(config.programName ?? DEFAULT_REFERRAL_PROGRAM.programName).trim();
+  const programDescription = String(
+    config.programDescription ?? DEFAULT_REFERRAL_PROGRAM.programDescription,
+  ).trim();
   const bonusAmount = Number(config.bonusAmount ?? DEFAULT_REFERRAL_PROGRAM.bonusAmount);
   const qualifyingPaidAmount = Number(
     config.qualifyingPaidAmount ?? DEFAULT_REFERRAL_PROGRAM.qualifyingPaidAmount,
@@ -243,6 +266,8 @@ function normalizeReferralProgramConfig(config = {}) {
 
   return {
     enabled: config.enabled !== false,
+    programName: programName || DEFAULT_REFERRAL_PROGRAM.programName,
+    programDescription: programDescription || DEFAULT_REFERRAL_PROGRAM.programDescription,
     bonusAmount: Number.isFinite(bonusAmount)
       ? Math.max(0, Math.round(bonusAmount * 100) / 100)
       : DEFAULT_REFERRAL_PROGRAM.bonusAmount,
@@ -339,6 +364,7 @@ function createEmptyCustomerProfile(overrides = {}) {
     feeType: "one_time",
     billingCadence: "per_milestone",
     referralSource: null,
+    referralRelationshipLabel: null,
     billingNotes: null,
     onboardedAt: null,
     serviceStartDate: null,
@@ -919,9 +945,9 @@ async function insertContractInvoiceSchedule(
   for (const entry of normalizedSchedule) {
     const { invoiceCode } = await reserveNextInvoiceCode(client);
     const invoiceId = `inv-${crypto.randomUUID()}`;
-    const baseAmount = Math.round(Number(entry.amount || 0) * 100) / 100;
+    const baseAmount = roundCurrency(entry.amount);
     const discountPct = Number(entry.discountPct || 0) || 0;
-    const zelleAmount = calculateZelleAmount(baseAmount, discountPct);
+    const invoiceAmounts = calculateInvoiceAmounts(baseAmount, discountPct, 0);
 
     await client.query(
       `
@@ -934,6 +960,7 @@ async function insertContractInvoiceSchedule(
           milestone,
           base_amount,
           discount_pct,
+          referral_bonus_amount,
           zelle_amount,
           card_amount,
           due_date,
@@ -942,7 +969,7 @@ async function insertContractInvoiceSchedule(
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'draft', 'contract', NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'draft', 'contract', NOW(), NOW())
       `,
       [
         invoiceId,
@@ -951,10 +978,11 @@ async function insertContractInvoiceSchedule(
         customerEmail ?? null,
         normalizeServiceName(entry.serviceName),
         entry.milestone ?? entry.label ?? null,
-        baseAmount,
+        invoiceAmounts.baseAmount,
         discountPct,
-        zelleAmount,
-        baseAmount,
+        invoiceAmounts.referralBonusAmount,
+        invoiceAmounts.zelleAmount,
+        invoiceAmounts.cardAmount,
         entry.dueDate,
       ],
     );
@@ -965,7 +993,7 @@ async function insertContractInvoiceSchedule(
       customerName,
       service: normalizeServiceName(entry.serviceName),
       dueDate: entry.dueDate,
-      amount: baseAmount,
+      amount: invoiceAmounts.baseAmount,
     });
   }
 
@@ -1127,7 +1155,16 @@ async function upsertReferralProgramConfig(client, config) {
   return normalized;
 }
 
-async function upsertCustomerReferral(client, { referrerCustomerId, referredCustomerId, notes = null }) {
+async function upsertCustomerReferral(
+  client,
+  {
+    referrerCustomerId,
+    referredCustomerId,
+    relationshipLabel = null,
+    referredOn = null,
+    notes = null,
+  },
+) {
   if (!referrerCustomerId || !referredCustomerId || referrerCustomerId === referredCustomerId) {
     return null;
   }
@@ -1152,11 +1189,19 @@ async function upsertCustomerReferral(client, { referrerCustomerId, referredCust
       `
         UPDATE customer_referrals
         SET referrer_customer_id = $2,
-            notes = COALESCE($3, notes),
+            relationship_label = COALESCE($3, relationship_label),
+            referred_on = COALESCE($4::date, referred_on),
+            notes = COALESCE($5, notes),
             updated_at = NOW()
         WHERE id = $1
       `,
-      [existingResult.rows[0].id, referrerCustomerId, notes],
+      [
+        existingResult.rows[0].id,
+        referrerCustomerId,
+        relationshipLabel?.trim() || null,
+        formatDateOnlyOutput(referredOn),
+        notes,
+      ],
     );
     return existingResult.rows[0].id;
   }
@@ -1168,6 +1213,8 @@ async function upsertCustomerReferral(client, { referrerCustomerId, referredCust
         id,
         referrer_customer_id,
         referred_customer_id,
+        relationship_label,
+        referred_on,
         status,
         bonus_amount,
         qualifying_paid_amount,
@@ -1177,12 +1224,14 @@ async function upsertCustomerReferral(client, { referrerCustomerId, referredCust
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, 'active', $4, $5, $6, $7::jsonb, $8, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5::date, 'active', $6, $7, $8, $9::jsonb, $10, NOW(), NOW())
     `,
     [
       referralId,
       referrerCustomerId,
       referredCustomerId,
+      relationshipLabel?.trim() || null,
+      formatDateOnlyOutput(referredOn),
       Number(config.bonusAmount || 0),
       Number(config.qualifyingPaidAmount || 0),
       Number(config.qualificationMonths || 0),
@@ -1263,9 +1312,8 @@ async function awardReferralRewardsForCustomer(client, customerId) {
     await client.query(
       `
         UPDATE customer_referrals
-        SET status = 'awarded',
+        SET status = 'qualified',
             qualified_at = COALESCE(qualified_at, NOW()),
-            awarded_at = COALESCE(awarded_at, NOW()),
             updated_at = NOW()
         WHERE id = $1
       `,
@@ -1544,6 +1592,7 @@ async function hydratePortalState(client) {
     }
     return invoice;
   });
+  const invoiceMap = new Map(invoices.map((invoice) => [invoice.id, invoice]));
 
   const payments = paymentsResult.rows.map(mapPaymentRow);
   const pendingPayments = payments
@@ -1622,12 +1671,19 @@ async function hydratePortalState(client) {
     description: row.description ?? null,
     earnedAt: formatTimestamp(row.earned_at),
     appliedAt: formatTimestamp(row.applied_at),
+    appliedInvoiceId: row.applied_invoice_id ?? null,
+    appliedInvoiceCode:
+      normalizeInvoiceCode(invoiceMap.get(row.applied_invoice_id)?.invoiceCode) ??
+      invoiceMap.get(row.applied_invoice_id)?.invoiceCode ??
+      null,
+    appliedByUsername: row.applied_by_username ?? null,
   }));
   const referrals = referralsResult.rows.map((row) => {
     const referrer = customerMap.get(row.referrer_customer_id);
     const referred = customerMap.get(row.referred_customer_id);
     if (referred) {
       referred.profile.referredByCustomerId = row.referrer_customer_id;
+      referred.profile.referralRelationshipLabel = row.relationship_label ?? null;
     }
     return {
       id: row.id,
@@ -1638,10 +1694,12 @@ async function hydratePortalState(client) {
       referredCustomerName: referred?.name ?? "Unknown customer",
       referredCustomerCode: referred?.customerCode ?? null,
       status: row.status,
+      relationshipLabel: row.relationship_label ?? null,
       bonusAmount: Number(row.bonus_amount || 0),
       qualifyingPaidAmount: Number(row.qualifying_paid_amount || 0),
       qualifyingMonths: Number(row.qualifying_months || 0),
       notes: row.notes ?? null,
+      referredOn: formatDateOnlyOutput(row.referred_on ?? row.created_at),
       qualifiedAt: formatTimestamp(row.qualified_at),
       awardedAt: formatTimestamp(row.awarded_at),
       createdAt: formatTimestamp(row.created_at),
@@ -1701,6 +1759,8 @@ async function hydratePortalState(client) {
         service: invoice.service,
         milestone: invoice.milestone,
         dueDate: invoice.dueDate,
+        discountPct: invoice.discountPct,
+        referralBonusAmount: invoice.referralBonusAmount,
         zelleAmount: invoice.zelleAmount,
         cardAmount: invoice.cardAmount,
         invoiceCode: invoice.invoiceCode,
@@ -1827,7 +1887,7 @@ async function fetchCustomerAggregate(client, customerId) {
     ),
     client.query(
       `
-        SELECT referrer_customer_id
+        SELECT referrer_customer_id, relationship_label, referred_on
         FROM customer_referrals
         WHERE referred_customer_id = $1
         LIMIT 1
@@ -1882,8 +1942,12 @@ async function fetchCustomerAggregate(client, customerId) {
       ? {
           ...mapCustomerProfileRow(profileResult.rows[0]),
           referredByCustomerId: referralResult.rows[0]?.referrer_customer_id ?? null,
+          referralRelationshipLabel: referralResult.rows[0]?.relationship_label ?? null,
         }
-      : createEmptyCustomerProfile(),
+      : createEmptyCustomerProfile({
+          referredByCustomerId: referralResult.rows[0]?.referrer_customer_id ?? null,
+          referralRelationshipLabel: referralResult.rows[0]?.relationship_label ?? null,
+        }),
   };
 }
 
@@ -2008,6 +2072,41 @@ async function fetchConfirmedPaymentForUpdate(client, paymentId) {
       FOR UPDATE OF payments
     `,
     [paymentId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function fetchReferralRewardForUpdate(client, rewardId) {
+  const result = await client.query(
+    `
+      SELECT *
+      FROM customer_reward_ledger
+      WHERE id = $1
+        AND reward_type = 'referral_bonus'
+      FOR UPDATE
+    `,
+    [rewardId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function findNextDraftInvoiceForCustomer(client, customerId) {
+  const result = await client.query(
+    `
+      SELECT
+        invoices.*,
+        customers.full_name AS customer_name
+      FROM invoices
+      JOIN customers ON customers.id = invoices.customer_id
+      WHERE invoices.customer_id = $1
+        AND invoices.status = 'draft'
+      ORDER BY invoices.due_date ASC, invoices.created_at ASC, invoices.id ASC
+      LIMIT 1
+      FOR UPDATE OF invoices
+    `,
+    [customerId],
   );
 
   return result.rows[0] ?? null;
@@ -2753,6 +2852,8 @@ export async function createCustomerOnboardingRecord({ form, actingUsername = "u
     await upsertCustomerReferral(client, {
       referrerCustomerId: referringCustomerId,
       referredCustomerId: customerId,
+      relationshipLabel: form.referralRelationship?.trim() || null,
+      referredOn: form.onboardedAt || new Date().toISOString(),
       notes: form.referralSource?.trim() || null,
     });
 
@@ -2854,8 +2955,9 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
     }
 
     const { invoiceCode } = await reserveNextInvoiceCode(client);
-    const amount = Number(form.amount || 0);
+    const amount = roundCurrency(form.amount);
     const discountPct = Number(form.discountPct || 0);
+    const invoiceAmounts = calculateInvoiceAmounts(amount, discountPct, 0);
     const invoice = {
       id: `inv-${crypto.randomUUID()}`,
       invoiceCode,
@@ -2864,10 +2966,11 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
       email: customerEmail ?? null,
       service: normalizedServiceName,
       milestone: form.milestone ?? null,
-      baseAmount: amount,
+      baseAmount: invoiceAmounts.baseAmount,
       discountPct,
-      zelleAmount: calculateZelleAmount(amount, discountPct),
-      cardAmount: amount,
+      referralBonusAmount: invoiceAmounts.referralBonusAmount,
+      zelleAmount: invoiceAmounts.zelleAmount,
+      cardAmount: invoiceAmounts.cardAmount,
       dueDate: form.dueDate,
       status: sendNow ? "sent" : "draft",
       source: "manual",
@@ -2946,6 +3049,7 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
           milestone,
           base_amount,
           discount_pct,
+          referral_bonus_amount,
           zelle_amount,
           card_amount,
           due_date,
@@ -2954,7 +3058,7 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
           created_at,
           updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
       `,
       [
         invoice.id,
@@ -2965,6 +3069,7 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
         invoice.milestone,
         invoice.baseAmount,
         invoice.discountPct,
+        invoice.referralBonusAmount ?? 0,
         invoice.zelleAmount,
         invoice.cardAmount,
         invoice.dueDate,
@@ -3354,15 +3459,123 @@ export async function resolveExceptionRecord({
   });
 }
 
-export async function updateReferralProgramSettings(config) {
+export async function updateReferralProgramSettings(config, actingUsername = "unknown") {
   return withTransaction(async (client) => {
     const normalized = await upsertReferralProgramConfig(client, config);
-    await insertActivity(client, "Referral program settings updated");
+    await insertActivity(client, "Referral program settings updated", actingUsername);
     return {
       state: await hydratePortalState(client),
       message: normalized.enabled
         ? "Referral program settings saved."
         : "Referral program disabled for new referrals.",
+    };
+  });
+}
+
+export async function applyReferralRewardToInvoice(rewardId, actingUsername = "unknown") {
+  return withTransaction(async (client) => {
+    const rewardRow = await fetchReferralRewardForUpdate(client, rewardId);
+    if (!rewardRow) {
+      throw new Error("Referral bonus record not found.");
+    }
+
+    if (rewardRow.status !== "available") {
+      throw new Error("This referral bonus is no longer waiting to be applied.");
+    }
+
+    const invoiceRow = await findNextDraftInvoiceForCustomer(client, rewardRow.customer_id);
+    if (!invoiceRow) {
+      throw new Error("No draft invoice is available yet for this customer. Create the next invoice first.");
+    }
+
+    const invoice = mapInvoiceRow(invoiceRow);
+    const rewardAmount = roundCurrency(rewardRow.amount);
+    const availableInvoiceBalance = Math.min(
+      Number(invoice.zelleAmount || 0),
+      Number(invoice.cardAmount || 0),
+    );
+
+    if (availableInvoiceBalance <= 0) {
+      throw new Error("The next draft invoice is already fully discounted.");
+    }
+
+    if (availableInvoiceBalance + 0.0001 < rewardAmount) {
+      throw new Error(
+        `The next draft invoice only has ${formatCurrency(availableInvoiceBalance)} left to discount. Adjust the invoice or wait for a larger draft invoice before applying this bonus.`,
+      );
+    }
+
+    const applicationId = `ira-${crypto.randomUUID()}`;
+    await client.query(
+      `
+        INSERT INTO invoice_reward_applications (
+          id,
+          invoice_id,
+          reward_id,
+          customer_id,
+          reward_type,
+          amount_applied,
+          applied_by_username,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, 'referral_bonus', $5, $6, NOW())
+      `,
+      [
+        applicationId,
+        invoice.id,
+        rewardRow.id,
+        rewardRow.customer_id,
+        rewardAmount,
+        actingUsername,
+      ],
+    );
+
+    await client.query(
+      `
+        UPDATE invoices
+        SET referral_bonus_amount = COALESCE(referral_bonus_amount, 0) + $2,
+            zelle_amount = GREATEST(0, ROUND((zelle_amount - $2)::numeric, 2)),
+            card_amount = GREATEST(0, ROUND((card_amount - $2)::numeric, 2)),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [invoice.id, rewardAmount],
+    );
+
+    await client.query(
+      `
+        UPDATE customer_reward_ledger
+        SET status = 'applied',
+            applied_at = NOW(),
+            applied_invoice_id = $2,
+            applied_by_username = $3
+        WHERE id = $1
+      `,
+      [rewardRow.id, invoice.id, actingUsername],
+    );
+
+    if (rewardRow.referral_id) {
+      await client.query(
+        `
+          UPDATE customer_referrals
+          SET status = 'awarded',
+              awarded_at = COALESCE(awarded_at, NOW()),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [rewardRow.referral_id],
+      );
+    }
+
+    await insertActivity(
+      client,
+      `Referral bonus ${formatCurrency(rewardAmount)} applied to invoice ${invoice.invoiceCode}`,
+      actingUsername,
+    );
+
+    return {
+      state: await hydratePortalState(client),
+      message: `${formatCurrency(rewardAmount)} referral bonus applied to invoice ${invoice.invoiceCode}.`,
     };
   });
 }

@@ -446,3 +446,73 @@ export function buildTransactionTrend(payments = [], rangeKey = "month") {
     empty: totals.count === 0,
   };
 }
+
+export function buildReferralTrend(referrals = [], rewards = [], rangeKey = "month") {
+  const config = getTimelineConfig(rangeKey);
+  const referralEvents = (Array.isArray(referrals) ? referrals : [])
+    .map((referral) => ({
+      type: "referral",
+      date:
+        parseTimelineDate(referral.referredOn) ??
+        parseTimelineDate(referral.createdAt) ??
+        null,
+    }))
+    .filter((event) => event.date);
+  const rewardEvents = (Array.isArray(rewards) ? rewards : [])
+    .filter((reward) => reward.status === "applied")
+    .map((reward) => ({
+      type: "reward",
+      date: parseTimelineDate(reward.appliedAt) ?? null,
+      amount: Number(reward.amount || 0),
+    }))
+    .filter((event) => event.date);
+
+  const events = [...referralEvents, ...rewardEvents].sort(
+    (left, right) => left.date.getTime() - right.date.getTime(),
+  );
+  const anchorDate = startOfPeriod(events.at(-1)?.date ?? new Date(), config.unit);
+  const start = addPeriods(anchorDate, config.unit, -(config.bucketCount - 1));
+  const buckets = Array.from({ length: config.bucketCount }, (_, index) => ({
+    ...createBucket(config, start, index),
+    referralCount: 0,
+    bonusSpent: 0,
+  }));
+  const bucketByKey = new Map(buckets.map((bucket) => [bucket.key, bucket]));
+
+  for (const event of referralEvents) {
+    const bucket = bucketByKey.get(makeBucketKey(startOfPeriod(event.date, config.unit), config.unit));
+    if (bucket) {
+      bucket.referralCount += 1;
+    }
+  }
+
+  for (const event of rewardEvents) {
+    const bucket = bucketByKey.get(makeBucketKey(startOfPeriod(event.date, config.unit), config.unit));
+    if (bucket) {
+      bucket.bonusSpent += Number(event.amount || 0);
+    }
+  }
+
+  const maxBonusSpent = createNiceScaleMax(Math.max(...buckets.map((bucket) => bucket.bonusSpent), 0));
+  const maxReferralCount = Math.max(1, ...buckets.map((bucket) => bucket.referralCount));
+  const maxLabels = 4;
+  const step = Math.max(1, Math.ceil(buckets.length / maxLabels));
+  const labelIndices = buckets
+    .map((bucket, index) => index)
+    .filter((index) => index % step === 0 || index === buckets.length - 1);
+
+  return {
+    rangeKey: config.key,
+    rangeLabel: config.label,
+    windowLabel: config.windowLabel,
+    buckets,
+    maxBonusSpent,
+    maxReferralCount,
+    labelIndices,
+    totals: {
+      referrals: referralEvents.length,
+      bonusSpent: rewardEvents.reduce((sum, event) => sum + Number(event.amount || 0), 0),
+    },
+    empty: referralEvents.length === 0 && rewardEvents.length === 0,
+  };
+}

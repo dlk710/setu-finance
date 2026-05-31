@@ -108,11 +108,16 @@ This is the current end-to-end feature inventory for Setu Finance.
 ## 8. Referral Program
 
 - Referral relationship capture during onboarding
+- Relationship label and referral date captured per referred customer
 - Admin-configurable referral bonus amount
-- Admin-configurable qualification rule
+- Admin-configurable qualification rule, program name, and program description
 - Ability to disable the program for future enrollments
 - Historical rule snapshots preserved per referral
-- Reward availability tracked in the ledger
+- Qualified rewards shown in a dedicated review queue
+- One-click `Apply referral bonus` action for finance
+- Referral bonuses reduce the next draft invoice instead of creating direct customer credits
+- Applied bonus history includes invoice reference, applied date, and user attribution
+- Dashboard reporting includes referral counts and total bonus spent
 
 ## 9. Admin, Security, And Auditability
 

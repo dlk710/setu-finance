@@ -774,6 +774,9 @@ const seedActivity = [];
 const seedAdmin = {
   referralProgram: {
     enabled: true,
+    programName: "Standard referral program",
+    programDescription:
+      "Referral bonuses are earned when the referred client reaches the payment or time threshold, then applied as a discount on the referrer's next eligible draft invoice.",
     bonusAmount: 500,
     qualifyingPaidAmount: 3000,
     qualificationMonths: 6,
@@ -791,6 +794,8 @@ const seedAdmin = {
       bonusAmount: 500,
       qualifyingPaidAmount: 3000,
       qualifyingMonths: 6,
+      relationshipLabel: "Family",
+      referredOn: "2026-05-12T16:45:00.000Z",
       notes: "Family referral from onboarding",
       qualifiedAt: null,
       awardedAt: null,

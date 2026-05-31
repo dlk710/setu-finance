@@ -89,10 +89,14 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 ### 8. Referral program rules must be configurable
 
 - The system must support referral relationships between existing and newly onboarded clients.
+- The system must store who referred whom, the relationship type, and the referral date.
 - Referral bonuses should default to `$500`, but the amount must be configurable by admins.
 - Qualification should default to `at least $3,000 paid or 6 months`, but both values must be configurable by admins.
 - Admins must be able to disable the referral program for new enrollments without deleting historical referral records.
 - Historical referral records must preserve the rule snapshot active when the referral was created.
+- Qualified referral bonuses must be applied as discounts on a future invoice, not as direct credits or cash payouts.
+- Finance users should be able to see which customers are qualified for a referral bonus, which invoice will receive the discount, and who applied it.
+- Reporting should be simple enough for non-technical users to understand referral relationships, qualified value, and total bonus spent.
 
 ### 9. The portal must be safe for internal finance work
 
