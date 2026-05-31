@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   IconAlertCircle,
   IconAlertTriangle,
@@ -20,6 +20,10 @@ import {
   IconX,
 } from "@tabler/icons-react";
 import { createInitialState, createInvoiceRefPreview } from "./data/mockData";
+import {
+  ASK_SETU_SUGGESTIONS,
+  buildAskSetuAnswer,
+} from "./lib/askSetu";
 import {
   buildTransactionTrend,
   calculateZelleAmount,
@@ -100,6 +104,21 @@ const DEFAULT_AUTH_FORM = {
   username: "admin",
   password: "",
 };
+
+function createAskSetuMessage(role, text) {
+  return {
+    id: crypto.randomUUID(),
+    role,
+    text,
+  };
+}
+
+function createAskSetuWelcomeMessage() {
+  return createAskSetuMessage(
+    "assistant",
+    "Ask Setu can answer quick questions from the live portal state. Try payments to confirm, due invoices, customer summaries, Gmail sync, or outbound email status.",
+  );
+}
 
 function createDateTimeLocalValue(value = new Date()) {
   const date = value instanceof Date ? value : new Date(value);
@@ -540,6 +559,9 @@ function App() {
   const [authForm, setAuthForm] = useState(DEFAULT_AUTH_FORM);
   const [authError, setAuthError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+  const [askSetuOpen, setAskSetuOpen] = useState(false);
+  const [askSetuInput, setAskSetuInput] = useState("");
+  const [askSetuMessages, setAskSetuMessages] = useState(() => [createAskSetuWelcomeMessage()]);
 
   const counts = {
     onboarded: state.customers.length,
@@ -615,6 +637,9 @@ function App() {
     setSaveAlias(true);
     setSyncingInbox(false);
     setSendingReceiptId("");
+    setAskSetuOpen(false);
+    setAskSetuInput("");
+    setAskSetuMessages([createAskSetuWelcomeMessage()]);
   }
 
   function applyAuthSnapshot(snapshot) {
@@ -1252,6 +1277,22 @@ function App() {
     }
   }
 
+  function submitAskSetu(question) {
+    const trimmed = String(question || "").trim();
+    if (!trimmed) {
+      return;
+    }
+
+    const answer = buildAskSetuAnswer(trimmed, state);
+    setAskSetuMessages((current) => [
+      ...current,
+      createAskSetuMessage("user", trimmed),
+      createAskSetuMessage("assistant", answer),
+    ]);
+    setAskSetuInput("");
+    setAskSetuOpen(true);
+  }
+
   if (auth.checking) {
     return <PortalLoadingView />;
   }
@@ -1509,6 +1550,18 @@ function App() {
           onClose={closeModal}
         />
       </ModalShell>
+
+      <AskSetuWidget
+        exceptionCount={state.exceptions.length}
+        inputValue={askSetuInput}
+        messages={askSetuMessages}
+        onInputChange={setAskSetuInput}
+        onOpenChange={setAskSetuOpen}
+        onSubmit={submitAskSetu}
+        open={askSetuOpen}
+        pendingCount={state.pendingPayments.length}
+        suggestions={ASK_SETU_SUGGESTIONS}
+      />
 
       <ToastStack toasts={toasts} />
     </div>
@@ -4564,6 +4617,106 @@ function ToastStack({ toasts }) {
           <span>{toast.message}</span>
         </div>
       ))}
+    </div>
+  );
+}
+
+function AskSetuWidget({
+  exceptionCount,
+  inputValue,
+  messages,
+  onInputChange,
+  onOpenChange,
+  onSubmit,
+  open,
+  pendingCount,
+  suggestions,
+}) {
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    if (!open || !listRef.current) {
+      return;
+    }
+
+    listRef.current.scrollTo({
+      top: listRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [messages.length, open]);
+
+  return (
+    <div className={`ask-setu-shell ${open ? "open" : ""}`}>
+      {open ? (
+        <section className="ask-setu-panel">
+          <div className="ask-setu-head">
+            <div>
+              <div className="ask-setu-kicker">Quick answers</div>
+              <h3>Ask Setu</h3>
+              <div className="ask-setu-sub">Local only · answers from the current portal state</div>
+            </div>
+            <button className="ask-setu-close" type="button" onClick={() => onOpenChange(false)}>
+              <IconX size={16} />
+            </button>
+          </div>
+
+          <div className="ask-setu-meta">
+            <span>{pendingCount} pending</span>
+            <span>{exceptionCount} exceptions</span>
+          </div>
+
+          <div className="ask-setu-suggestions">
+            {suggestions.map((suggestion) => (
+              <button
+                className="ask-setu-chip"
+                key={suggestion}
+                type="button"
+                onClick={() => onSubmit(suggestion)}
+              >
+                {suggestion}
+              </button>
+            ))}
+          </div>
+
+          <div className="ask-setu-messages" ref={listRef}>
+            {messages.map((message) => (
+              <div
+                className={`ask-setu-message ${message.role === "user" ? "user" : "assistant"}`}
+                key={message.id}
+              >
+                <div className="ask-setu-message-role">
+                  {message.role === "user" ? "You" : "Setu"}
+                </div>
+                <div className="ask-setu-message-body">{message.text}</div>
+              </div>
+            ))}
+          </div>
+
+          <form
+            className="ask-setu-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              onSubmit(inputValue);
+            }}
+          >
+            <input
+              className="ask-setu-input"
+              placeholder="Ask about a customer, payment, invoice, sync, or status"
+              value={inputValue}
+              onChange={(event) => onInputChange(event.target.value)}
+            />
+            <button className="ask-setu-send" type="submit" disabled={!inputValue.trim()}>
+              Ask
+            </button>
+          </form>
+        </section>
+      ) : null}
+
+      <button className="ask-setu-toggle" type="button" onClick={() => onOpenChange(!open)}>
+        <IconHelpCircle size={17} />
+        <span>Ask Setu</span>
+        <strong>{pendingCount + exceptionCount}</strong>
+      </button>
     </div>
   );
 }

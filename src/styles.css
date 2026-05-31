@@ -1731,7 +1731,7 @@ button {
 
 .toast-wrap {
   position: fixed;
-  bottom: 22px;
+  bottom: 92px;
   right: 22px;
   z-index: 100;
   display: flex;
@@ -1768,6 +1768,203 @@ button {
 
 .toast svg {
   color: var(--amber-mid);
+}
+
+.ask-setu-shell {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 96;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.ask-setu-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--ink), color-mix(in srgb, var(--ink) 72%, var(--amber-deep)));
+  color: var(--paper);
+  padding: 12px 15px;
+  box-shadow: 0 16px 32px -18px rgba(15, 12, 35, 0.6);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.ask-setu-toggle strong {
+  min-width: 24px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 18%, transparent);
+  font-size: 11px;
+  text-align: center;
+}
+
+.ask-setu-panel {
+  width: min(380px, calc(100vw - 28px));
+  max-height: min(72vh, 620px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 0.5px solid var(--border-1);
+  border-radius: calc(var(--radius-xl) - 2px);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--paper) 96%, var(--amber-soft)) 0%, var(--paper) 100%);
+  box-shadow: 0 28px 60px -30px rgba(15, 12, 35, 0.55);
+  animation: slidein 0.2s ease;
+}
+
+.ask-setu-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 12px;
+  border-bottom: 0.5px solid var(--border-2);
+}
+
+.ask-setu-kicker {
+  color: var(--text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 10px;
+}
+
+.ask-setu-head h3 {
+  margin: 4px 0 3px;
+  font-size: 18px;
+}
+
+.ask-setu-sub {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.ask-setu-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.ask-setu-meta {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px 0;
+  color: var(--text-2);
+  font-size: 11px;
+}
+
+.ask-setu-meta span {
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper-3) 86%, var(--amber-soft));
+}
+
+.ask-setu-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 18px 0;
+}
+
+.ask-setu-chip {
+  border: 0.5px solid color-mix(in srgb, var(--border-1) 82%, var(--amber));
+  border-radius: 999px;
+  background: var(--paper);
+  color: var(--text-1);
+  padding: 7px 10px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.ask-setu-chip:hover {
+  background: color-mix(in srgb, var(--paper) 84%, var(--amber-soft));
+}
+
+.ask-setu-messages {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+}
+
+.ask-setu-message {
+  max-width: 92%;
+}
+
+.ask-setu-message.assistant {
+  align-self: flex-start;
+}
+
+.ask-setu-message.user {
+  align-self: flex-end;
+}
+
+.ask-setu-message-role {
+  margin-bottom: 4px;
+  color: var(--text-3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}
+
+.ask-setu-message-body {
+  border-radius: 16px;
+  padding: 11px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.ask-setu-message.assistant .ask-setu-message-body {
+  background: color-mix(in srgb, var(--paper-3) 92%, var(--amber-soft));
+  border: 0.5px solid var(--border-2);
+}
+
+.ask-setu-message.user .ask-setu-message-body {
+  background: color-mix(in srgb, var(--ink) 92%, var(--amber-deep));
+  color: var(--paper);
+}
+
+.ask-setu-form {
+  display: flex;
+  gap: 10px;
+  padding: 14px 18px 18px;
+  border-top: 0.5px solid var(--border-2);
+}
+
+.ask-setu-input {
+  flex: 1;
+  min-width: 0;
+  border-radius: 14px;
+  border: 0.5px solid var(--border-1);
+  background: var(--paper);
+  padding: 12px 13px;
+  font: inherit;
+}
+
+.ask-setu-send {
+  border: 0;
+  border-radius: 14px;
+  background: var(--amber);
+  color: var(--ink);
+  padding: 0 15px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ask-setu-send:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .onboarding-layout {
@@ -2115,5 +2312,31 @@ button {
 
   .search-open-cell {
     justify-content: flex-start;
+  }
+
+  .ask-setu-shell {
+    right: 14px;
+    left: 14px;
+    bottom: 14px;
+    align-items: stretch;
+  }
+
+  .ask-setu-panel {
+    width: 100%;
+    max-height: 68vh;
+  }
+
+  .ask-setu-toggle {
+    justify-content: center;
+  }
+
+  .toast-wrap {
+    right: 14px;
+    left: 14px;
+    bottom: 88px;
+  }
+
+  .toast {
+    max-width: none;
   }
 }
