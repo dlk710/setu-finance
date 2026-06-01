@@ -262,7 +262,7 @@ Sync behavior:
 - the backend also runs automatic Gmail sync when credentials are present
 - set `GMAIL_AUTO_SYNC_INTERVAL_MINUTES=5` to run the scheduled sync every 5 minutes
 - set `GMAIL_AUTO_SYNC_ENABLED=false` if you need to pause scheduled sync without removing credentials
-- admins can change the enabled state and interval from `Referral Program > Gmail sync automation`; those choices are saved in Postgres and take effect without a server restart
+- admins can change the enabled state and interval from `Settings > Gmail sync automation`; those choices are saved in Postgres and take effect without a server restart
 
 ## Notes
 

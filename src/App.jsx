@@ -13,6 +13,7 @@ import {
   IconPlus,
   IconRefresh,
   IconSearch,
+  IconSettings,
   IconTable,
   IconTrendingDown,
   IconTrendingUp,
@@ -88,6 +89,7 @@ const PORTAL_VIEW_PATHS = {
   console: "/billing",
   search: "/customers",
   admin: "/admin",
+  settings: "/settings",
 };
 
 function createPortalRoute(view = "dashboard", customerId = "") {
@@ -2013,9 +2015,18 @@ function updateOnboardingForm(field, value) {
             Signed in as {auth.username}
           </div>
           <div className="sidebar-foot-note">Schedule sheet synced 5 min ago · phase 1</div>
-          <button className="btn btn-sm sidebar-signout" onClick={signOut}>
-            Sign out
-          </button>
+          <div className="sidebar-actions">
+            <button
+              className={`btn btn-sm sidebar-profile-action ${navView === "settings" ? "active" : ""}`}
+              onClick={() => navigateToView("settings")}
+            >
+              <IconSettings size={14} />
+              Settings
+            </button>
+            <button className="btn btn-sm sidebar-profile-action" onClick={signOut}>
+              Sign out
+            </button>
+          </div>
         </div>
       </aside>
 
@@ -2117,19 +2128,27 @@ function updateOnboardingForm(field, value) {
         {view === "admin" && (
           <AdminView
             referralProgram={referralProgram}
-            referralProgramForm={referralProgramForm}
-            gmailSyncStatus={gmailSyncStatus}
-            gmailSyncForm={gmailSyncForm}
             invoices={state.invoices}
             referralSubmissions={referralSubmissions}
             referrals={state.admin?.referrals ?? []}
             rewards={state.admin?.rewards ?? []}
             insights={referralInsights}
-            saving={savingReferralProgram}
-            savingGmailSync={savingGmailSyncSettings}
             applyingRewardId={applyingReferralRewardId}
             reviewingSubmissionId={reviewingReferralSubmissionId}
-            onFormChange={(field, value) =>
+            onApplyReward={applyReferralReward}
+            onConvertSubmission={convertReferralSubmission}
+            onDismissSubmission={dismissReferralSubmissionEntry}
+          />
+        )}
+        {view === "settings" && (
+          <SettingsView
+            username={auth.username}
+            referralProgramForm={referralProgramForm}
+            gmailSyncStatus={gmailSyncStatus}
+            gmailSyncForm={gmailSyncForm}
+            savingReferralProgram={savingReferralProgram}
+            savingGmailSync={savingGmailSyncSettings}
+            onReferralFormChange={(field, value) =>
               setReferralProgramForm((current) => ({
                 ...current,
                 [field]: value,
@@ -2141,11 +2160,8 @@ function updateOnboardingForm(field, value) {
                 [field]: value,
               }))
             }
-            onSave={saveReferralProgram}
+            onSaveReferralProgram={saveReferralProgram}
             onSaveGmailSync={saveGmailSyncSettings}
-            onApplyReward={applyReferralReward}
-            onConvertSubmission={convertReferralSubmission}
-            onDismissSubmission={dismissReferralSubmissionEntry}
           />
         )}
       </main>
@@ -4167,57 +4183,52 @@ function ConsoleView({
   );
 }
 
-function AdminView({
-  referralProgram,
+function SettingsView({
+  username,
   referralProgramForm,
   gmailSyncStatus,
   gmailSyncForm,
-  insights,
-  referralSubmissions,
-  referrals,
-  rewards,
-  applyingRewardId,
-  reviewingSubmissionId,
-  saving,
+  savingReferralProgram,
   savingGmailSync,
-  onApplyReward,
-  onConvertSubmission,
-  onDismissSubmission,
-  onFormChange,
+  onReferralFormChange,
   onGmailSyncFormChange,
-  onSave,
+  onSaveReferralProgram,
   onSaveGmailSync,
 }) {
-  const openReferralSubmissions = referralSubmissions.filter((submission) => submission.status === "submitted");
-  const availableRewards = insights?.qualifiedRewards ?? [];
-  const awardedRewards = insights?.appliedRewards ?? [];
-  const topReferrers = insights?.topReferrers ?? [];
-
   return (
     <div>
       <div className="topbar">
         <div>
-          <h1>Referral Program</h1>
+          <h1>Settings</h1>
           <div className="sub">
-            Define the rules once, track who referred whom, and apply qualified bonuses as discounts
-            on the next eligible invoice.
+            Manage profile-level access, automation timing, and program rules from one place.
           </div>
         </div>
       </div>
       <div className="content">
-        <div className="metrics c4">
-          <MetricCard accent label="Program status" value={referralProgram.enabled ? "Active" : "Disabled"} />
-          <MetricCard label="Tracked relationships" value={referrals.length} />
-          <MetricCard label="Open intake submissions" value={openReferralSubmissions.length} />
-          <MetricCard label="Qualified bonuses" value={availableRewards.length} />
-          <MetricCard label="Bonus spent" value={formatCurrency(insights?.totalBonusSpent ?? 0)} />
-        </div>
+        <section className="section">
+          <div className="section-head">
+            <h2>User profile</h2>
+          </div>
+          <div className="chart-card admin-form-card">
+            <div className="field-row">
+              <div className="field">
+                <label>Signed-in user</label>
+                <div className="admin-rule-preview">{username || "Unknown user"}</div>
+              </div>
+              <div className="field">
+                <label>Portal role</label>
+                <div className="admin-rule-preview">Finance administrator</div>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <section className="section">
           <div className="section-head">
             <h2>Gmail sync automation</h2>
             <button className="btn btn-primary btn-sm" onClick={onSaveGmailSync} disabled={savingGmailSync}>
-              {savingGmailSync ? "Saving…" : "Save sync settings"}
+              {savingGmailSync ? "Saving..." : "Save sync settings"}
             </button>
           </div>
           <div className="section-desc">
@@ -4284,14 +4295,13 @@ function AdminView({
         <section className="section">
           <div className="section-head">
             <h2>Referral rules</h2>
-            <button className="btn btn-primary btn-sm" onClick={onSave} disabled={saving}>
-              {saving ? "Saving…" : "Save settings"}
+            <button className="btn btn-primary btn-sm" onClick={onSaveReferralProgram} disabled={savingReferralProgram}>
+              {savingReferralProgram ? "Saving..." : "Save referral settings"}
             </button>
           </div>
           <div className="section-desc">
-            Keep the current program name, rule summary, and special campaign note here. Any changes
-            only affect new referrals going forward, while each existing relationship keeps its own
-            recorded rule snapshot.
+            Rule changes only affect new referrals going forward. Each existing relationship keeps
+            its recorded rule snapshot.
           </div>
           <div className="chart-card admin-form-card">
             <div className="admin-rule-preview admin-rule-preview-hero">
@@ -4309,7 +4319,7 @@ function AdminView({
               <input
                 type="checkbox"
                 checked={referralProgramForm.enabled}
-                onChange={(event) => onFormChange("enabled", event.target.checked)}
+                onChange={(event) => onReferralFormChange("enabled", event.target.checked)}
               />
               Enable referral program for new client enrollments
             </label>
@@ -4318,7 +4328,7 @@ function AdminView({
                 <label>Program name</label>
                 <input
                   value={referralProgramForm.programName}
-                  onChange={(event) => onFormChange("programName", event.target.value)}
+                  onChange={(event) => onReferralFormChange("programName", event.target.value)}
                   placeholder="Standard referral program"
                 />
               </div>
@@ -4326,7 +4336,7 @@ function AdminView({
                 <label>Program note</label>
                 <textarea
                   value={referralProgramForm.programDescription}
-                  onChange={(event) => onFormChange("programDescription", event.target.value)}
+                  onChange={(event) => onReferralFormChange("programDescription", event.target.value)}
                   rows={3}
                   placeholder="Example: Summer growth campaign or family referral drive"
                 />
@@ -4340,7 +4350,7 @@ function AdminView({
                   min="0"
                   step="25"
                   value={referralProgramForm.bonusAmount}
-                  onChange={(event) => onFormChange("bonusAmount", event.target.value)}
+                  onChange={(event) => onReferralFormChange("bonusAmount", event.target.value)}
                 />
               </div>
               <div className="field">
@@ -4350,7 +4360,7 @@ function AdminView({
                   min="0"
                   step="100"
                   value={referralProgramForm.qualifyingPaidAmount}
-                  onChange={(event) => onFormChange("qualifyingPaidAmount", event.target.value)}
+                  onChange={(event) => onReferralFormChange("qualifyingPaidAmount", event.target.value)}
                 />
               </div>
             </div>
@@ -4362,7 +4372,7 @@ function AdminView({
                   min="0"
                   step="1"
                   value={referralProgramForm.qualificationMonths}
-                  onChange={(event) => onFormChange("qualificationMonths", event.target.value)}
+                  onChange={(event) => onReferralFormChange("qualificationMonths", event.target.value)}
                 />
               </div>
               <div className="field">
@@ -4378,6 +4388,47 @@ function AdminView({
             </div>
           </div>
         </section>
+      </div>
+    </div>
+  );
+}
+
+function AdminView({
+  referralProgram,
+  insights,
+  referralSubmissions,
+  referrals,
+  rewards,
+  applyingRewardId,
+  reviewingSubmissionId,
+  onApplyReward,
+  onConvertSubmission,
+  onDismissSubmission,
+}) {
+  const openReferralSubmissions = referralSubmissions.filter((submission) => submission.status === "submitted");
+  const availableRewards = insights?.qualifiedRewards ?? [];
+  const awardedRewards = insights?.appliedRewards ?? [];
+  const topReferrers = insights?.topReferrers ?? [];
+
+  return (
+    <div>
+      <div className="topbar">
+        <div>
+          <h1>Referral Program</h1>
+          <div className="sub">
+            Define the rules once, track who referred whom, and apply qualified bonuses as discounts
+            on the next eligible invoice.
+          </div>
+        </div>
+      </div>
+      <div className="content">
+        <div className="metrics c4">
+          <MetricCard accent label="Program status" value={referralProgram.enabled ? "Active" : "Disabled"} />
+          <MetricCard label="Tracked relationships" value={referrals.length} />
+          <MetricCard label="Open intake submissions" value={openReferralSubmissions.length} />
+          <MetricCard label="Qualified bonuses" value={availableRewards.length} />
+          <MetricCard label="Bonus spent" value={formatCurrency(insights?.totalBonusSpent ?? 0)} />
+        </div>
 
         <section className="section">
           <div className="section-head">

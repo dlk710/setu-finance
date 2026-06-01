@@ -397,10 +397,20 @@ button {
   margin-top: 4px;
 }
 
-.sidebar-signout {
+.sidebar-actions {
   margin-top: 12px;
+  display: grid;
+  gap: 8px;
+}
+
+.sidebar-profile-action {
   width: 100%;
   justify-content: center;
+}
+
+.sidebar-profile-action.active {
+  background: var(--paper-2);
+  color: var(--ink);
 }
 
 .topbar {
