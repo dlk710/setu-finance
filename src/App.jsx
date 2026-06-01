@@ -65,6 +65,27 @@ const DEFAULT_FORM = {
   discountPct: 5,
   dueDate: "2026-06-10",
 };
+const MANUAL_PAYMENT_ROUTES = [
+  { value: "manual_zelle", label: "Zelle verified outside Gmail sync" },
+  { value: "bank_transfer", label: "Bank transfer" },
+  { value: "check", label: "Check" },
+  { value: "cash", label: "Cash" },
+  { value: "card", label: "Card processor" },
+  { value: "other", label: "Other secured route" },
+];
+
+function createDefaultManualPaymentForm() {
+  return {
+    selectedCustomerId: "",
+    amountReceived: "",
+    transactionDate: new Date().toISOString().slice(0, 10),
+    paymentRoute: "manual_zelle",
+    transactionReference: "",
+    invoiceId: "",
+    memo: "",
+    notes: "",
+  };
+}
 
 const EB1A_CRITERIA_OPTIONS = getCriteriaCatalog().map((definition) => ({
   code: definition.code,
@@ -576,6 +597,7 @@ function formatExceptionResolutionAction(action) {
     accept_full: "Accepted as full payment",
     apply_credit: "Marked for future credit",
     mark_duplicate: "Archived duplicate",
+    accept_transaction: "Accepted transaction",
   };
 
   return labels[action] ?? action?.replaceAll("_", " ") ?? "Resolved";
@@ -592,6 +614,19 @@ function createPreviewSnippet(value, maxLength = 220) {
 
 function formatCustomerReference(customer) {
   return customer?.customerCode ?? customer?.id ?? "Unassigned";
+}
+
+function formatPaymentSourceLabel(sourceProvider) {
+  const route = MANUAL_PAYMENT_ROUTES.find((option) => option.value === sourceProvider);
+  if (route) {
+    return route.label;
+  }
+
+  if (sourceProvider === "gmail") {
+    return "Gmail Zelle sync";
+  }
+
+  return sourceProvider ? sourceProvider.replaceAll("_", " ") : "Payment record";
 }
 
 function getPrimaryCustomerEmail(customer) {
@@ -746,6 +781,9 @@ function App() {
   const [modal, setModal] = useState({ type: null, payload: null });
   const [invoiceForm, setInvoiceForm] = useState(DEFAULT_FORM);
   const [invoiceCustomerQuery, setInvoiceCustomerQuery] = useState("");
+  const [manualPaymentForm, setManualPaymentForm] = useState(createDefaultManualPaymentForm);
+  const [manualPaymentCustomerQuery, setManualPaymentCustomerQuery] = useState("");
+  const [savingManualPayment, setSavingManualPayment] = useState(false);
   const [onboardingCustomerQuery, setOnboardingCustomerQuery] = useState("");
   const [onboardingForm, setOnboardingForm] = useState(DEFAULT_ONBOARDING_FORM);
   const [contractUploads, setContractUploads] = useState([]);
@@ -811,6 +849,11 @@ function App() {
     state.customers.find((customer) => customer.id === invoiceForm.selectedCustomerId) ?? null;
   const invoiceCustomerResults = invoiceCustomerQuery.trim()
     ? searchCustomersByIdentity(state.customers, invoiceCustomerQuery)
+    : [];
+  const selectedManualPaymentCustomer =
+    state.customers.find((customer) => customer.id === manualPaymentForm.selectedCustomerId) ?? null;
+  const manualPaymentCustomerResults = manualPaymentCustomerQuery.trim()
+    ? searchCustomersByIdentity(state.customers, manualPaymentCustomerQuery)
     : [];
   const serviceOptions = buildServiceOptions(selectedCustomer);
   const selectedOnboardingCustomer =
@@ -929,6 +972,9 @@ function App() {
     setModal({ type: null, payload: null });
     setInvoiceForm({ ...DEFAULT_FORM });
     setInvoiceCustomerQuery("");
+    setManualPaymentForm(createDefaultManualPaymentForm());
+    setManualPaymentCustomerQuery("");
+    setSavingManualPayment(false);
     setOnboardingCustomerQuery("");
     setOnboardingForm({ ...DEFAULT_ONBOARDING_FORM });
     setContractUploads([]);
@@ -1246,6 +1292,41 @@ function App() {
       pushToast(error.message);
     } finally {
       setSendingReceiptId("");
+    }
+  }
+
+  async function recordManualPayment() {
+    if (!manualPaymentForm.selectedCustomerId) {
+      pushToast("Choose the customer before recording the payment.");
+      return;
+    }
+
+    const amount = Number(manualPaymentForm.amountReceived);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      pushToast("Enter a valid secured payment amount.");
+      return;
+    }
+
+    setSavingManualPayment(true);
+    try {
+      const data = await apiRequest("/api/payments/manual", {
+        method: "POST",
+        body: {
+          form: manualPaymentForm,
+        },
+      });
+      setState(data.state);
+      closeModal();
+      setManualPaymentForm(createDefaultManualPaymentForm());
+      setManualPaymentCustomerQuery("");
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setSavingManualPayment(false);
     }
   }
 
@@ -2085,6 +2166,11 @@ function updateOnboardingForm(field, value) {
             exceptions={state.exceptions}
             exceptionHistory={state.exceptionHistory ?? []}
             onOpenNewInvoice={openNewInvoice}
+            onOpenManualPayment={() => {
+              setManualPaymentForm(createDefaultManualPaymentForm());
+              setManualPaymentCustomerQuery("");
+              setModal({ type: "manual-payment", payload: null });
+            }}
             onSendAll={sendAllInvoices}
             onPreviewInvoice={openSendPreview}
             onConfirmPayment={confirmPayment}
@@ -2193,6 +2279,22 @@ function updateOnboardingForm(field, value) {
         <PaymentReviewModal payment={modal.payload} onApply={confirmPayment} onClose={closeModal} />
       </ModalShell>
 
+      <ModalShell show={modal.type === "manual-payment"} onClose={closeModal} size="wide">
+        <ManualPaymentModal
+          customers={state.customers}
+          customerQuery={manualPaymentCustomerQuery}
+          customerResults={manualPaymentCustomerResults}
+          form={manualPaymentForm}
+          invoices={state.invoices}
+          onChange={(patch) => setManualPaymentForm((current) => ({ ...current, ...patch }))}
+          onClose={closeModal}
+          onCustomerQueryChange={setManualPaymentCustomerQuery}
+          onSubmit={recordManualPayment}
+          saving={savingManualPayment}
+          selectedCustomer={selectedManualPaymentCustomer}
+        />
+      </ModalShell>
+
       <ModalShell show={modal.type === "mismatch"} onClose={closeModal} size="wide">
         <MismatchModal
           exception={modal.payload}
@@ -2227,6 +2329,13 @@ function updateOnboardingForm(field, value) {
               modal.payload?.id,
               "mark_duplicate",
               "Potential duplicate archived. It will not be counted or applied again.",
+            )
+          }
+          onAcceptTransaction={() =>
+            resolveMismatch(
+              modal.payload?.id,
+              "accept_transaction",
+              "Transaction accepted and applied. Receipt can be sent separately.",
             )
           }
         />
@@ -3787,6 +3896,7 @@ function ConsoleView({
   exceptionHistory,
   onOpenPayment,
   onOpenNewInvoice,
+  onOpenManualPayment,
   onSendAll,
   onPreviewInvoice,
   onConfirmPayment,
@@ -3854,6 +3964,10 @@ function ConsoleView({
           <button className="btn btn-primary btn-sm" onClick={onOpenNewInvoice}>
             <IconPlus size={14} />
             New invoice
+          </button>
+          <button className="btn btn-sm" onClick={onOpenManualPayment}>
+            <IconCircleCheckFilled size={14} />
+            Record manual payment
           </button>
         </div>
       </div>
@@ -3952,6 +4066,7 @@ function ConsoleView({
                 <div>
                   <div className="sub mono">{payment.transactionReference ?? "No transaction ref"}</div>
                   <div className="sub">{payment.memo ?? payment.matchSummary ?? "Saved from synced email"}</div>
+                  <div className="sub">{formatPaymentSourceLabel(payment.sourceProvider)}</div>
                   <div className="signals">
                     <span className="ok">
                       <IconCheck size={13} />
@@ -4010,6 +4125,7 @@ function ConsoleView({
                 <div>
                   <div className="sub mono">{payment.transactionReference ?? "No transaction ref"}</div>
                   <div className="sub">{payment.memo ?? payment.matchSummary ?? "Applied transaction record"}</div>
+                  <div className="sub">{formatPaymentSourceLabel(payment.sourceProvider)}</div>
                   <div className="mono">{formatCurrency(payment.amountReceived ?? 0)}</div>
                 </div>
                 <div>
@@ -4099,7 +4215,9 @@ function ConsoleView({
                       {exception.kind === "ambiguous"
                         ? "2 customers match name"
                         : exception.kind === "duplicate"
-                          ? "Possible duplicate payment"
+                          ? exception.summary?.toLowerCase().includes("abuse")
+                            ? "Possible abuse / replay risk"
+                            : "Possible duplicate payment"
                           : "Needs manual match"}
                     </span>
                   )}
@@ -5845,7 +5963,13 @@ function Customer360Page({
                 <div className="trow customer-review-grid" key={exception.id}>
                   <div>
                     <span className="search-status-chip tone-danger">
-                      {exception.kind === "ambiguous" ? "Ambiguous" : exception.kind === "duplicate" ? "Duplicate" : "Mismatch"}
+                      {exception.kind === "ambiguous"
+                        ? "Ambiguous"
+                        : exception.kind === "duplicate"
+                          ? exception.summary?.toLowerCase().includes("abuse")
+                            ? "Abuse risk"
+                            : "Duplicate"
+                          : "Mismatch"}
                     </span>
                   </div>
                   <div className="sub">{exception.summary}</div>
@@ -6139,6 +6263,188 @@ function PaymentReviewModal({ onApply, onClose, payment }) {
   );
 }
 
+function ManualPaymentModal({
+  customerQuery,
+  customerResults,
+  form,
+  invoices = [],
+  onChange,
+  onClose,
+  onCustomerQueryChange,
+  onSubmit,
+  saving,
+  selectedCustomer,
+}) {
+  const customerInvoices = selectedCustomer
+    ? invoices.filter((invoice) => invoice.customerId === selectedCustomer.id && invoice.status !== "paid")
+    : [];
+  const selectedRoute = MANUAL_PAYMENT_ROUTES.find((route) => route.value === form.paymentRoute);
+
+  return (
+    <>
+      <div className="modal-head">
+        <div>
+          <h3>Record secured payment</h3>
+          <div className="sub modal-sub">
+            Use this only after funds are confirmed outside Gmail sync. The payment is applied now;
+            receipt sending stays a separate action from completed transactions.
+          </div>
+        </div>
+        <button className="x" onClick={onClose}>
+          <IconX size={18} />
+        </button>
+      </div>
+      <div className="modal-body">
+        <div className="note warn">
+          <IconAlertTriangle size={16} />
+          <div>
+            If a Zelle transaction number already exists in the ledger, Setu blocks it and flags it
+            as a possible abuse/replay risk instead of applying it again.
+          </div>
+        </div>
+        <div className="field">
+          <label>Customer</label>
+          <div className="search-wrap modal-search">
+            <IconSearch size={18} />
+            <input
+              className="search-input"
+              value={customerQuery}
+              onChange={(event) => onCustomerQueryChange(event.target.value)}
+              placeholder="Search by customer ID, phone, email, first name, or last name"
+            />
+          </div>
+          {selectedCustomer ? (
+            <div className="autofill-note">
+              Selected {selectedCustomer.name} · Customer ID {formatCustomerReference(selectedCustomer)}
+            </div>
+          ) : null}
+          {customerQuery.trim() ? (
+            <div className="picker-results">
+              {customerResults.length ? (
+                customerResults.map((customer) => (
+                  <div className="candidate" key={customer.id}>
+                    <div>
+                      <div className="name">{customer.name}</div>
+                      <div className="meta">
+                        Customer ID {formatCustomerReference(customer)} · {summarizeContacts(customer)}
+                      </div>
+                    </div>
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() => {
+                        onChange({ selectedCustomerId: customer.id, invoiceId: "" });
+                        onCustomerQueryChange(customer.name);
+                      }}
+                    >
+                      Use customer
+                    </button>
+                  </div>
+                ))
+              ) : (
+                <div className="picker-empty">No existing customer matches that search.</div>
+              )}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="field-row">
+          <div className="field">
+            <label>Amount received</label>
+            <input
+              min="0"
+              step="0.01"
+              type="number"
+              value={form.amountReceived}
+              onChange={(event) => onChange({ amountReceived: event.target.value })}
+              placeholder="1000.02"
+            />
+          </div>
+          <div className="field">
+            <label>Payment date</label>
+            <input
+              type="date"
+              value={form.transactionDate}
+              onChange={(event) => onChange({ transactionDate: event.target.value })}
+            />
+          </div>
+        </div>
+
+        <div className="field-row">
+          <div className="field">
+            <label>Funds secured through</label>
+            <select
+              value={form.paymentRoute}
+              onChange={(event) => onChange({ paymentRoute: event.target.value })}
+            >
+              {MANUAL_PAYMENT_ROUTES.map((route) => (
+                <option key={route.value} value={route.value}>
+                  {route.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>Transaction / confirmation number</label>
+            <input
+              value={form.transactionReference}
+              onChange={(event) => onChange({ transactionReference: event.target.value })}
+              placeholder={form.paymentRoute === "manual_zelle" ? "Zelle transaction number" : "Optional reference"}
+            />
+          </div>
+        </div>
+
+        <div className="field">
+          <label>Invoice to mark paid</label>
+          <select
+            disabled={!selectedCustomer}
+            value={form.invoiceId}
+            onChange={(event) => onChange({ invoiceId: event.target.value })}
+          >
+            <option value="">Auto-match by amount or leave invoice pending</option>
+            {customerInvoices.map((invoice) => (
+              <option key={invoice.id} value={invoice.id}>
+                {invoice.invoiceCode} · {invoice.service} {invoice.milestone || ""} ·{" "}
+                {formatCurrency(invoice.zelleAmount)}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="field-row">
+          <div className="field">
+            <label>Memo</label>
+            <input
+              value={form.memo}
+              onChange={(event) => onChange({ memo: event.target.value })}
+              placeholder={selectedRoute?.label ?? "Payment memo"}
+            />
+          </div>
+          <div className="field">
+            <label>Internal note</label>
+            <input
+              value={form.notes}
+              onChange={(event) => onChange({ notes: event.target.value })}
+              placeholder="Who verified funds, bank note, or context"
+            />
+          </div>
+        </div>
+      </div>
+      <div className="modal-foot">
+        <button
+          className="btn btn-primary"
+          onClick={onSubmit}
+          disabled={saving || !selectedCustomer || !Number(form.amountReceived)}
+        >
+          {saving ? "Recording…" : "Record & apply payment"}
+        </button>
+        <button className="btn" onClick={onClose}>
+          Close
+        </button>
+      </div>
+    </>
+  );
+}
+
 function MismatchModal({ exception, onAccept, onCredit, onClose }) {
   if (!exception) {
     return null;
@@ -6253,6 +6559,7 @@ function ExceptionReviewModal({
   onClose,
   onResolveCustomer,
   onArchiveDuplicate,
+  onAcceptTransaction,
 }) {
   const [customerQuery, setCustomerQuery] = useState("");
 
@@ -6267,6 +6574,7 @@ function ExceptionReviewModal({
   const isAmbiguous = exception.kind === "ambiguous";
   const isDuplicate = exception.kind === "duplicate";
   const allowManualCustomerMatch = !isDuplicate;
+  const canAcceptTransaction = Boolean(!isDuplicate && exception.sourceMessageId && exception.customerId);
   const manualCustomerResults = customerQuery.trim()
     ? searchCustomersByIdentity(customers, customerQuery)
     : [];
@@ -6338,7 +6646,9 @@ function ExceptionReviewModal({
             <div>
               This transaction appears to match a payment that was already applied. The portal
               blocked it from the apply queue so the invoice and referral totals are not counted
-              twice.
+              twice. If the same Zelle transaction number was already applied, treat it as a
+              possible abuse/replay risk and verify directly with bank records before doing
+              anything outside the portal.
             </div>
           </div>
         ) : (
@@ -6350,6 +6660,15 @@ function ExceptionReviewModal({
             </div>
           </div>
         )}
+        {canAcceptTransaction ? (
+          <div className="note">
+            <IconCircleCheckFilled size={16} />
+            <div>
+              This exception is linked to {exception.customerName}. Accepting it applies the
+              payment now and records the decision for audit.
+            </div>
+          </div>
+        ) : null}
         {allowManualCustomerMatch ? (
           <div className="field">
             <label>Match to existing customer</label>
@@ -6401,8 +6720,13 @@ function ExceptionReviewModal({
         ) : null}
       </div>
       <div className="modal-foot">
+        {canAcceptTransaction ? (
+          <button className="btn btn-primary" onClick={onAcceptTransaction}>
+            Accept transaction
+          </button>
+        ) : null}
         {isDuplicate && (
-          <button className="btn btn-primary" onClick={onArchiveDuplicate}>
+          <button className="btn" onClick={onArchiveDuplicate}>
             Archive duplicate
           </button>
         )}
@@ -6546,7 +6870,9 @@ function buildAttentionItems(exceptions) {
       exception.kind === "mismatch"
         ? "Amount mismatch"
         : exception.kind === "duplicate"
-          ? "Possible duplicate"
+          ? exception.summary?.toLowerCase().includes("abuse")
+            ? "Possible abuse / replay"
+            : "Possible duplicate"
           : exception.kind === "ambiguous"
             ? "Ambiguous payer"
             : "Manual review",
@@ -6555,11 +6881,13 @@ function buildAttentionItems(exceptions) {
       exception.kind === "mismatch"
         ? `paid ${formatCurrency(exception.amount)} / exp ${formatCurrency(exception.expectedAmount)}`
         : exception.kind === "duplicate"
-          ? "already applied once"
+          ? exception.summary?.toLowerCase().includes("abuse")
+            ? "same transaction number"
+            : "already applied once"
           : exception.kind === "ambiguous"
             ? "2 customers match"
             : "saved but not matched",
-    action: exception.kind === "duplicate" ? "Archive" : exception.kind === "mismatch" ? "Review" : "Resolve",
+    action: exception.kind === "duplicate" ? "Review" : exception.kind === "mismatch" ? "Review" : "Resolve",
     attn: false,
     icon:
       exception.kind === "mismatch" ? (

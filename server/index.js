@@ -12,6 +12,7 @@ import {
   listPendingPaymentIds,
   loadState,
   prepareStateStore,
+  recordManualPaymentRecord,
   resolveExceptionRecord,
   sendReceiptForPaymentRecord,
   sendQueuedInvoice,
@@ -389,6 +390,22 @@ app.post("/api/admin/referral-submissions/:submissionId/dismiss", async (request
 app.post("/api/payments/:paymentId/confirm", async (request, response, next) => {
   try {
     const result = await confirmPendingPaymentRecord(request.params.paymentId);
+
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/payments/manual", async (request, response, next) => {
+  try {
+    const result = await recordManualPaymentRecord({
+      form: request.body?.form,
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
 
     response.json({
       message: result.message,

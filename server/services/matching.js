@@ -1,5 +1,7 @@
 import { normalizeDigits, normalizeEmail, normalizeName } from "../db/normalizers.js";
 
+const ZELLE_REFERENCE_PROVIDERS = new Set(["gmail", "zelle", "manual_zelle"]);
+
 function matchName(senderName, candidateName) {
   const sender = normalizeName(senderName);
   const candidate = normalizeName(candidateName);
@@ -93,8 +95,13 @@ function normalizeTransactionReference(value) {
   return normalized || null;
 }
 
-function sameProvider(left, right) {
-  return String(left || "gmail").trim().toLowerCase() === String(right || "gmail").trim().toLowerCase();
+function sameReferenceScope(left, right) {
+  const normalizedLeft = String(left || "gmail").trim().toLowerCase();
+  const normalizedRight = String(right || "gmail").trim().toLowerCase();
+  if (ZELLE_REFERENCE_PROVIDERS.has(normalizedLeft) && ZELLE_REFERENCE_PROVIDERS.has(normalizedRight)) {
+    return true;
+  }
+  return normalizedLeft === normalizedRight;
 }
 
 function sameSenderIdentity(existingPayment, incomingPayment) {
@@ -113,7 +120,7 @@ function sameSenderIdentity(existingPayment, incomingPayment) {
   return matchName(existingPayment.senderNameRaw, incomingPayment.senderNameRaw);
 }
 
-function buildDuplicateSummary(existingPayment) {
+function buildDuplicateSummary(existingPayment, { abuseRisk = false } = {}) {
   const destination = existingPayment.matchedInvoiceCode
     ? `${existingPayment.customerCode ?? existingPayment.customerId ?? "Customer"} · ${
         existingPayment.matchedInvoiceCode
@@ -122,10 +129,19 @@ function buildDuplicateSummary(existingPayment) {
   const reference = existingPayment.transactionReference
     ? ` Transaction ref ${existingPayment.transactionReference} was already applied.`
     : "";
-  return `Potential duplicate payment blocked.${reference} Existing applied payment: ${destination}.`;
+  return abuseRisk
+    ? `Possible abuse / replay risk blocked.${reference} Do not apply this payment again unless bank records prove it is a different deposit. Existing applied payment: ${destination}.`
+    : `Potential duplicate payment blocked.${reference} Existing applied payment: ${destination}.`;
 }
 
 function buildDuplicateException({ payment, existingPayment, fallbackCustomer = null, fallbackInvoice = null }) {
+  const abuseRisk = Boolean(
+    normalizeTransactionReference(payment.transactionReference) &&
+      normalizeTransactionReference(payment.transactionReference) ===
+        normalizeTransactionReference(existingPayment.transactionReference) &&
+      sameReferenceScope(existingPayment.sourceProvider, payment.sourceProvider),
+  );
+
   return {
     kind: "duplicate",
     customerId: existingPayment.customerId ?? fallbackCustomer?.id ?? null,
@@ -139,7 +155,7 @@ function buildDuplicateException({ payment, existingPayment, fallbackCustomer = 
     senderEmail: payment.senderEmail,
     senderPhoneLast4: payment.senderPhoneLast4,
     invoiceId: existingPayment.invoiceId ?? fallbackInvoice?.id ?? null,
-    summary: buildDuplicateSummary(existingPayment),
+    summary: buildDuplicateSummary(existingPayment, { abuseRisk }),
     sourceMessageId: payment.sourceMessageId,
     duplicateOfPaymentId: existingPayment.id,
   };
@@ -167,7 +183,7 @@ function findConfirmedDuplicatePayment(state, payment, { customerId = null, invo
   if (incomingReference) {
     const referencedDuplicate = confirmedPayments.find(
       (entry) =>
-        sameProvider(entry.sourceProvider, payment.sourceProvider) &&
+        sameReferenceScope(entry.sourceProvider, payment.sourceProvider) &&
         normalizeTransactionReference(entry.transactionReference) === incomingReference,
     );
     if (referencedDuplicate) {

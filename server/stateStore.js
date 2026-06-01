@@ -25,6 +25,15 @@ const DEFAULT_REFERRAL_PROGRAM = {
   qualifyingPaidAmount: 3000,
   qualificationMonths: 6,
 };
+const ZELLE_REFERENCE_PROVIDERS = new Set(["gmail", "zelle", "manual_zelle"]);
+const MANUAL_PAYMENT_ROUTES = {
+  manual_zelle: "Zelle verified outside Gmail sync",
+  bank_transfer: "Bank transfer",
+  check: "Check",
+  cash: "Cash",
+  card: "Card processor",
+  other: "Other secured route",
+};
 
 function roundCurrency(value) {
   return Math.round(Number(value || 0) * 100) / 100;
@@ -392,7 +401,7 @@ function sameSenderIdentity(left, right) {
   return leftParts.at(-1) === rightParts.at(-1) && leftParts[0][0] === rightParts[0][0];
 }
 
-function buildDuplicateSummary(existingPayment) {
+function buildDuplicateSummary(existingPayment, { abuseRisk = false } = {}) {
   const destination = existingPayment.matchedInvoiceCode
     ? `${existingPayment.customerCode ?? existingPayment.customerId ?? "Customer"} · ${
         existingPayment.matchedInvoiceCode
@@ -401,7 +410,9 @@ function buildDuplicateSummary(existingPayment) {
   const reference = existingPayment.transactionReference
     ? ` Transaction ref ${existingPayment.transactionReference} was already applied.`
     : "";
-  return `Potential duplicate payment blocked.${reference} Existing applied payment: ${destination}.`;
+  return abuseRisk
+    ? `Possible abuse / replay risk blocked.${reference} Do not apply this payment again unless bank records prove it is a different deposit. Existing applied payment: ${destination}.`
+    : `Potential duplicate payment blocked.${reference} Existing applied payment: ${destination}.`;
 }
 
 function createEmptyCustomerProfile(overrides = {}) {
@@ -2343,6 +2354,25 @@ async function fetchPaymentBySourceMessage(client, sourceMessageId) {
   return result.rows[0] ?? null;
 }
 
+async function fetchPaymentBySourceMessageForUpdate(client, sourceMessageId) {
+  if (!sourceMessageId) {
+    return null;
+  }
+
+  const result = await client.query(
+    `
+      SELECT *
+      FROM payments
+      WHERE source_message_id = $1
+      LIMIT 1
+      FOR UPDATE
+    `,
+    [sourceMessageId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
 async function fetchConfirmedPaymentForUpdate(client, paymentId) {
   const result = await client.query(
     `
@@ -2421,21 +2451,11 @@ async function findConfirmedDuplicatePayment(client, paymentRow) {
       LEFT JOIN invoices ON invoices.id = payments.invoice_id
       WHERE payments.id <> $1
         AND payments.review_status = 'confirmed'
-        AND (
-          ($2::text IS NOT NULL
-            AND payments.source_provider = $3
-            AND LOWER(payments.transaction_reference) = LOWER($2))
-          OR ($4::text IS NOT NULL AND payments.invoice_id = $4)
-        )
+        AND ($2::text IS NOT NULL AND payments.invoice_id = $2)
       ORDER BY payments.applied_at DESC NULLS LAST, payments.created_at DESC, payments.id DESC
       LIMIT 1
     `,
-    [
-      paymentRow.id,
-      paymentRow.transaction_reference ?? null,
-      paymentRow.source_provider ?? "gmail",
-      paymentRow.invoice_id ?? null,
-    ],
+    [paymentRow.id, paymentRow.invoice_id ?? null],
   );
 
   if (exactConflict.rowCount) {
@@ -2482,8 +2502,49 @@ async function findConfirmedDuplicatePayment(client, paymentRow) {
   return null;
 }
 
-async function movePaymentToDuplicateException(client, paymentRow, duplicatePayment) {
-  const duplicateSummary = buildDuplicateSummary(duplicatePayment);
+async function findConfirmedTransactionReferencePayment(client, paymentRow) {
+  const normalizedReference = normalizeTransactionReference(paymentRow.transaction_reference);
+  if (!normalizedReference) {
+    return null;
+  }
+
+  const sourceProvider = paymentRow.source_provider ?? "gmail";
+  const usesZelleReferenceScope = ZELLE_REFERENCE_PROVIDERS.has(sourceProvider);
+  const result = await client.query(
+    `
+      SELECT
+        payments.*,
+        customers.full_name AS resolved_customer_name,
+        customers.customer_code AS resolved_customer_code,
+        invoices.invoice_code AS matched_invoice_code
+      FROM payments
+      LEFT JOIN customers ON customers.id = payments.customer_id
+      LEFT JOIN invoices ON invoices.id = payments.invoice_id
+      WHERE payments.id <> $1
+        AND payments.review_status = 'confirmed'
+        AND payments.transaction_reference IS NOT NULL
+        AND LOWER(payments.transaction_reference) = $2
+        AND (
+          ($3::boolean = TRUE AND payments.source_provider = ANY($4::text[]))
+          OR ($3::boolean = FALSE AND payments.source_provider = $5)
+        )
+      ORDER BY payments.applied_at DESC NULLS LAST, payments.created_at DESC, payments.id DESC
+      LIMIT 1
+    `,
+    [
+      paymentRow.id,
+      normalizedReference,
+      usesZelleReferenceScope,
+      Array.from(ZELLE_REFERENCE_PROVIDERS),
+      sourceProvider,
+    ],
+  );
+
+  return result.rowCount ? mapPaymentRow(result.rows[0]) : null;
+}
+
+async function movePaymentToDuplicateException(client, paymentRow, duplicatePayment, { abuseRisk = false } = {}) {
+  const duplicateSummary = buildDuplicateSummary(duplicatePayment, { abuseRisk });
 
   await client.query(
     `
@@ -2520,13 +2581,17 @@ async function movePaymentToDuplicateException(client, paymentRow, duplicatePaym
 
   await insertActivity(
     client,
-    `Potential duplicate blocked for ${duplicatePayment.customerName ?? paymentRow.customer_name ?? "customer"}`,
+    abuseRisk
+      ? `Possible abuse/replay risk blocked for ${duplicatePayment.customerName ?? paymentRow.customer_name ?? "customer"}`
+      : `Potential duplicate blocked for ${duplicatePayment.customerName ?? paymentRow.customer_name ?? "customer"}`,
   );
 
   return {
     applied: false,
     state: await hydratePortalState(client),
-    message: "Potential duplicate detected. Transaction was not applied and was moved to exceptions.",
+    message: abuseRisk
+      ? "Possible abuse/replay risk detected. Transaction number already exists, so it was not applied and was moved to exceptions."
+      : "Potential duplicate detected. Transaction was not applied and was moved to exceptions.",
   };
 }
 
@@ -2567,6 +2632,83 @@ async function resolveInvoiceForPayment(client, paymentRow) {
   );
 
   return result.rows[0] ? mapInvoiceRow(result.rows[0]) : null;
+}
+
+async function applyPaymentRowToLedger(
+  client,
+  paymentRow,
+  { actingUsername = null } = {},
+) {
+  if (!paymentRow.customer_id) {
+    throw new Error("Customer record not found for this payment.");
+  }
+
+  const replayPayment = await findConfirmedTransactionReferencePayment(client, paymentRow);
+  if (replayPayment) {
+    return movePaymentToDuplicateException(client, paymentRow, replayPayment, { abuseRisk: true });
+  }
+
+  const duplicatePayment = await findConfirmedDuplicatePayment(client, paymentRow);
+  if (duplicatePayment) {
+    return movePaymentToDuplicateException(client, paymentRow, duplicatePayment);
+  }
+
+  let paymentForApply = paymentRow;
+
+  const customer = await fetchCustomerAggregate(client, paymentForApply.customer_id);
+  if (!customer) {
+    throw new Error("Customer record not found for this payment.");
+  }
+
+  const invoice = await resolveInvoiceForPayment(client, paymentForApply);
+
+  if (invoice) {
+    await client.query(
+      `
+        UPDATE invoices
+        SET status = 'paid',
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [invoice.id],
+    );
+  }
+
+  await client.query(
+    `
+      UPDATE payments
+      SET review_status = 'confirmed',
+          match_status = 'applied',
+          invoice_id = COALESCE($2, invoice_id),
+          applied_at = COALESCE(applied_at, NOW()),
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [paymentForApply.id, invoice?.id ?? null],
+  );
+
+  const awardedRewards = await awardReferralRewardsForCustomer(client, customer.id);
+  await insertActivity(
+    client,
+    `Transaction applied for ${customer.name}`,
+    actingUsername,
+  );
+  for (const reward of awardedRewards) {
+    await insertActivity(
+      client,
+      `Referral bonus unlocked: ${formatCurrency(reward.amount)} for ${reward.referrerCustomerId}`,
+      actingUsername,
+    );
+  }
+
+  return {
+    applied: true,
+    customer,
+    invoice,
+    paymentId: paymentForApply.id,
+    state: await hydratePortalState(client),
+    message: `Transaction applied for ${customer.name}. Receipt can be sent separately.`,
+  };
 }
 
 async function upsertGmailIntegrationState(client, gmailState) {
@@ -3500,6 +3642,141 @@ export async function createInvoiceRecord({ form, sendNow, deliverInvoice }) {
   });
 }
 
+export async function recordManualPaymentRecord({ form, actingUsername = "unknown" }) {
+  return withTransaction(async (client) => {
+    if (!form) {
+      throw new Error("Manual payment details are required.");
+    }
+
+    const customerId = form.customerId?.trim() || form.selectedCustomerId?.trim();
+    if (!customerId) {
+      throw new Error("Choose the customer before recording a manual payment.");
+    }
+
+    const customer = await fetchCustomerAggregate(client, customerId);
+    if (!customer) {
+      throw new Error("Customer record not found for this manual payment.");
+    }
+
+    const amountReceived = roundCurrency(form.amountReceived ?? form.amount);
+    if (!Number.isFinite(amountReceived) || amountReceived <= 0) {
+      throw new Error("Enter a valid secured payment amount.");
+    }
+
+    const sourceProvider = form.paymentRoute?.trim() || "other";
+    const paymentRouteLabel = MANUAL_PAYMENT_ROUTES[sourceProvider];
+    if (!paymentRouteLabel) {
+      throw new Error("Choose how the funds were secured.");
+    }
+
+    const transactionDate = normalizeDateInput(form.transactionDate ?? form.paymentDate, new Date());
+    const transactionReference = form.transactionReference?.trim() || null;
+    const memo = form.memo?.trim() || paymentRouteLabel;
+    const reviewNotes = form.notes?.trim() || `Funds secured through ${paymentRouteLabel}.`;
+    const invoiceId = form.invoiceId?.trim() || null;
+
+    if (invoiceId) {
+      const invoiceResult = await client.query(
+        `
+          SELECT id
+          FROM invoices
+          WHERE id = $1
+            AND customer_id = $2
+          LIMIT 1
+        `,
+        [invoiceId, customerId],
+      );
+      if (!invoiceResult.rowCount) {
+        throw new Error("Selected invoice does not belong to this customer.");
+      }
+    }
+
+    const primaryEmail = findPrimaryEmail(customer);
+    const paymentId = `pay-manual-${crypto.randomUUID()}`;
+    const sourceMessageId = `manual-${paymentId}`;
+    const receivedAt = new Date(`${transactionDate}T12:00:00`).toISOString();
+    const parsedPayload = {
+      source: "manual",
+      paymentRoute: sourceProvider,
+      paymentRouteLabel,
+      securedOutsideEmailSync: true,
+      enteredBy: actingUsername,
+      enteredAt: new Date().toISOString(),
+    };
+
+    const insertResult = await client.query(
+      `
+        INSERT INTO payments (
+          id,
+          customer_id,
+          invoice_id,
+          customer_name,
+          sender_name_raw,
+          sender_email,
+          amount_received,
+          matched_signals,
+          score,
+          source_message_id,
+          source_provider,
+          transaction_date,
+          subject,
+          transaction_reference,
+          memo,
+          parsed_payload,
+          match_status,
+          match_summary,
+          review_notes,
+          date_label,
+          raw_text,
+          received_at,
+          review_status,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, ARRAY['manual_entry', 'funds_secured']::text[], 100,
+          $8, $9, $10, $11, $12, $13, $14::jsonb, 'matched', $15, $16, $17, $18, $19, 'pending', NOW(), NOW()
+        )
+        RETURNING *
+      `,
+      [
+        paymentId,
+        customerId,
+        invoiceId,
+        customer.name,
+        customer.name,
+        primaryEmail,
+        amountReceived,
+        sourceMessageId,
+        sourceProvider,
+        transactionDate,
+        `Manual payment - ${paymentRouteLabel}`,
+        transactionReference,
+        memo,
+        JSON.stringify(parsedPayload),
+        `Manual secured payment recorded by ${actingUsername}.`,
+        reviewNotes,
+        transactionDate,
+        `${paymentRouteLabel} manual payment recorded by ${actingUsername}. ${reviewNotes}`,
+        receivedAt,
+      ],
+    );
+
+    const applyResult = await applyPaymentRowToLedger(client, insertResult.rows[0], {
+      actingUsername,
+    });
+
+    if (applyResult.applied === false) {
+      return applyResult;
+    }
+
+    return {
+      ...applyResult,
+      message: `Manual payment recorded and applied for ${customer.name}. Receipt can be sent from completed transactions.`,
+    };
+  });
+}
+
 export async function confirmPendingPaymentRecord(paymentId) {
   return withTransaction(async (client) => {
     const paymentRow = await fetchPendingPaymentForUpdate(client, paymentId);
@@ -3507,60 +3784,7 @@ export async function confirmPendingPaymentRecord(paymentId) {
       throw new Error("Payment not found in the confirmation queue.");
     }
 
-    if (!paymentRow.customer_id) {
-      throw new Error("Customer record not found for this payment.");
-    }
-
-    const duplicatePayment = await findConfirmedDuplicatePayment(client, paymentRow);
-    if (duplicatePayment) {
-      return movePaymentToDuplicateException(client, paymentRow, duplicatePayment);
-    }
-
-    const customer = await fetchCustomerAggregate(client, paymentRow.customer_id);
-    if (!customer) {
-      throw new Error("Customer record not found for this payment.");
-    }
-
-    const invoice = await resolveInvoiceForPayment(client, paymentRow);
-
-    if (invoice) {
-      await client.query(
-        `
-          UPDATE invoices
-          SET status = 'paid',
-              updated_at = NOW()
-          WHERE id = $1
-        `,
-        [invoice.id],
-      );
-    }
-
-    await client.query(
-      `
-        UPDATE payments
-        SET review_status = 'confirmed',
-            match_status = 'applied',
-            applied_at = NOW(),
-            updated_at = NOW()
-        WHERE id = $1
-      `,
-      [paymentId],
-    );
-
-    const awardedRewards = await awardReferralRewardsForCustomer(client, customer.id);
-    await insertActivity(client, `Transaction applied for ${customer.name}`);
-    for (const reward of awardedRewards) {
-      await insertActivity(
-        client,
-        `Referral bonus unlocked: ${formatCurrency(reward.amount)} for ${reward.referrerCustomerId}`,
-      );
-    }
-
-    return {
-      applied: true,
-      state: await hydratePortalState(client),
-      message: `Transaction applied for ${customer.name}. Receipt can be sent separately.`,
-    };
+    return applyPaymentRowToLedger(client, paymentRow);
   });
 }
 
@@ -3632,9 +3856,9 @@ export async function resolveExceptionRecord({
     }
 
     const allowedActionsByKind = {
-      ambiguous: new Set(["matched_customer"]),
-      unmatched: new Set(["matched_customer"]),
-      mismatch: new Set(["accept_full", "apply_credit"]),
+      ambiguous: new Set(["matched_customer", "accept_transaction"]),
+      unmatched: new Set(["matched_customer", "accept_transaction"]),
+      mismatch: new Set(["accept_full", "apply_credit", "accept_transaction"]),
       duplicate: new Set(["mark_duplicate"]),
     };
 
@@ -3684,6 +3908,94 @@ export async function resolveExceptionRecord({
       return {
         state: await hydratePortalState(client),
         message: "Duplicate transaction archived.",
+      };
+    }
+
+    if (actionType === "accept_transaction") {
+      if (!exception.source_message_id) {
+        throw new Error("This exception is missing its source transaction reference.");
+      }
+
+      let paymentRow = await fetchPaymentBySourceMessageForUpdate(client, exception.source_message_id);
+      if (!paymentRow) {
+        throw new Error("The linked transaction could not be found.");
+      }
+
+      const targetCustomerId = candidateCustomerId ?? paymentRow.customer_id;
+      if (!targetCustomerId) {
+        throw new Error("Match this exception to a customer before accepting the transaction.");
+      }
+
+      const candidate = await fetchCustomerAggregate(client, targetCustomerId);
+      if (!candidate) {
+        throw new Error("Selected customer record was not found.");
+      }
+
+      if (saveAlias) {
+        await upsertZelleAlias(
+          client,
+          targetCustomerId,
+          {
+            name: exception.alias_name ?? exception.sender_name ?? candidate.name,
+            email: exception.sender_email ?? null,
+            phoneLast4: exception.sender_phone_last4 ?? null,
+          },
+          candidate.name,
+        );
+      }
+
+      if (paymentRow.customer_id !== targetCustomerId || !paymentRow.customer_name) {
+        const paymentUpdateResult = await client.query(
+          `
+            UPDATE payments
+            SET customer_id = $2,
+                customer_name = $3,
+                matched_signals = CASE
+                  WHEN 'manual_accept' = ANY(COALESCE(matched_signals, ARRAY[]::text[]))
+                    THEN matched_signals
+                  ELSE array_append(COALESCE(matched_signals, ARRAY[]::text[]), 'manual_accept')
+                END,
+                score = GREATEST(score, 100),
+                updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+          `,
+          [paymentRow.id, targetCustomerId, candidate.name],
+        );
+        paymentRow = paymentUpdateResult.rows[0] ?? paymentRow;
+      }
+
+      const applyResult = await applyPaymentRowToLedger(client, paymentRow, {
+        actingUsername,
+      });
+
+      resolvedCustomerId = targetCustomerId;
+      resolvedPaymentRow = await fetchPaymentBySourceMessage(client, exception.source_message_id);
+      resolutionMessage = applyResult.message;
+
+      await client.query(
+        `
+          UPDATE exceptions
+          SET status = 'resolved',
+              resolution_action = $2,
+              resolved_at = NOW()
+          WHERE id = $1
+        `,
+        [exceptionId, actionType],
+      );
+
+      await insertExceptionResolutionHistory(client, {
+        exception,
+        paymentRow: resolvedPaymentRow,
+        resolutionAction: actionType,
+        resolutionMessage,
+        resolvedByUsername: actingUsername,
+        resolvedCustomerId,
+      });
+
+      return {
+        state: await hydratePortalState(client),
+        message: resolutionMessage,
       };
     }
 

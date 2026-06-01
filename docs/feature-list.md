@@ -80,10 +80,15 @@ This is the current end-to-end feature inventory for Setu Finance.
   - select the correct existing customer
   - save a Zelle alias for future matching
   - move the transaction forward for apply while attaching it to the selected customer history immediately
+  - explicitly accept a linked exception when finance confirms it is a valid payment
+  - archive a duplicate when finance confirms it should not be counted
+- Same Zelle transaction number reuse is blocked and labeled as a possible abuse/replay risk
+- Manual secured-payment entry for funds confirmed outside Gmail sync, including alternate route, date, reference, memo, and internal notes
 
 ## 6. Payment Application And Receipts
 
 - Human-controlled `Apply transaction` action
+- Human-controlled `Record manual payment` action for bank transfer, manually verified Zelle, check, cash, card, or other secured routes
 - Applying a payment updates transaction state, customer account state, invoice state, and activity history
 - Completed transactions ledger after apply
 - Separate `Send receipt` and `Re-send receipt` actions

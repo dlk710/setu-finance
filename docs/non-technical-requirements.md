@@ -69,6 +69,10 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - Unclear or mismatched transactions should appear in an `Exceptions` queue.
 - When an exception is resolved, the system must keep a durable history of that decision, including the action taken, the user who took it, and when it happened.
 - When a finance user manually selects the right customer from an exception, the transaction must immediately attach to that customer’s history before the final apply step.
+- When a finance user explicitly accepts a linked exception, the payment should apply immediately and the acceptance must be visible in exception history.
+- Duplicate exceptions should stay blocked by default, and the same Zelle transaction number must never be applied twice.
+- Reused Zelle transaction numbers should be clearly flagged as possible abuse or replay risk for direct bank verification.
+- Finance users should be able to record and apply a payment manually when funds are secured through bank transfer, manually verified Zelle, check, cash, card, or another alternate route.
 - A finance user must be able to complete the final apply step with one click.
 - Applying a transaction must update the account, invoice state, and activity history together.
 

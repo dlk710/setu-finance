@@ -51,12 +51,14 @@ flowchart LR
     I -->|"Zelle email synced"| J["Capture structured transaction details from inbox"]
     I -->|"Manual awareness"| K["Finance reviews payment details manually"]
     J --> L["Matching engine identifies customer and invoice"]
-    K --> M["Save transaction record"]
+    K --> M["Record secured manual payment"]
     L -->|"Clear match"| N["Payments to confirm"]
     L -->|"Mismatch / ambiguity / duplicate"| O["Exceptions queue"]
     M --> N
-    O --> P["Human resolves, reassigns, credits, or archives"]
-    P --> N
+    O --> P{"Human exception decision"}
+    P -->|"Match customer"| N
+    P -->|"Accept valid payment"| Q
+    P -->|"Archive duplicate"| X["Keep in resolved exception history without counting"]
     N --> Q["Human clicks Apply transaction"]
     Q --> R["Mark payment applied and update invoice / account state"]
     R --> S["Evaluate referral qualification and unlock reward if earned"]
@@ -87,6 +89,9 @@ flowchart LR
 - If the payer identity is unclear, the transaction goes to `Exceptions`.
 - If the amount does not match the expected invoice amount, the transaction goes to `Exceptions`.
 - If the same payment appears twice, duplicate controls prevent it from being counted or applied twice.
+- If the same Zelle transaction number appears again, the portal blocks it as a possible abuse/replay risk for bank-level verification.
+- If finance confirms a non-duplicate exception is a valid payment, the `Accept transaction` action applies it and stores the decision in exception history.
+- If funds are secured outside Gmail sync, finance can record a manual payment and then send the same PDF receipt from completed transactions.
 - When finance resolves an exception, that decision stays in exception history with the resolution action, user, and timestamp.
 - If no invoice exists yet, the payment can still be saved, reviewed, and linked later.
 - If a client enrolls in more services later, onboarding adds new dated history instead of overwriting the original record.
