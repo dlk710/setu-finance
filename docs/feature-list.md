@@ -53,6 +53,7 @@ This is the current end-to-end feature inventory for Setu Finance.
 - Sync limited to the desired Zelle subject pattern
 - Incremental sync windows with overlap protection
 - Automatic Gmail sync every 5 minutes when credentials are configured
+- Admin-configurable Gmail sync interval and enable/disable switch
 - Durable saved transaction records even before apply
 - Captured transaction details include:
   - amount with exact cents

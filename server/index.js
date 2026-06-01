@@ -16,6 +16,7 @@ import {
   sendReceiptForPaymentRecord,
   sendQueuedInvoice,
   submitPublicReferralEntry,
+  updateGmailAutoSyncSettings,
   updateReferralProgramSettings,
 } from "./stateStore.js";
 import {
@@ -28,6 +29,7 @@ import {
 import { parseContractUpload } from "./services/contractParser.js";
 import {
   getGmailAutoSyncStatus,
+  refreshGmailAutoSyncSchedule,
   runGmailSyncOnce,
   startGmailAutoSync,
 } from "./services/gmailAutoSync.js";
@@ -316,6 +318,27 @@ app.post("/api/admin/referral-program", async (request, response, next) => {
   }
 });
 
+app.post("/api/admin/gmail-sync", async (request, response, next) => {
+  try {
+    const { config } = request.body ?? {};
+    if (!config) {
+      throw new Error("Gmail sync settings are required.");
+    }
+
+    const result = await updateGmailAutoSyncSettings(
+      config,
+      request.portalUser?.username ?? "unknown",
+    );
+    await refreshGmailAutoSyncSchedule();
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/admin/referral-rewards/:rewardId/apply", async (request, response, next) => {
   try {
     const result = await applyReferralRewardToInvoice(
@@ -486,7 +509,7 @@ app.use((error, _request, response, _next) => {
 
 async function startServer() {
   await prepareStateStore();
-  startGmailAutoSync();
+  await startGmailAutoSync();
 
   app.listen(port, () => {
     console.log(`Setu backend listening on http://127.0.0.1:${port}`);

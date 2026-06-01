@@ -955,6 +955,13 @@ export function createInitialState() {
         gmail: {
           lastSyncAt: null,
           lastSyncSummary: null,
+          autoSyncSettings: {
+            enabled: true,
+            intervalMinutes: 5,
+            startupDelaySeconds: 15,
+            updatedAt: null,
+            updatedBy: null,
+          },
         },
       },
       admin: seedAdmin,

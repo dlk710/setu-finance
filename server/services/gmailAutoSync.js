@@ -1,10 +1,9 @@
 import { getPool } from "../db/pool.js";
 import { applyGmailSyncResult, loadState } from "../stateStore.js";
 import { getGmailIntegrationStatus } from "./gmailAuth.js";
+import { normalizeGmailAutoSyncSettings } from "./gmailSyncSettings.js";
 import { syncGmailInbox } from "./gmailSync.js";
 
-const DEFAULT_INTERVAL_MINUTES = 5;
-const DEFAULT_STARTUP_DELAY_SECONDS = 15;
 const LOCK_NAMESPACE = 710;
 const LOCK_ID = 5001;
 
@@ -14,7 +13,7 @@ const schedulerState = {
   enabled: false,
   active: false,
   running: false,
-  intervalMinutes: DEFAULT_INTERVAL_MINUTES,
+  intervalMinutes: 5,
   lastStartedAt: null,
   lastFinishedAt: null,
   lastError: null,
@@ -22,33 +21,6 @@ const schedulerState = {
   nextRunAt: null,
   reason: null,
 };
-
-function parseBoolean(value, fallback) {
-  if (value === undefined || value === null || value === "") {
-    return fallback;
-  }
-
-  return !["false", "0", "no", "off"].includes(String(value).trim().toLowerCase());
-}
-
-function parsePositiveNumber(value, fallback) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
-}
-
-function getAutoSyncConfig() {
-  return {
-    enabled: parseBoolean(process.env.GMAIL_AUTO_SYNC_ENABLED, true),
-    intervalMinutes: parsePositiveNumber(
-      process.env.GMAIL_AUTO_SYNC_INTERVAL_MINUTES,
-      DEFAULT_INTERVAL_MINUTES,
-    ),
-    startupDelaySeconds: parsePositiveNumber(
-      process.env.GMAIL_AUTO_SYNC_STARTUP_DELAY_SECONDS,
-      DEFAULT_STARTUP_DELAY_SECONDS,
-    ),
-  };
-}
 
 async function withGmailSyncLock(work) {
   const client = await getPool().connect();
@@ -74,12 +46,14 @@ async function withGmailSyncLock(work) {
 }
 
 export function getGmailAutoSyncStatus() {
-  const config = getAutoSyncConfig();
   return {
     ...schedulerState,
-    enabled: config.enabled,
-    intervalMinutes: config.intervalMinutes,
   };
+}
+
+async function loadAutoSyncSettings() {
+  const state = await loadState();
+  return normalizeGmailAutoSyncSettings(state.integrations?.gmail?.autoSyncSettings ?? {});
 }
 
 export async function runGmailSyncOnce({ trigger = "manual" } = {}) {
@@ -123,20 +97,31 @@ export async function runGmailSyncOnce({ trigger = "manual" } = {}) {
   });
 }
 
-export function startGmailAutoSync() {
-  const config = getAutoSyncConfig();
+function clearScheduledRun() {
+  if (timer) {
+    clearTimeout(timer);
+    timer = null;
+  }
+  schedulerState.nextRunAt = null;
+}
+
+async function configureNextRun(delayMs) {
+  clearScheduledRun();
+  const config = await loadAutoSyncSettings();
   const gmailStatus = getGmailIntegrationStatus();
 
   schedulerState.enabled = config.enabled;
   schedulerState.intervalMinutes = config.intervalMinutes;
 
   if (!config.enabled) {
+    clearScheduledRun();
     schedulerState.active = false;
     schedulerState.reason = "Automatic Gmail sync is disabled.";
     return;
   }
 
   if (!gmailStatus.configured || !gmailStatus.authorized) {
+    clearScheduledRun();
     schedulerState.active = false;
     schedulerState.reason = "Gmail credentials or token are not configured.";
     return;
@@ -144,27 +129,32 @@ export function startGmailAutoSync() {
 
   schedulerState.active = true;
   schedulerState.reason = null;
+  schedulerState.nextRunAt = new Date(Date.now() + delayMs).toISOString();
 
-  const intervalMs = config.intervalMinutes * 60 * 1000;
-
-  function scheduleNext(delayMs) {
-    if (timer) {
-      clearTimeout(timer);
+  timer = setTimeout(async () => {
+    try {
+      await runGmailSyncOnce({ trigger: "scheduled" });
+    } catch (error) {
+      console.error("Scheduled Gmail sync failed", error);
+    } finally {
+      const latestConfig = await loadAutoSyncSettings().catch(() => config);
+      await configureNextRun(latestConfig.intervalMinutes * 60 * 1000).catch((error) => {
+        schedulerState.active = false;
+        schedulerState.reason = error.message || "Automatic Gmail sync could not be scheduled.";
+        console.error("Could not schedule next Gmail sync", error);
+      });
     }
+  }, delayMs);
 
-    schedulerState.nextRunAt = new Date(Date.now() + delayMs).toISOString();
-    timer = setTimeout(async () => {
-      try {
-        await runGmailSyncOnce({ trigger: "scheduled" });
-      } catch (error) {
-        console.error("Scheduled Gmail sync failed", error);
-      } finally {
-        scheduleNext(intervalMs);
-      }
-    }, delayMs);
+  timer.unref?.();
+}
 
-    timer.unref?.();
-  }
+export async function startGmailAutoSync() {
+  const config = await loadAutoSyncSettings();
+  await configureNextRun(config.startupDelaySeconds * 1000);
+}
 
-  scheduleNext(config.startupDelaySeconds * 1000);
+export async function refreshGmailAutoSyncSchedule() {
+  const config = await loadAutoSyncSettings();
+  await configureNextRun(config.enabled ? config.intervalMinutes * 60 * 1000 : 0);
 }

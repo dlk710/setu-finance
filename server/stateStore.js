@@ -9,6 +9,10 @@ import { prepareDatabase } from "./db/seed.js";
 import { buildInitials, normalizeDigits, normalizeEmail, normalizeName } from "./db/normalizers.js";
 import { withTransaction } from "./db/pool.js";
 import { loadStoredContractBinary, storeContractBinary } from "./services/contractStorage.js";
+import {
+  normalizeGmailAutoSyncSettings,
+  normalizeGmailIntegrationState,
+} from "./services/gmailSyncSettings.js";
 import { matchPaymentToState } from "./services/matching.js";
 
 const DASHBOARD_PERIOD_KEY = "current";
@@ -1927,10 +1931,7 @@ async function hydratePortalState(client) {
   const exceptionHistory = exceptionHistoryResult.rows.map(mapExceptionHistoryRow);
 
   const currentDashboard = dashboardResult.rows[0];
-  const gmailState = gmailIntegrationResult.rows[0]?.state_json ?? {
-    lastSyncAt: null,
-    lastSyncSummary: null,
-  };
+  const gmailState = normalizeGmailIntegrationState(gmailIntegrationResult.rows[0]?.state_json ?? {});
   const referralProgram = normalizeReferralProgramConfig(
     referralProgramResult.rows[0]?.setting_json ?? DEFAULT_REFERRAL_PROGRAM,
   );
@@ -2059,6 +2060,7 @@ async function hydratePortalState(client) {
       gmail: {
         lastSyncAt: gmailState.lastSyncAt ?? null,
         lastSyncSummary: gmailState.lastSyncSummary ?? null,
+        autoSyncSettings: gmailState.autoSyncSettings,
       },
     },
     admin: {
@@ -2574,7 +2576,7 @@ async function upsertGmailIntegrationState(client, gmailState) {
       VALUES ('gmail', $1::jsonb, NOW())
       ON CONFLICT (integration_key)
       DO UPDATE
-      SET state_json = EXCLUDED.state_json,
+      SET state_json = integration_states.state_json || EXCLUDED.state_json,
           updated_at = NOW()
     `,
     [JSON.stringify(gmailState)],
@@ -3874,6 +3876,42 @@ export async function updateReferralProgramSettings(config, actingUsername = "un
       message: normalized.enabled
         ? "Referral program settings saved."
         : "Referral program disabled for new referrals.",
+    };
+  });
+}
+
+export async function updateGmailAutoSyncSettings(config, actingUsername = "unknown") {
+  const intervalMinutes = Number(config?.intervalMinutes);
+  if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
+    throw new Error("Gmail sync interval must be between 1 and 1,440 minutes.");
+  }
+
+  return withTransaction(async (client) => {
+    const existingResult = await client.query(`
+      SELECT state_json
+      FROM integration_states
+      WHERE integration_key = 'gmail'
+      FOR UPDATE
+    `);
+    const existingState = normalizeGmailIntegrationState(existingResult.rows[0]?.state_json ?? {});
+    const normalizedSettings = normalizeGmailAutoSyncSettings({
+      ...existingState.autoSyncSettings,
+      enabled: Boolean(config.enabled),
+      intervalMinutes,
+      updatedAt: new Date().toISOString(),
+      updatedBy: actingUsername,
+    });
+
+    await upsertGmailIntegrationState(client, {
+      autoSyncSettings: normalizedSettings,
+    });
+    await insertActivity(client, "Gmail auto-sync settings updated", actingUsername);
+
+    return {
+      state: await hydratePortalState(client),
+      message: normalizedSettings.enabled
+        ? `Gmail auto-sync will run every ${normalizedSettings.intervalMinutes} minute${normalizedSettings.intervalMinutes === 1 ? "" : "s"}.`
+        : "Gmail auto-sync paused.",
     };
   });
 }

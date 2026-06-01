@@ -531,6 +531,14 @@ function createReferralProgramForm(config = {}) {
   };
 }
 
+function createGmailSyncForm(gmailStatus = {}) {
+  const settings = gmailStatus.autoSync ?? gmailStatus.autoSyncSettings ?? {};
+  return {
+    enabled: settings.enabled !== false,
+    intervalMinutes: String(settings.intervalMinutes ?? 5),
+  };
+}
+
 function formatTransactionDate(value) {
   if (!value) {
     return "Not captured";
@@ -750,6 +758,10 @@ function App() {
   const [referralProgramForm, setReferralProgramForm] = useState(() =>
     createReferralProgramForm(createInitialState().admin?.referralProgram),
   );
+  const [gmailSyncForm, setGmailSyncForm] = useState(() =>
+    createGmailSyncForm(createInitialState().integrationStatus?.gmail),
+  );
+  const [savingGmailSyncSettings, setSavingGmailSyncSettings] = useState(false);
   const [auth, setAuth] = useState({
     checking: true,
     authenticated: false,
@@ -834,6 +846,7 @@ function App() {
   });
   const referralTrend = buildReferralTrend(state.admin?.referrals ?? [], state.admin?.rewards ?? [], "month");
   const referralSubmissions = state.admin?.referralSubmissions ?? [];
+  const gmailSyncStatus = state.integrationStatus?.gmail ?? {};
 
   function navigateToRoute(nextRoute, { replace = false } = {}) {
     const targetPath = buildPortalPath(nextRoute);
@@ -876,6 +889,13 @@ function App() {
     state.admin?.referralProgram?.bonusAmount,
     state.admin?.referralProgram?.qualifyingPaidAmount,
     state.admin?.referralProgram?.qualificationMonths,
+  ]);
+
+  useEffect(() => {
+    setGmailSyncForm(createGmailSyncForm(state.integrationStatus?.gmail));
+  }, [
+    state.integrationStatus?.gmail?.autoSync?.enabled,
+    state.integrationStatus?.gmail?.autoSync?.intervalMinutes,
   ]);
 
   useEffect(() => {
@@ -1330,6 +1350,37 @@ function App() {
       pushToast(error.message);
     } finally {
       setSavingReferralProgram(false);
+    }
+  }
+
+  async function saveGmailSyncSettings() {
+    const intervalMinutes = Number(gmailSyncForm.intervalMinutes);
+
+    if (!Number.isFinite(intervalMinutes) || intervalMinutes < 1 || intervalMinutes > 1440) {
+      pushToast("Enter a Gmail sync interval between 1 and 1,440 minutes.");
+      return;
+    }
+
+    setSavingGmailSyncSettings(true);
+    try {
+      const data = await apiRequest("/api/admin/gmail-sync", {
+        method: "POST",
+        body: {
+          config: {
+            enabled: gmailSyncForm.enabled,
+            intervalMinutes,
+          },
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setSavingGmailSyncSettings(false);
     }
   }
 
@@ -2067,12 +2118,15 @@ function updateOnboardingForm(field, value) {
           <AdminView
             referralProgram={referralProgram}
             referralProgramForm={referralProgramForm}
+            gmailSyncStatus={gmailSyncStatus}
+            gmailSyncForm={gmailSyncForm}
             invoices={state.invoices}
             referralSubmissions={referralSubmissions}
             referrals={state.admin?.referrals ?? []}
             rewards={state.admin?.rewards ?? []}
             insights={referralInsights}
             saving={savingReferralProgram}
+            savingGmailSync={savingGmailSyncSettings}
             applyingRewardId={applyingReferralRewardId}
             reviewingSubmissionId={reviewingReferralSubmissionId}
             onFormChange={(field, value) =>
@@ -2081,7 +2135,14 @@ function updateOnboardingForm(field, value) {
                 [field]: value,
               }))
             }
+            onGmailSyncFormChange={(field, value) =>
+              setGmailSyncForm((current) => ({
+                ...current,
+                [field]: value,
+              }))
+            }
             onSave={saveReferralProgram}
+            onSaveGmailSync={saveGmailSyncSettings}
             onApplyReward={applyReferralReward}
             onConvertSubmission={convertReferralSubmission}
             onDismissSubmission={dismissReferralSubmissionEntry}
@@ -4109,6 +4170,8 @@ function ConsoleView({
 function AdminView({
   referralProgram,
   referralProgramForm,
+  gmailSyncStatus,
+  gmailSyncForm,
   insights,
   referralSubmissions,
   referrals,
@@ -4116,11 +4179,14 @@ function AdminView({
   applyingRewardId,
   reviewingSubmissionId,
   saving,
+  savingGmailSync,
   onApplyReward,
   onConvertSubmission,
   onDismissSubmission,
   onFormChange,
+  onGmailSyncFormChange,
   onSave,
+  onSaveGmailSync,
 }) {
   const openReferralSubmissions = referralSubmissions.filter((submission) => submission.status === "submitted");
   const availableRewards = insights?.qualifiedRewards ?? [];
@@ -4146,6 +4212,74 @@ function AdminView({
           <MetricCard label="Qualified bonuses" value={availableRewards.length} />
           <MetricCard label="Bonus spent" value={formatCurrency(insights?.totalBonusSpent ?? 0)} />
         </div>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Gmail sync automation</h2>
+            <button className="btn btn-primary btn-sm" onClick={onSaveGmailSync} disabled={savingGmailSync}>
+              {savingGmailSync ? "Saving…" : "Save sync settings"}
+            </button>
+          </div>
+          <div className="section-desc">
+            These settings control the automatic Zelle inbox sync. Manual sync remains available in
+            the billing console.
+          </div>
+          <div className="chart-card admin-form-card">
+            <div className="admin-rule-preview admin-rule-preview-hero">
+              <div className="detail-label">
+                {gmailSyncStatus?.autoSync?.active ? "Automatic sync active" : "Automatic sync paused"}
+              </div>
+              <div className="cust">
+                {gmailSyncForm.enabled
+                  ? `Runs every ${gmailSyncForm.intervalMinutes || 5} minute${Number(gmailSyncForm.intervalMinutes) === 1 ? "" : "s"}.`
+                  : "Scheduled sync is turned off."}
+              </div>
+              <div className="sub">
+                Last sync:{" "}
+                {gmailSyncStatus?.lastSyncAt
+                  ? new Date(gmailSyncStatus.lastSyncAt).toLocaleString()
+                  : "not run yet"}
+                {gmailSyncStatus?.autoSync?.nextRunAt
+                  ? ` · Next run: ${new Date(gmailSyncStatus.autoSync.nextRunAt).toLocaleString()}`
+                  : ""}
+              </div>
+              {gmailSyncStatus?.autoSync?.lastError && (
+                <div className="sub danger-text">{gmailSyncStatus.autoSync.lastError}</div>
+              )}
+            </div>
+            <label className="check-row admin-check-row">
+              <input
+                type="checkbox"
+                checked={gmailSyncForm.enabled}
+                onChange={(event) => onGmailSyncFormChange("enabled", event.target.checked)}
+              />
+              Enable automatic Gmail sync
+            </label>
+            <div className="field-row">
+              <div className="field">
+                <label>Sync interval (minutes)</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="1440"
+                  step="1"
+                  value={gmailSyncForm.intervalMinutes}
+                  onChange={(event) => onGmailSyncFormChange("intervalMinutes", event.target.value)}
+                />
+              </div>
+              <div className="field">
+                <label>Status</label>
+                <div className="admin-rule-preview">
+                  {gmailSyncStatus?.configured && gmailSyncStatus?.authorized
+                    ? gmailSyncStatus?.autoSync?.active
+                      ? "Gmail is authorized and scheduled sync is active."
+                      : gmailSyncStatus?.autoSync?.reason || "Gmail is authorized, but scheduled sync is not active."
+                    : "Gmail credentials or token are missing."}
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
 
         <section className="section">
           <div className="section-head">
