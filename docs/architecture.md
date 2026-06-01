@@ -92,4 +92,6 @@ The recommended first production deployment is intentionally different from the 
 - scheduled Gmail sync through EventBridge Scheduler
 - outbound email through SES
 
+The current low-cost AWS deployment runs Gmail sync inside the Node API process every 5 minutes. The same incremental query, processed-message table, and duplicate-payment safeguards are used by both the scheduled job and the manual `Sync Zelle inbox` button. As volume grows, this timer can move behind EventBridge or SQS without changing the finance review workflow.
+
 The full diagram and cost rationale are in [aws-solution-architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/aws-solution-architecture.md).

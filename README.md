@@ -259,6 +259,9 @@ Sync behavior:
 - later syncs run incrementally from the last successful sync time
 - each incremental run rechecks a short overlap window using `GMAIL_SYNC_OVERLAP_MINUTES`
 - already-seen Gmail message IDs are still deduplicated in the database, so overlap does not double-apply transactions
+- the backend also runs automatic Gmail sync when credentials are present
+- set `GMAIL_AUTO_SYNC_INTERVAL_MINUTES=5` to run the scheduled sync every 5 minutes
+- set `GMAIL_AUTO_SYNC_ENABLED=false` if you need to pause scheduled sync without removing credentials
 
 ## Notes
 

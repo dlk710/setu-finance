@@ -802,6 +802,7 @@ const seedAdmin = {
       createdAt: "2026-05-12T16:45:00.000Z",
     },
   ],
+  referralSubmissions: [],
   rewards: [],
 };
 

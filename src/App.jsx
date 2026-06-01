@@ -38,7 +38,13 @@ import {
   searchCustomers,
   summarizeContacts,
 } from "./lib/finance";
-import { apiRequest, loadApiState, loadAuthStatus } from "./lib/api";
+import {
+  apiRequest,
+  loadApiState,
+  loadAuthStatus,
+  loadPublicReferralProgram,
+  submitPublicReferral,
+} from "./lib/api";
 import {
   describeService,
   getCriteriaCatalog,
@@ -76,6 +82,7 @@ const DEFAULT_AUTH_FORM = {
 };
 
 const PORTAL_VIEW_PATHS = {
+  publicReferral: "/refer",
   onboarding: "/onboarding",
   dashboard: "/dashboard",
   console: "/billing",
@@ -210,6 +217,16 @@ const DEFAULT_ONBOARDING_FORM = {
   criteriaSelections: [],
   customServices: [],
   invoiceSchedule: [],
+};
+
+const DEFAULT_PUBLIC_REFERRAL_FORM = {
+  referrerCustomerCode: "",
+  referrerEmail: "",
+  referredFullName: "",
+  referredEmail: "",
+  referredPhone: "",
+  relationshipLabel: "",
+  notes: "",
 };
 
 const LEGACY_CRITERION_CODE_BY_NAME = {
@@ -726,6 +743,7 @@ function App() {
   const [savingOnboarding, setSavingOnboarding] = useState(false);
   const [savingReferralProgram, setSavingReferralProgram] = useState(false);
   const [applyingReferralRewardId, setApplyingReferralRewardId] = useState("");
+  const [reviewingReferralSubmissionId, setReviewingReferralSubmissionId] = useState("");
   const [saveAlias, setSaveAlias] = useState(true);
   const [syncingInbox, setSyncingInbox] = useState(false);
   const [sendingReceiptId, setSendingReceiptId] = useState("");
@@ -743,6 +761,20 @@ function App() {
   const [authForm, setAuthForm] = useState(DEFAULT_AUTH_FORM);
   const [authError, setAuthError] = useState("");
   const [loggingIn, setLoggingIn] = useState(false);
+  const [publicReferralProgram, setPublicReferralProgram] = useState({
+    enabled: true,
+    programName: "Standard referral program",
+    programDescription:
+      "Referral bonuses are earned when the referred client reaches the payment or time threshold, then applied as a discount on the referrer's next eligible draft invoice.",
+    bonusAmount: 500,
+    qualifyingPaidAmount: 3000,
+    qualificationMonths: 6,
+  });
+  const [publicReferralForm, setPublicReferralForm] = useState(DEFAULT_PUBLIC_REFERRAL_FORM);
+  const [publicReferralLoading, setPublicReferralLoading] = useState(false);
+  const [submittingPublicReferral, setSubmittingPublicReferral] = useState(false);
+  const [publicReferralMessage, setPublicReferralMessage] = useState("");
+  const [publicReferralError, setPublicReferralError] = useState("");
   const [askSetuOpen, setAskSetuOpen] = useState(false);
   const [askSetuInput, setAskSetuInput] = useState("");
   const [askSetuMessages, setAskSetuMessages] = useState(() => [createAskSetuWelcomeMessage()]);
@@ -754,6 +786,7 @@ function App() {
     exceptions: state.exceptions.length,
   };
   const view = route.view;
+  const isPublicReferralRoute = view === "publicReferral";
   const navView = route.view === "customer360" ? "search" : route.view;
 
   const searchResults = searchCustomers(state.customers, searchQuery);
@@ -800,6 +833,7 @@ function App() {
     invoices: state.invoices ?? [],
   });
   const referralTrend = buildReferralTrend(state.admin?.referrals ?? [], state.admin?.rewards ?? [], "month");
+  const referralSubmissions = state.admin?.referralSubmissions ?? [];
 
   function navigateToRoute(nextRoute, { replace = false } = {}) {
     const targetPath = buildPortalPath(nextRoute);
@@ -880,6 +914,7 @@ function App() {
     setSavingOnboarding(false);
     setSavingReferralProgram(false);
     setApplyingReferralRewardId("");
+    setReviewingReferralSubmissionId("");
     setSaveAlias(true);
     setSyncingInbox(false);
     setSendingReceiptId("");
@@ -925,6 +960,14 @@ function App() {
   }
 
   useEffect(() => {
+    if (isPublicReferralRoute) {
+      setAuth((current) => ({
+        ...current,
+        checking: false,
+      }));
+      return;
+    }
+
     let cancelled = false;
 
     async function hydratePortal() {
@@ -974,7 +1017,51 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isPublicReferralRoute]);
+
+  useEffect(() => {
+    if (!isPublicReferralRoute) {
+      return;
+    }
+
+    let cancelled = false;
+    setPublicReferralLoading(true);
+    setPublicReferralError("");
+
+    async function hydratePublicReferralPage() {
+      try {
+        const data = await loadPublicReferralProgram();
+        if (cancelled) {
+          return;
+        }
+
+        setPublicReferralProgram(
+          data.referralProgram ?? {
+            enabled: true,
+            programName: "Standard referral program",
+            programDescription:
+              "Referral bonuses are earned when the referred client reaches the payment or time threshold, then applied as a discount on the referrer's next eligible draft invoice.",
+            bonusAmount: 500,
+            qualifyingPaidAmount: 3000,
+            qualificationMonths: 6,
+          },
+        );
+      } catch (error) {
+        if (!cancelled) {
+          setPublicReferralError(error.message || "Could not load the referral form right now.");
+        }
+      } finally {
+        if (!cancelled) {
+          setPublicReferralLoading(false);
+        }
+      }
+    }
+
+    hydratePublicReferralPage();
+    return () => {
+      cancelled = true;
+    };
+  }, [isPublicReferralRoute]);
 
   function pushToast(message) {
     const id = crypto.randomUUID();
@@ -1261,6 +1348,66 @@ function App() {
       pushToast(error.message);
     } finally {
       setApplyingReferralRewardId("");
+    }
+  }
+
+  async function convertReferralSubmission(submissionId) {
+    setReviewingReferralSubmissionId(submissionId);
+    try {
+      const data = await apiRequest(`/api/admin/referral-submissions/${submissionId}/convert`, {
+        method: "POST",
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setReviewingReferralSubmissionId("");
+    }
+  }
+
+  async function dismissReferralSubmissionEntry(submissionId) {
+    setReviewingReferralSubmissionId(submissionId);
+    try {
+      const data = await apiRequest(`/api/admin/referral-submissions/${submissionId}/dismiss`, {
+        method: "POST",
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setReviewingReferralSubmissionId("");
+    }
+  }
+
+  function updatePublicReferralForm(field, value) {
+    setPublicReferralForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function submitPublicReferralForm(event) {
+    event.preventDefault();
+    setSubmittingPublicReferral(true);
+    setPublicReferralError("");
+    setPublicReferralMessage("");
+
+    try {
+      const data = await submitPublicReferral(publicReferralForm);
+      setPublicReferralForm(DEFAULT_PUBLIC_REFERRAL_FORM);
+      setPublicReferralMessage(data.message);
+    } catch (error) {
+      setPublicReferralError(error.message || "Could not submit the referral right now.");
+    } finally {
+      setSubmittingPublicReferral(false);
     }
   }
 
@@ -1715,6 +1862,25 @@ function updateOnboardingForm(field, value) {
     setAskSetuOpen(true);
   }
 
+  if (isPublicReferralRoute) {
+    return (
+      <>
+        <PublicReferralView
+          error={publicReferralError}
+          form={publicReferralForm}
+          loading={publicReferralLoading}
+          message={publicReferralMessage}
+          program={publicReferralProgram}
+          submitting={submittingPublicReferral}
+          onFieldChange={updatePublicReferralForm}
+          onOpenPortal={() => window.location.assign(buildPortalPath(createPortalRoute("dashboard")))}
+          onSubmit={submitPublicReferralForm}
+        />
+        <ToastStack toasts={toasts} />
+      </>
+    );
+  }
+
   if (auth.checking) {
     return <PortalLoadingView />;
   }
@@ -1902,11 +2068,13 @@ function updateOnboardingForm(field, value) {
             referralProgram={referralProgram}
             referralProgramForm={referralProgramForm}
             invoices={state.invoices}
+            referralSubmissions={referralSubmissions}
             referrals={state.admin?.referrals ?? []}
             rewards={state.admin?.rewards ?? []}
             insights={referralInsights}
             saving={savingReferralProgram}
             applyingRewardId={applyingReferralRewardId}
+            reviewingSubmissionId={reviewingReferralSubmissionId}
             onFormChange={(field, value) =>
               setReferralProgramForm((current) => ({
                 ...current,
@@ -1915,6 +2083,8 @@ function updateOnboardingForm(field, value) {
             }
             onSave={saveReferralProgram}
             onApplyReward={applyReferralReward}
+            onConvertSubmission={convertReferralSubmission}
+            onDismissSubmission={dismissReferralSubmissionEntry}
           />
         )}
       </main>
@@ -2104,6 +2274,175 @@ function PortalLoginView({
               disabled={!authForm.username.trim() || !authForm.password || loggingIn}
             >
               {loggingIn ? "Unlocking…" : "Unlock portal"}
+            </button>
+          </form>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function PublicReferralView({
+  error,
+  form,
+  loading,
+  message,
+  program,
+  submitting,
+  onFieldChange,
+  onOpenPortal,
+  onSubmit,
+}) {
+  const rulesSummary = program.enabled
+    ? `${formatCurrency(program.bonusAmount)} bonus after ${formatCurrency(
+        program.qualifyingPaidAmount,
+      )} paid or ${program.qualificationMonths} months, whichever comes first.`
+    : "Referral intake is currently paused for new submissions.";
+
+  return (
+    <div className="auth-shell public-referral-shell">
+      <div className="auth-grid public-referral-grid">
+        <section className="auth-hero public-referral-hero">
+          <span className="wordmark auth-wordmark">
+            <span className="letters">setu</span>
+            <span className="deck" />
+          </span>
+          <div className="auth-kicker">Referral intake</div>
+          <h1>Share a friend or family referral.</h1>
+          <p className="auth-copy">
+            This public form does not require a login. Finance will review each entry before it
+            becomes a tracked referral relationship in Setu Finance.
+          </p>
+          <div className="auth-points">
+            <div className="auth-point">
+              <IconCheck size={15} />
+              One active entry per referred email or phone
+            </div>
+            <div className="auth-point">
+              <IconUsers size={15} />
+              Your customer ID and email verify the referrer
+            </div>
+            <div className="auth-point">
+              <IconTable size={15} />
+              Finance converts qualified entries into the referral dashboard
+            </div>
+          </div>
+          <div className="chart-card public-referral-summary">
+            <div className="detail-label">{program.programName || "Referral program"}</div>
+            <div className="cust">{rulesSummary}</div>
+            <div className="sub">{program.programDescription}</div>
+          </div>
+          <button className="btn btn-sm public-referral-portal-link" type="button" onClick={onOpenPortal}>
+            Open finance portal
+          </button>
+        </section>
+
+        <section className="auth-card public-referral-card">
+          <div className="auth-card-head">
+            <div className="auth-card-label">No login required</div>
+            <h2>Submit a referral</h2>
+            <p className="auth-card-copy">
+              Use the same customer ID and email that Setu already has on file for you.
+            </p>
+          </div>
+
+          {loading && <div className="note info auth-note">Loading referral rules…</div>}
+          {!program.enabled && <div className="note warn auth-note">Referral intake is currently disabled.</div>}
+          {message && <div className="note info auth-note">{message}</div>}
+          {error && <div className="note warn auth-note">{error}</div>}
+
+          <form onSubmit={onSubmit}>
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="refer-referrer-code">Your customer ID</label>
+                <input
+                  id="refer-referrer-code"
+                  value={form.referrerCustomerCode}
+                  onChange={(event) => onFieldChange("referrerCustomerCode", event.target.value)}
+                  placeholder="100001"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="refer-referrer-email">Your email</label>
+                <input
+                  id="refer-referrer-email"
+                  type="email"
+                  autoComplete="email"
+                  value={form.referrerEmail}
+                  onChange={(event) => onFieldChange("referrerEmail", event.target.value)}
+                  placeholder="you@example.com"
+                />
+              </div>
+            </div>
+
+            <div className="field">
+              <label htmlFor="refer-name">Friend or family member name</label>
+              <input
+                id="refer-name"
+                value={form.referredFullName}
+                onChange={(event) => onFieldChange("referredFullName", event.target.value)}
+                placeholder="Full name"
+              />
+            </div>
+
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="refer-email">Their email</label>
+                <input
+                  id="refer-email"
+                  type="email"
+                  autoComplete="off"
+                  value={form.referredEmail}
+                  onChange={(event) => onFieldChange("referredEmail", event.target.value)}
+                  placeholder="friend@example.com"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="refer-phone">Their phone (optional)</label>
+                <input
+                  id="refer-phone"
+                  autoComplete="tel"
+                  value={form.referredPhone}
+                  onChange={(event) => onFieldChange("referredPhone", event.target.value)}
+                  placeholder="(555) 555-5555"
+                />
+              </div>
+            </div>
+
+            <div className="field">
+              <label htmlFor="refer-relationship">Relationship</label>
+              <input
+                id="refer-relationship"
+                value={form.relationshipLabel}
+                onChange={(event) => onFieldChange("relationshipLabel", event.target.value)}
+                placeholder="Family, friend, colleague…"
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="refer-notes">Notes (optional)</label>
+              <textarea
+                id="refer-notes"
+                rows={3}
+                value={form.notes}
+                onChange={(event) => onFieldChange("notes", event.target.value)}
+                placeholder="Anything finance should know before they onboard this person."
+              />
+            </div>
+
+            <button
+              className="btn btn-primary auth-submit"
+              type="submit"
+              disabled={
+                !program.enabled ||
+                submitting ||
+                !form.referrerCustomerCode.trim() ||
+                !form.referrerEmail.trim() ||
+                !form.referredFullName.trim() ||
+                !form.referredEmail.trim()
+              }
+            >
+              {submitting ? "Submitting…" : "Submit referral"}
             </button>
           </form>
         </section>
@@ -3204,7 +3543,7 @@ function DashboardView({
       <div className="content">
         <WorkflowStrip activeStep="invoice" />
 
-        <div className="metrics c4">
+        <div className="metrics c5">
           <MetricCard
             accent
             label="Collected (month to date)"
@@ -3386,6 +3725,12 @@ function ConsoleView({
   const gmailConfigured = integrationStatus?.gmail?.configured ?? false;
   const gmailAuthorized = integrationStatus?.gmail?.authorized ?? false;
   const gmailSyncAt = integrationStatus?.gmail?.lastSyncAt;
+  const gmailAutoSync = integrationStatus?.gmail?.autoSync;
+  const gmailAutoSyncActive = Boolean(gmailAutoSync?.active);
+  const gmailAutoSyncLabel = gmailAutoSyncActive
+    ? `Auto sync ${gmailAutoSync.intervalMinutes || 5} min`
+    : "Auto sync paused";
+  const gmailNextSyncAt = gmailAutoSync?.nextRunAt;
   const completedPayments = [...payments]
     .filter((payment) => payment.appliedAt)
     .sort(
@@ -3420,6 +3765,10 @@ function ConsoleView({
                 ? "Gmail authorized"
                 : "Gmail needs auth"
               : "Gmail not configured"}
+          </span>
+          <span className="chip">
+            <IconRefresh size={14} />
+            {gmailAutoSyncLabel}
           </span>
           <button className="btn btn-sm" onClick={onSyncInbox} disabled={syncingInbox}>
             <IconRefresh size={14} />
@@ -3502,6 +3851,9 @@ function ConsoleView({
             Matched against customer records and saved as durable transaction records. Apply the
             money first, then send or re-send receipts separately from completed transactions.
             {gmailSyncAt ? ` Last inbox sync: ${new Date(gmailSyncAt).toLocaleString()}.` : ""}
+            {gmailAutoSyncActive && gmailNextSyncAt
+              ? ` Next automatic sync: ${new Date(gmailNextSyncAt).toLocaleString()}.`
+              : ""}
           </div>
           <div className="tcard">
             <div className="trow head confirm-grid">
@@ -3758,14 +4110,19 @@ function AdminView({
   referralProgram,
   referralProgramForm,
   insights,
+  referralSubmissions,
   referrals,
   rewards,
   applyingRewardId,
+  reviewingSubmissionId,
   saving,
   onApplyReward,
+  onConvertSubmission,
+  onDismissSubmission,
   onFormChange,
   onSave,
 }) {
+  const openReferralSubmissions = referralSubmissions.filter((submission) => submission.status === "submitted");
   const availableRewards = insights?.qualifiedRewards ?? [];
   const awardedRewards = insights?.appliedRewards ?? [];
   const topReferrers = insights?.topReferrers ?? [];
@@ -3785,6 +4142,7 @@ function AdminView({
         <div className="metrics c4">
           <MetricCard accent label="Program status" value={referralProgram.enabled ? "Active" : "Disabled"} />
           <MetricCard label="Tracked relationships" value={referrals.length} />
+          <MetricCard label="Open intake submissions" value={openReferralSubmissions.length} />
           <MetricCard label="Qualified bonuses" value={availableRewards.length} />
           <MetricCard label="Bonus spent" value={formatCurrency(insights?.totalBonusSpent ?? 0)} />
         </div>
@@ -3884,6 +4242,104 @@ function AdminView({
                 </div>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Customer referral submissions</h2>
+          </div>
+          <div className="section-desc">
+            This queue is fed by the public no-login form at <span className="mono">/refer</span>.
+            Duplicate entries are blocked by referred email or phone before they reach finance.
+          </div>
+          <div className="tcard">
+            <div className="trow head referral-submission-grid">
+              <div>Referrer</div>
+              <div>Referred person</div>
+              <div>Relationship + submitted</div>
+              <div>Customer match</div>
+              <div>Status</div>
+              <div>Action</div>
+            </div>
+            {referralSubmissions.map((submission) => {
+              const canConvert = submission.status === "submitted" && submission.matchedCustomerId;
+              const isReviewing = reviewingSubmissionId === submission.id;
+
+              return (
+                <div className="trow referral-submission-grid" key={submission.id}>
+                  <div>
+                    <div className="cust">{submission.referrerCustomerName}</div>
+                    <div className="sub">
+                      {submission.referrerCustomerCode} · {submission.referrerEmail}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="cust">{submission.referredFullName}</div>
+                    <div className="sub">
+                      {submission.referredEmail}
+                      {submission.referredPhone ? ` · ${submission.referredPhone}` : ""}
+                    </div>
+                  </div>
+                  <div className="sub">
+                    {formatReferralRelationshipLabel(submission.relationshipLabel)}
+                    <div>{submission.submittedAt ? formatLongDate(submission.submittedAt) : "Date not captured"}</div>
+                  </div>
+                  <div className="sub">
+                    {submission.matchedCustomerId ? (
+                      <>
+                        <div className="cust">{submission.matchedCustomerName}</div>
+                        <div>{submission.matchedCustomerCode}</div>
+                      </>
+                    ) : (
+                      "Not in customer DB yet"
+                    )}
+                  </div>
+                  <div>
+                    <span className={`search-status-chip tone-${formatReferralSubmissionStatusTone(submission.status)}`}>
+                      {formatReferralSubmissionStatusLabel(submission.status)}
+                    </span>
+                    {submission.convertedAt ? (
+                      <div className="sub">Converted {formatDateTimeValue(submission.convertedAt)}</div>
+                    ) : null}
+                    {submission.dismissedAt ? (
+                      <div className="sub">Dismissed {formatDateTimeValue(submission.dismissedAt)}</div>
+                    ) : null}
+                  </div>
+                  <div className="referral-submission-actions">
+                    {canConvert ? (
+                      <button
+                        className="btn btn-sm btn-primary"
+                        onClick={() => onConvertSubmission(submission.id)}
+                        disabled={isReviewing}
+                      >
+                        {isReviewing ? "Converting…" : "Convert"}
+                      </button>
+                    ) : (
+                      <span className="sub">
+                        {submission.status === "submitted"
+                          ? "Wait for onboarding"
+                          : submission.status === "converted"
+                            ? "Tracked in program"
+                            : "Closed"}
+                      </span>
+                    )}
+                    {submission.status === "submitted" ? (
+                      <button
+                        className="btn btn-sm"
+                        onClick={() => onDismissSubmission(submission.id)}
+                        disabled={isReviewing}
+                      >
+                        {isReviewing ? "Working…" : "Dismiss"}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+            {!referralSubmissions.length && (
+              <div className="empty">No public referral submissions have been recorded yet.</div>
+            )}
           </div>
         </section>
 
@@ -4653,6 +5109,26 @@ function formatReferralStatusTone(value) {
     qualified: "success",
     awarded: "neutral",
     disabled: "neutral",
+  };
+
+  return tones[value] ?? "neutral";
+}
+
+function formatReferralSubmissionStatusLabel(value) {
+  const labels = {
+    submitted: "Needs review",
+    converted: "Converted",
+    dismissed: "Dismissed",
+  };
+
+  return labels[value] ?? "Unknown";
+}
+
+function formatReferralSubmissionStatusTone(value) {
+  const tones = {
+    submitted: "warn",
+    converted: "success",
+    dismissed: "neutral",
   };
 
   return tones[value] ?? "neutral";

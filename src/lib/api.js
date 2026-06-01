@@ -30,3 +30,14 @@ export function loadAuthStatus() {
 export function loadApiState() {
   return apiRequest("/api/state");
 }
+
+export function loadPublicReferralProgram() {
+  return apiRequest("/api/public/referral-program");
+}
+
+export function submitPublicReferral(form) {
+  return apiRequest("/api/public/referrals", {
+    method: "POST",
+    body: form,
+  });
+}

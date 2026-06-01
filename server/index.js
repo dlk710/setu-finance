@@ -1,18 +1,21 @@
 import express from "express";
 import {
   applyReferralRewardToInvoice,
-  applyGmailSyncResult,
+  convertReferralSubmissionToRelationship,
   confirmPendingPaymentRecord,
   createCustomerOnboardingRecord,
   createInvoiceRecord,
+  dismissReferralSubmission,
   listDueInvoiceIds,
   loadContractDownloadRecord,
+  loadPublicReferralProgramState,
   listPendingPaymentIds,
   loadState,
   prepareStateStore,
   resolveExceptionRecord,
   sendReceiptForPaymentRecord,
   sendQueuedInvoice,
+  submitPublicReferralEntry,
   updateReferralProgramSettings,
 } from "./stateStore.js";
 import {
@@ -23,7 +26,12 @@ import {
   setAuthCookie,
 } from "./services/auth.js";
 import { parseContractUpload } from "./services/contractParser.js";
-import { buildGmailClientStatus, syncGmailInbox } from "./services/gmailSync.js";
+import {
+  getGmailAutoSyncStatus,
+  runGmailSyncOnce,
+  startGmailAutoSync,
+} from "./services/gmailAutoSync.js";
+import { buildGmailClientStatus } from "./services/gmailSync.js";
 import { getEmailIntegrationStatus, sendInvoiceEmail, sendReceiptEmail } from "./services/email.js";
 
 const app = express();
@@ -46,7 +54,10 @@ function formatApiState(state) {
     ...state,
     integrationStatus: {
       email: getEmailIntegrationStatus(),
-      gmail: buildGmailClientStatus(state),
+      gmail: {
+        ...buildGmailClientStatus(state),
+        autoSync: getGmailAutoSyncStatus(),
+      },
     },
   };
 }
@@ -92,7 +103,7 @@ app.post("/api/auth/logout", (_request, response) => {
 });
 
 app.use("/api", (request, _response, next) => {
-  if (request.path.startsWith("/auth")) {
+  if (request.path.startsWith("/auth") || request.path.startsWith("/public")) {
     next();
     return;
   }
@@ -105,6 +116,24 @@ app.use("/api", (request, _response, next) => {
 
   request.portalUser = session;
   next();
+});
+
+app.get("/api/public/referral-program", async (_request, response, next) => {
+  try {
+    const data = await loadPublicReferralProgramState();
+    response.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/public/referrals", async (request, response, next) => {
+  try {
+    const result = await submitPublicReferralEntry(request.body ?? {});
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/state", async (_request, response, next) => {
@@ -302,6 +331,38 @@ app.post("/api/admin/referral-rewards/:rewardId/apply", async (request, response
   }
 });
 
+app.post("/api/admin/referral-submissions/:submissionId/convert", async (request, response, next) => {
+  try {
+    const result = await convertReferralSubmissionToRelationship(
+      request.params.submissionId,
+      request.portalUser?.username ?? "unknown",
+    );
+
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/referral-submissions/:submissionId/dismiss", async (request, response, next) => {
+  try {
+    const result = await dismissReferralSubmission(
+      request.params.submissionId,
+      request.portalUser?.username ?? "unknown",
+    );
+
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/payments/:paymentId/confirm", async (request, response, next) => {
   try {
     const result = await confirmPendingPaymentRecord(request.params.paymentId);
@@ -397,9 +458,17 @@ app.post("/api/exceptions/:exceptionId/resolve", async (request, response, next)
 
 app.post("/api/gmail/sync", async (_request, response, next) => {
   try {
-    const current = await loadState();
-    const syncResult = await syncGmailInbox(current);
-    const state = await applyGmailSyncResult(syncResult);
+    const result = await runGmailSyncOnce({ trigger: "manual" });
+    if (result.skipped) {
+      const state = await loadState();
+      response.json({
+        message: result.reason,
+        state: formatApiState(state),
+      });
+      return;
+    }
+
+    const { syncResult, state } = result;
     response.json({
       message: syncResult.message,
       state: formatApiState(state),
@@ -417,6 +486,7 @@ app.use((error, _request, response, _next) => {
 
 async function startServer() {
   await prepareStateStore();
+  startGmailAutoSync();
 
   app.listen(port, () => {
     console.log(`Setu backend listening on http://127.0.0.1:${port}`);

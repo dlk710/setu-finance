@@ -251,6 +251,50 @@ function mapExceptionHistoryRow(row) {
   };
 }
 
+function mapReferralSubmissionRow(row, customerMap) {
+  const referrer = customerMap.get(row.referrer_customer_id);
+  const matchedCustomer =
+    customerMap.get(row.matched_customer_id) ??
+    customerMap.get(row.converted_customer_id) ??
+    null;
+  const convertedCustomer = customerMap.get(row.converted_customer_id);
+
+  return {
+    id: row.id,
+    referrerCustomerId: row.referrer_customer_id,
+    referrerCustomerName: referrer?.name ?? "Unknown customer",
+    referrerCustomerCode: referrer?.customerCode ?? null,
+    referrerEmail: row.referrer_email,
+    referredFullName: row.referred_full_name,
+    referredEmail: row.referred_email,
+    referredPhone: row.referred_phone ?? null,
+    relationshipLabel: row.relationship_label ?? null,
+    notes: row.notes ?? null,
+    source: row.source ?? "public_form",
+    status: row.status,
+    submittedAt: formatTimestamp(row.submitted_at ?? row.created_at),
+    matchedCustomerId: matchedCustomer?.id ?? row.matched_customer_id ?? null,
+    matchedCustomerName: matchedCustomer?.name ?? null,
+    matchedCustomerCode:
+      normalizeCustomerCode(matchedCustomer?.customerCode ?? row.matched_customer_code) ??
+      matchedCustomer?.customerCode ??
+      row.matched_customer_code ??
+      null,
+    convertedCustomerId: convertedCustomer?.id ?? row.converted_customer_id ?? null,
+    convertedCustomerName: convertedCustomer?.name ?? null,
+    convertedCustomerCode:
+      normalizeCustomerCode(convertedCustomer?.customerCode ?? row.converted_customer_code) ??
+      convertedCustomer?.customerCode ??
+      row.converted_customer_code ??
+      null,
+    convertedReferralId: row.converted_referral_id ?? null,
+    convertedAt: formatTimestamp(row.converted_at),
+    dismissedAt: formatTimestamp(row.dismissed_at),
+    reviewedByUsername: row.reviewed_by_username ?? null,
+    reviewNotes: row.review_notes ?? null,
+  };
+}
+
 function normalizeReferralProgramConfig(config = {}) {
   const programName = String(config.programName ?? DEFAULT_REFERRAL_PROGRAM.programName).trim();
   const programDescription = String(
@@ -1155,6 +1199,232 @@ async function upsertReferralProgramConfig(client, config) {
   return normalized;
 }
 
+async function fetchCustomerByCodeAndEmail(client, customerCode, email) {
+  const normalizedCode = normalizeCustomerCode(customerCode);
+  const normalizedEmail = normalizeEmail(email || "");
+  if (!normalizedCode || !normalizedEmail) {
+    return null;
+  }
+
+  const result = await client.query(
+    `
+      SELECT c.id, c.customer_code, c.full_name
+      FROM customers c
+      JOIN customer_emails ce ON ce.customer_id = c.id
+      WHERE c.customer_code = $1
+        AND ce.normalized_email = $2
+      LIMIT 1
+    `,
+    [normalizedCode, normalizedEmail],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function findCustomerByReferralContact(client, { email, phoneDigits }) {
+  const normalizedEmail = normalizeEmail(email || "");
+  if (normalizedEmail) {
+    const emailResult = await client.query(
+      `
+        SELECT c.id, c.customer_code, c.full_name
+        FROM customer_emails ce
+        JOIN customers c ON c.id = ce.customer_id
+        WHERE ce.normalized_email = $1
+        LIMIT 1
+      `,
+      [normalizedEmail],
+    );
+
+    if (emailResult.rowCount) {
+      return emailResult.rows[0];
+    }
+  }
+
+  if (phoneDigits) {
+    const phoneResult = await client.query(
+      `
+        SELECT c.id, c.customer_code, c.full_name
+        FROM customer_phones cp
+        JOIN customers c ON c.id = cp.customer_id
+        WHERE cp.normalized_digits = $1
+        LIMIT 1
+      `,
+      [phoneDigits],
+    );
+
+    if (phoneResult.rowCount) {
+      return phoneResult.rows[0];
+    }
+  }
+
+  return null;
+}
+
+async function findExistingReferralForCustomer(client, customerId) {
+  if (!customerId) {
+    return null;
+  }
+
+  const result = await client.query(
+    `
+      SELECT cr.id, cr.referrer_customer_id, c.full_name, c.customer_code
+      FROM customer_referrals cr
+      JOIN customers c ON c.id = cr.referrer_customer_id
+      WHERE cr.referred_customer_id = $1
+      LIMIT 1
+    `,
+    [customerId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function findPendingReferralSubmissionByContact(
+  client,
+  { referredEmail, referredPhone, referrerCustomerId = null },
+) {
+  const normalizedEmail = normalizeEmail(referredEmail || "");
+  const phoneDigits = normalizeDigits(referredPhone || "");
+  if (!normalizedEmail && !phoneDigits) {
+    return null;
+  }
+
+  const result = await client.query(
+    `
+      SELECT *
+      FROM referral_submissions
+      WHERE status = 'submitted'
+        AND (
+          ($1::text IS NOT NULL AND referred_normalized_email = $1)
+          OR ($2::text IS NOT NULL AND referred_phone_digits = $2)
+        )
+        AND ($3::text IS NULL OR referrer_customer_id = $3::text)
+      ORDER BY submitted_at ASC, created_at ASC, id ASC
+      LIMIT 1
+    `,
+    [normalizedEmail || null, phoneDigits || null, referrerCustomerId || null],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function createReferralSubmissionRecord(
+  client,
+  {
+    referrerCustomerId,
+    referrerEmail,
+    referredFullName,
+    referredEmail,
+    referredPhone = null,
+    relationshipLabel = null,
+    notes = null,
+    source = "public_form",
+    matchedCustomerId = null,
+  },
+) {
+  const submissionId = `refsub-${crypto.randomUUID()}`;
+  const normalizedEmail = normalizeEmail(referredEmail || "");
+  const normalizedPhoneDigits = normalizeDigits(referredPhone || "");
+
+  await client.query(
+    `
+      INSERT INTO referral_submissions (
+        id,
+        referrer_customer_id,
+        matched_customer_id,
+        source,
+        status,
+        referrer_email,
+        referred_full_name,
+        referred_email,
+        referred_normalized_email,
+        referred_phone,
+        referred_phone_digits,
+        relationship_label,
+        notes,
+        submitted_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, 'submitted', $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW(), NOW()
+      )
+    `,
+    [
+      submissionId,
+      referrerCustomerId,
+      matchedCustomerId,
+      source,
+      referrerEmail,
+      referredFullName,
+      referredEmail,
+      normalizedEmail,
+      referredPhone || null,
+      normalizedPhoneDigits || null,
+      relationshipLabel?.trim() || null,
+      notes?.trim() || null,
+    ],
+  );
+
+  return submissionId;
+}
+
+async function markReferralSubmissionConverted(
+  client,
+  { submissionId, matchedCustomerId, convertedCustomerId, convertedReferralId, actingUsername = "unknown" },
+) {
+  await client.query(
+    `
+      UPDATE referral_submissions
+      SET status = 'converted',
+          matched_customer_id = COALESCE($2::text, matched_customer_id),
+          converted_customer_id = $3,
+          converted_referral_id = $4,
+          converted_at = NOW(),
+          reviewed_by_username = $5,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [submissionId, matchedCustomerId ?? null, convertedCustomerId ?? null, convertedReferralId ?? null, actingUsername],
+  );
+}
+
+async function dismissReferralSubmissionRecord(
+  client,
+  { submissionId, actingUsername = "unknown", reviewNotes = null },
+) {
+  const result = await client.query(
+    `
+      UPDATE referral_submissions
+      SET status = 'dismissed',
+          dismissed_at = NOW(),
+          reviewed_by_username = $2,
+          review_notes = COALESCE($3, review_notes),
+          updated_at = NOW()
+      WHERE id = $1
+        AND status = 'submitted'
+      RETURNING *
+    `,
+    [submissionId, actingUsername, reviewNotes?.trim() || null],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function fetchReferralSubmissionForUpdate(client, submissionId) {
+  const result = await client.query(
+    `
+      SELECT *
+      FROM referral_submissions
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [submissionId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
 async function upsertCustomerReferral(
   client,
   {
@@ -1473,6 +1743,11 @@ async function hydratePortalState(client) {
     FROM system_settings
     WHERE setting_key = 'referral_program'
   `);
+  const referralSubmissionsResult = await client.query(`
+    SELECT *
+    FROM referral_submissions
+    ORDER BY submitted_at DESC, created_at DESC, id DESC
+  `);
   const referralsResult = await client.query(`
     SELECT *
     FROM customer_referrals
@@ -1705,6 +1980,9 @@ async function hydratePortalState(client) {
       createdAt: formatTimestamp(row.created_at),
     };
   });
+  const referralSubmissions = referralSubmissionsResult.rows.map((row) =>
+    mapReferralSubmissionRow(row, customerMap),
+  );
 
   return {
     customers,
@@ -1785,6 +2063,7 @@ async function hydratePortalState(client) {
     },
     admin: {
       referralProgram,
+      referralSubmissions,
       referrals,
       rewards,
     },
@@ -2605,6 +2884,15 @@ export async function loadState() {
   return withTransaction((client) => hydratePortalState(client), { readOnly: true });
 }
 
+export async function loadPublicReferralProgramState() {
+  return withTransaction(
+    async (client) => ({
+      referralProgram: await loadReferralProgramConfig(client),
+    }),
+    { readOnly: true },
+  );
+}
+
 export async function loadContractDownloadRecord(contractId) {
   return withTransaction(
     async (client) => {
@@ -2703,13 +2991,103 @@ export async function sendQueuedInvoice(invoiceId, deliverInvoice) {
   });
 }
 
+export async function submitPublicReferralEntry(form) {
+  return withTransaction(async (client) => {
+    const config = await loadReferralProgramConfig(client);
+    if (!config.enabled) {
+      const error = new Error("Referral intake is not accepting new submissions right now.");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const referrerCustomerCode = normalizeCustomerCode(form?.referrerCustomerCode);
+    const referrerEmail = String(form?.referrerEmail || "").trim();
+    const referredFullName = String(form?.referredFullName || "").replace(/\s+/g, " ").trim();
+    const referredEmail = String(form?.referredEmail || "").trim();
+    const referredPhone = String(form?.referredPhone || "").trim();
+    const relationshipLabel = String(form?.relationshipLabel || "").replace(/\s+/g, " ").trim();
+    const notes = String(form?.notes || "").trim();
+
+    if (!referrerCustomerCode) {
+      throw new Error("Your customer ID is required.");
+    }
+
+    if (!referrerEmail) {
+      throw new Error("Your email is required.");
+    }
+
+    if (!referredFullName) {
+      throw new Error("The referred person's full name is required.");
+    }
+
+    if (!referredEmail) {
+      throw new Error("The referred person's email is required.");
+    }
+
+    const referrer = await fetchCustomerByCodeAndEmail(client, referrerCustomerCode, referrerEmail);
+    if (!referrer) {
+      throw new Error("We could not verify that customer ID and email together. Check both and try again.");
+    }
+
+    const matchedCustomer = await findCustomerByReferralContact(client, {
+      email: referredEmail,
+      phoneDigits: normalizeDigits(referredPhone || ""),
+    });
+
+    if (matchedCustomer?.id === referrer.id) {
+      throw new Error("Self-referrals are not allowed.");
+    }
+
+    const existingSubmission = await findPendingReferralSubmissionByContact(client, {
+      referredEmail,
+      referredPhone,
+    });
+    if (existingSubmission) {
+      throw new Error("This referral is already on file and waiting for finance review.");
+    }
+
+    const existingReferral = await findExistingReferralForCustomer(client, matchedCustomer?.id ?? null);
+    if (existingReferral) {
+      throw new Error(
+        `This person is already linked to a tracked referral from ${existingReferral.full_name} (${normalizeCustomerCode(existingReferral.customer_code) ?? existingReferral.customer_code}).`,
+      );
+    }
+
+    try {
+      await createReferralSubmissionRecord(client, {
+        referrerCustomerId: referrer.id,
+        referrerEmail,
+        referredFullName,
+        referredEmail,
+        referredPhone,
+        relationshipLabel,
+        notes,
+        matchedCustomerId: matchedCustomer?.id ?? null,
+      });
+    } catch (error) {
+      if (error?.code === "23505") {
+        throw new Error("This referral is already on file and waiting for finance review.");
+      }
+      throw error;
+    }
+
+    await insertActivity(client, `Referral submitted by ${referrer.full_name} for ${referredFullName}`, "public-form");
+
+    return {
+      message: matchedCustomer
+        ? `${referredFullName} is already in Setu. Finance can now convert this submission into the referral program from the dashboard.`
+        : `${referredFullName} has been added to the referral intake queue.`,
+    };
+  });
+}
+
 export async function createCustomerOnboardingRecord({ form, actingUsername = "unknown" }) {
   return withTransaction(async (client) => {
     const selectedCustomerId = form.selectedCustomerId?.trim() || null;
     const existingCustomer = selectedCustomerId
       ? await fetchCustomerAggregate(client, selectedCustomerId)
       : null;
-    const referringCustomerId = form.referringCustomerId?.trim() || null;
+    const manualReferringCustomerId = form.referringCustomerId?.trim() || null;
     const firstName = form.firstName?.trim();
     const lastName = form.lastName?.trim();
     const customerName = [firstName, lastName].filter(Boolean).join(" ").trim();
@@ -2778,6 +3156,23 @@ export async function createCustomerOnboardingRecord({ form, actingUsername = "u
       throw new Error("Existing customer record could not be found.");
     }
 
+    const matchedReferralSubmission =
+      customerEmail && !selectedCustomerId
+        ? await findPendingReferralSubmissionByContact(client, {
+            referredEmail: customerEmail,
+            referredPhone: customerPhone,
+            referrerCustomerId: manualReferringCustomerId || null,
+          })
+        : null;
+    const effectiveReferringCustomerId =
+      manualReferringCustomerId || matchedReferralSubmission?.referrer_customer_id || null;
+    const effectiveRelationshipLabel =
+      form.referralRelationship?.trim() || matchedReferralSubmission?.relationship_label || null;
+    const effectiveReferralSource =
+      form.referralSource?.trim() ||
+      matchedReferralSubmission?.notes ||
+      (matchedReferralSubmission ? "Public referral form" : null);
+
     const customerId = selectedCustomerId || `customer-${crypto.randomUUID()}`;
     const customerCode = selectedCustomerId
       ? existingCustomer.customerCode
@@ -2788,7 +3183,7 @@ export async function createCustomerOnboardingRecord({ form, actingUsername = "u
       preferredPaymentMethod: preferredPaymentMethod || "zelle",
       feeType,
       billingCadence: normalizedBillingCadence || "per_milestone",
-      referralSource: form.referralSource?.trim() || null,
+      referralSource: effectiveReferralSource,
       billingNotes: form.billingNotes?.trim() || null,
       onboardedAt: form.onboardedAt || new Date().toISOString(),
       serviceStartDate,
@@ -2849,13 +3244,24 @@ export async function createCustomerOnboardingRecord({ form, actingUsername = "u
         })
       : [];
 
-    await upsertCustomerReferral(client, {
-      referrerCustomerId: referringCustomerId,
+    const referralId = await upsertCustomerReferral(client, {
+      referrerCustomerId: effectiveReferringCustomerId,
       referredCustomerId: customerId,
-      relationshipLabel: form.referralRelationship?.trim() || null,
-      referredOn: form.onboardedAt || new Date().toISOString(),
-      notes: form.referralSource?.trim() || null,
+      relationshipLabel: effectiveRelationshipLabel,
+      referredOn: matchedReferralSubmission?.submitted_at || form.onboardedAt || new Date().toISOString(),
+      notes: effectiveReferralSource,
     });
+
+    if (referralId && matchedReferralSubmission?.id) {
+      await markReferralSubmissionConverted(client, {
+        submissionId: matchedReferralSubmission.id,
+        matchedCustomerId: matchedReferralSubmission.matched_customer_id ?? customerId,
+        convertedCustomerId: customerId,
+        convertedReferralId: referralId,
+        actingUsername,
+      });
+      await insertActivity(client, `Referral submission converted for ${customerName}`, actingUsername);
+    }
 
     await reconcileOpenTransactions(client);
 
@@ -3468,6 +3874,91 @@ export async function updateReferralProgramSettings(config, actingUsername = "un
       message: normalized.enabled
         ? "Referral program settings saved."
         : "Referral program disabled for new referrals.",
+    };
+  });
+}
+
+export async function convertReferralSubmissionToRelationship(submissionId, actingUsername = "unknown") {
+  return withTransaction(async (client) => {
+    const submission = await fetchReferralSubmissionForUpdate(client, submissionId);
+    if (!submission) {
+      throw new Error("Referral submission not found.");
+    }
+
+    if (submission.status !== "submitted") {
+      throw new Error("This referral submission has already been reviewed.");
+    }
+
+    const matchedCustomer =
+      (submission.matched_customer_id
+        ? { id: submission.matched_customer_id }
+        : await findCustomerByReferralContact(client, {
+            email: submission.referred_email,
+            phoneDigits: submission.referred_phone_digits,
+          })) ?? null;
+
+    if (!matchedCustomer?.id) {
+      throw new Error("No matching customer exists yet for this referral. Finish onboarding first.");
+    }
+
+    const existingReferral = await findExistingReferralForCustomer(client, matchedCustomer.id);
+    let referralId = existingReferral?.id ?? null;
+    if (existingReferral && existingReferral.referrer_customer_id !== submission.referrer_customer_id) {
+      throw new Error("This customer is already attached to a different referrer.");
+    }
+
+    if (!referralId) {
+      referralId = await upsertCustomerReferral(client, {
+        referrerCustomerId: submission.referrer_customer_id,
+        referredCustomerId: matchedCustomer.id,
+        relationshipLabel: submission.relationship_label ?? null,
+        referredOn: submission.submitted_at,
+        notes: submission.notes ?? "Public referral form",
+      });
+    }
+
+    await markReferralSubmissionConverted(client, {
+      submissionId,
+      matchedCustomerId: matchedCustomer.id,
+      convertedCustomerId: matchedCustomer.id,
+      convertedReferralId: referralId,
+      actingUsername,
+    });
+
+    await insertActivity(
+      client,
+      `Referral submission converted for ${submission.referred_full_name}`,
+      actingUsername,
+    );
+
+    return {
+      state: await hydratePortalState(client),
+      message: `${submission.referred_full_name} is now tracked inside the referral program.`,
+    };
+  });
+}
+
+export async function dismissReferralSubmission(submissionId, actingUsername = "unknown") {
+  return withTransaction(async (client) => {
+    const submission = await dismissReferralSubmissionRecord(client, {
+      submissionId,
+      actingUsername,
+      reviewNotes: "Dismissed from referral intake dashboard.",
+    });
+
+    if (!submission) {
+      throw new Error("This referral submission is no longer waiting for review.");
+    }
+
+    await insertActivity(
+      client,
+      `Referral submission dismissed for ${submission.referred_full_name}`,
+      actingUsername,
+    );
+
+    return {
+      state: await hydratePortalState(client),
+      message: `${submission.referred_full_name} was removed from the open referral intake queue.`,
     };
   });
 }

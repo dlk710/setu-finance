@@ -208,12 +208,15 @@ function answerSyncStatus(state) {
   }
 
   const lastSync = gmail.lastSyncAt ? formatDateTimeValue(gmail.lastSyncAt) : "not run yet";
+  const autoSync = gmail.autoSync?.active
+    ? ` Automatic sync is active every ${gmail.autoSync.intervalMinutes || 5} minutes.`
+    : " Automatic sync is not active.";
   const summary = gmail.lastSyncSummary;
   if (!summary) {
-    return `Gmail sync is authorized and ready. Last sync: ${lastSync}.`;
+    return `Gmail sync is authorized and ready. Last sync: ${lastSync}.${autoSync}`;
   }
 
-  return `Gmail sync is healthy. Last sync ran ${lastSync} in ${gmail.syncMode} mode and processed ${summary.processedCount || 0} messages, adding ${summary.pendingAdded || 0} pending payments and ${summary.exceptionsAdded || 0} exceptions.`;
+  return `Gmail sync is healthy. Last sync ran ${lastSync} in ${gmail.syncMode} mode and processed ${summary.processedCount || 0} messages, adding ${summary.pendingAdded || 0} pending payments and ${summary.exceptionsAdded || 0} exceptions.${autoSync}`;
 }
 
 function answerEmailStatus(state) {
