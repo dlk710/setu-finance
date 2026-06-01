@@ -12,6 +12,7 @@ Local full-stack prototype for:
 - giving finance a spreadsheet-style customer register with a full-page 360 customer view
 - summarizing saved received amounts on the dashboard by day, week, month, or year
 - managing a configurable referral program with relationship history, qualification tracking, and invoice discounts
+- capturing public user feedback through a no-login `/feedback` form with optional attachments
 - persisting the operational backend in PostgreSQL instead of a file store
 
 ## Simple Process Flow

@@ -44,6 +44,7 @@ import {
   loadApiState,
   loadAuthStatus,
   loadPublicReferralProgram,
+  submitPublicFeedback,
   submitPublicReferral,
 } from "./lib/api";
 import {
@@ -105,6 +106,7 @@ const DEFAULT_AUTH_FORM = {
 
 const PORTAL_VIEW_PATHS = {
   publicReferral: "/refer",
+  publicFeedback: "/feedback",
   onboarding: "/onboarding",
   dashboard: "/dashboard",
   console: "/billing",
@@ -250,6 +252,17 @@ const DEFAULT_PUBLIC_REFERRAL_FORM = {
   referredPhone: "",
   relationshipLabel: "",
   notes: "",
+};
+
+const DEFAULT_PUBLIC_FEEDBACK_FORM = {
+  customerCode: "",
+  name: "",
+  email: "",
+  phone: "",
+  category: "general",
+  rating: "",
+  message: "",
+  attachments: [],
 };
 
 const LEGACY_CRITERION_CODE_BY_NAME = {
@@ -541,6 +554,15 @@ const REFERRAL_RELATIONSHIP_OPTIONS = [
   { value: "other", label: "Other" },
 ];
 
+const FEEDBACK_CATEGORY_OPTIONS = [
+  { value: "general", label: "General feedback" },
+  { value: "billing", label: "Billing or invoice" },
+  { value: "payment", label: "Payment or receipt" },
+  { value: "portal", label: "Portal issue" },
+  { value: "referral", label: "Referral program" },
+  { value: "contract", label: "Contract upload" },
+];
+
 function createReferralProgramForm(config = {}) {
   return {
     enabled: config.enabled !== false,
@@ -589,6 +611,17 @@ function formatDateTimeValue(value) {
   }
 
   return parsed.toLocaleString();
+}
+
+function formatFileSize(bytes) {
+  const size = Number(bytes || 0);
+  if (size >= 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (size >= 1024) {
+    return `${Math.round(size / 1024)} KB`;
+  }
+  return `${size} B`;
 }
 
 function formatExceptionResolutionAction(action) {
@@ -792,6 +825,7 @@ function App() {
   const [savingReferralProgram, setSavingReferralProgram] = useState(false);
   const [applyingReferralRewardId, setApplyingReferralRewardId] = useState("");
   const [reviewingReferralSubmissionId, setReviewingReferralSubmissionId] = useState("");
+  const [reviewingFeedbackId, setReviewingFeedbackId] = useState("");
   const [saveAlias, setSaveAlias] = useState(true);
   const [syncingInbox, setSyncingInbox] = useState(false);
   const [sendingReceiptId, setSendingReceiptId] = useState("");
@@ -827,6 +861,10 @@ function App() {
   const [submittingPublicReferral, setSubmittingPublicReferral] = useState(false);
   const [publicReferralMessage, setPublicReferralMessage] = useState("");
   const [publicReferralError, setPublicReferralError] = useState("");
+  const [publicFeedbackForm, setPublicFeedbackForm] = useState(DEFAULT_PUBLIC_FEEDBACK_FORM);
+  const [submittingPublicFeedback, setSubmittingPublicFeedback] = useState(false);
+  const [publicFeedbackMessage, setPublicFeedbackMessage] = useState("");
+  const [publicFeedbackError, setPublicFeedbackError] = useState("");
   const [askSetuOpen, setAskSetuOpen] = useState(false);
   const [askSetuInput, setAskSetuInput] = useState("");
   const [askSetuMessages, setAskSetuMessages] = useState(() => [createAskSetuWelcomeMessage()]);
@@ -839,6 +877,8 @@ function App() {
   };
   const view = route.view;
   const isPublicReferralRoute = view === "publicReferral";
+  const isPublicFeedbackRoute = view === "publicFeedback";
+  const isPublicRoute = isPublicReferralRoute || isPublicFeedbackRoute;
   const navView = route.view === "customer360" ? "search" : route.view;
 
   const searchResults = searchCustomers(state.customers, searchQuery);
@@ -891,6 +931,7 @@ function App() {
   });
   const referralTrend = buildReferralTrend(state.admin?.referrals ?? [], state.admin?.rewards ?? [], "month");
   const referralSubmissions = state.admin?.referralSubmissions ?? [];
+  const feedbackSubmissions = state.admin?.feedbackSubmissions ?? [];
   const gmailSyncStatus = state.integrationStatus?.gmail ?? {};
 
   function navigateToRoute(nextRoute, { replace = false } = {}) {
@@ -983,6 +1024,7 @@ function App() {
     setSavingReferralProgram(false);
     setApplyingReferralRewardId("");
     setReviewingReferralSubmissionId("");
+    setReviewingFeedbackId("");
     setSaveAlias(true);
     setSyncingInbox(false);
     setSendingReceiptId("");
@@ -1028,7 +1070,7 @@ function App() {
   }
 
   useEffect(() => {
-    if (isPublicReferralRoute) {
+    if (isPublicRoute) {
       setAuth((current) => ({
         ...current,
         checking: false,
@@ -1085,7 +1127,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [isPublicReferralRoute]);
+  }, [isPublicRoute]);
 
   useEffect(() => {
     if (!isPublicReferralRoute) {
@@ -1542,6 +1584,93 @@ function App() {
       setPublicReferralError(error.message || "Could not submit the referral right now.");
     } finally {
       setSubmittingPublicReferral(false);
+    }
+  }
+
+  function updatePublicFeedbackForm(field, value) {
+    setPublicFeedbackForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function attachPublicFeedbackFiles(fileList) {
+    const files = Array.from(fileList ?? []);
+    if (!files.length) {
+      return;
+    }
+
+    setPublicFeedbackError("");
+
+    try {
+      const currentCount = publicFeedbackForm.attachments.length;
+      if (currentCount + files.length > 3) {
+        throw new Error("Attach up to 3 files.");
+      }
+
+      const attachments = [];
+      for (const file of files) {
+        if (file.size > 3 * 1024 * 1024) {
+          throw new Error(`${file.name} is larger than 3 MB.`);
+        }
+
+        attachments.push({
+          id: crypto.randomUUID(),
+          fileName: file.name,
+          mimeType: file.type || "application/octet-stream",
+          size: file.size,
+          dataUrl: await readFileAsDataUrl(file),
+        });
+      }
+
+      setPublicFeedbackForm((current) => ({
+        ...current,
+        attachments: [...current.attachments, ...attachments],
+      }));
+    } catch (error) {
+      setPublicFeedbackError(error.message || "Could not attach those files.");
+    }
+  }
+
+  function removePublicFeedbackAttachment(attachmentId) {
+    setPublicFeedbackForm((current) => ({
+      ...current,
+      attachments: current.attachments.filter((attachment) => attachment.id !== attachmentId),
+    }));
+  }
+
+  async function submitPublicFeedbackForm(event) {
+    event.preventDefault();
+    setSubmittingPublicFeedback(true);
+    setPublicFeedbackError("");
+    setPublicFeedbackMessage("");
+
+    try {
+      const data = await submitPublicFeedback(publicFeedbackForm);
+      setPublicFeedbackForm(DEFAULT_PUBLIC_FEEDBACK_FORM);
+      setPublicFeedbackMessage(data.message);
+    } catch (error) {
+      setPublicFeedbackError(error.message || "Could not submit feedback right now.");
+    } finally {
+      setSubmittingPublicFeedback(false);
+    }
+  }
+
+  async function updateFeedbackStatus(feedbackId, actionType) {
+    setReviewingFeedbackId(feedbackId);
+    try {
+      const data = await apiRequest(`/api/admin/feedback/${feedbackId}/${actionType}`, {
+        method: "POST",
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setReviewingFeedbackId("");
     }
   }
 
@@ -2015,6 +2144,25 @@ function updateOnboardingForm(field, value) {
     );
   }
 
+  if (isPublicFeedbackRoute) {
+    return (
+      <>
+        <PublicFeedbackView
+          error={publicFeedbackError}
+          form={publicFeedbackForm}
+          message={publicFeedbackMessage}
+          submitting={submittingPublicFeedback}
+          onAttachFiles={attachPublicFeedbackFiles}
+          onFieldChange={updatePublicFeedbackForm}
+          onOpenPortal={() => window.location.assign(buildPortalPath(createPortalRoute("dashboard")))}
+          onRemoveAttachment={removePublicFeedbackAttachment}
+          onSubmit={submitPublicFeedbackForm}
+        />
+        <ToastStack toasts={toasts} />
+      </>
+    );
+  }
+
   if (auth.checking) {
     return <PortalLoadingView />;
   }
@@ -2214,16 +2362,19 @@ function updateOnboardingForm(field, value) {
         {view === "admin" && (
           <AdminView
             referralProgram={referralProgram}
+            feedbackSubmissions={feedbackSubmissions}
             invoices={state.invoices}
             referralSubmissions={referralSubmissions}
             referrals={state.admin?.referrals ?? []}
             rewards={state.admin?.rewards ?? []}
             insights={referralInsights}
             applyingRewardId={applyingReferralRewardId}
+            reviewingFeedbackId={reviewingFeedbackId}
             reviewingSubmissionId={reviewingReferralSubmissionId}
             onApplyReward={applyReferralReward}
             onConvertSubmission={convertReferralSubmission}
             onDismissSubmission={dismissReferralSubmissionEntry}
+            onUpdateFeedbackStatus={updateFeedbackStatus}
           />
         )}
         {view === "settings" && (
@@ -2629,6 +2780,202 @@ function PublicReferralView({
               }
             >
               {submitting ? "Submitting…" : "Submit referral"}
+            </button>
+          </form>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function PublicFeedbackView({
+  error,
+  form,
+  message,
+  submitting,
+  onAttachFiles,
+  onFieldChange,
+  onOpenPortal,
+  onRemoveAttachment,
+  onSubmit,
+}) {
+  const hasRequiredFields = form.name.trim() && form.email.trim() && form.message.trim();
+
+  return (
+    <div className="auth-shell public-referral-shell">
+      <div className="auth-grid public-referral-grid">
+        <section className="auth-hero public-referral-hero">
+          <span className="wordmark auth-wordmark">
+            <span className="letters">setu</span>
+            <span className="deck" />
+          </span>
+          <div className="auth-kicker">Feedback</div>
+          <h1>Share what should work better.</h1>
+          <p className="auth-copy">
+            Use this simple no-login form for portal feedback, billing questions, payment receipt
+            issues, referral feedback, or anything that helps Setu improve.
+          </p>
+          <div className="auth-points">
+            <div className="auth-point">
+              <IconCheck size={15} />
+              No portal login required
+            </div>
+            <div className="auth-point">
+              <IconMail size={15} />
+              Admins review every submission inside Setu
+            </div>
+            <div className="auth-point">
+              <IconTable size={15} />
+              Attach screenshots or documents when helpful
+            </div>
+          </div>
+          <div className="chart-card public-referral-summary">
+            <div className="detail-label">Internal triage</div>
+            <div className="cust">Feedback stays in Setu first.</div>
+            <div className="sub">
+              Admins can decide later whether an item should become a GitHub issue for engineering.
+            </div>
+          </div>
+          <button className="btn btn-sm public-referral-portal-link" type="button" onClick={onOpenPortal}>
+            Open finance portal
+          </button>
+        </section>
+
+        <section className="auth-card public-referral-card">
+          <div className="auth-card-head">
+            <div className="auth-card-label">No login required</div>
+            <h2>Submit feedback</h2>
+            <p className="auth-card-copy">
+              Add your customer ID if you know it. Attachments are optional and limited to 3 MB each.
+            </p>
+          </div>
+
+          {message && <div className="note info auth-note">{message}</div>}
+          {error && <div className="note warn auth-note">{error}</div>}
+
+          <form onSubmit={onSubmit}>
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="feedback-name">Your name</label>
+                <input
+                  id="feedback-name"
+                  value={form.name}
+                  onChange={(event) => onFieldChange("name", event.target.value)}
+                  placeholder="Full name"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="feedback-email">Your email</label>
+                <input
+                  id="feedback-email"
+                  type="email"
+                  autoComplete="email"
+                  value={form.email}
+                  onChange={(event) => onFieldChange("email", event.target.value)}
+                  placeholder="you@example.com"
+                />
+              </div>
+            </div>
+
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="feedback-customer">Customer ID (optional)</label>
+                <input
+                  id="feedback-customer"
+                  value={form.customerCode}
+                  onChange={(event) => onFieldChange("customerCode", event.target.value)}
+                  placeholder="100001"
+                />
+              </div>
+              <div className="field">
+                <label htmlFor="feedback-phone">Phone (optional)</label>
+                <input
+                  id="feedback-phone"
+                  autoComplete="tel"
+                  value={form.phone}
+                  onChange={(event) => onFieldChange("phone", event.target.value)}
+                  placeholder="(555) 555-5555"
+                />
+              </div>
+            </div>
+
+            <div className="field-row">
+              <div className="field">
+                <label htmlFor="feedback-category">Feedback area</label>
+                <select
+                  id="feedback-category"
+                  value={form.category}
+                  onChange={(event) => onFieldChange("category", event.target.value)}
+                >
+                  {FEEDBACK_CATEGORY_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label htmlFor="feedback-rating">Rating (optional)</label>
+                <select
+                  id="feedback-rating"
+                  value={form.rating}
+                  onChange={(event) => onFieldChange("rating", event.target.value)}
+                >
+                  <option value="">No rating</option>
+                  <option value="5">5 - Excellent</option>
+                  <option value="4">4 - Good</option>
+                  <option value="3">3 - Okay</option>
+                  <option value="2">2 - Needs work</option>
+                  <option value="1">1 - Blocked</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="field">
+              <label htmlFor="feedback-message">Feedback</label>
+              <textarea
+                id="feedback-message"
+                rows={5}
+                value={form.message}
+                onChange={(event) => onFieldChange("message", event.target.value)}
+                placeholder="Tell us what happened, what you expected, or what would make this easier."
+              />
+            </div>
+
+            <div className="field">
+              <label htmlFor="feedback-attachments">Attachments (optional)</label>
+              <input
+                id="feedback-attachments"
+                type="file"
+                multiple
+                accept="image/*,.pdf,.txt,.doc,.docx"
+                onChange={(event) => {
+                  onAttachFiles(event.target.files);
+                  event.target.value = "";
+                }}
+              />
+              <div className="sub">Up to 3 files, 3 MB each. Screenshots are helpful for portal issues.</div>
+              {form.attachments.length ? (
+                <div className="attachment-list">
+                  {form.attachments.map((attachment) => (
+                    <div className="attachment-pill" key={attachment.id}>
+                      <span>{attachment.fileName}</span>
+                      <span className="sub">{formatFileSize(attachment.size)}</span>
+                      <button type="button" onClick={() => onRemoveAttachment(attachment.id)}>
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+
+            <button
+              className="btn btn-primary auth-submit"
+              type="submit"
+              disabled={submitting || !hasRequiredFields}
+            >
+              {submitting ? "Submitting…" : "Submit feedback"}
             </button>
           </form>
         </section>
@@ -4513,17 +4860,21 @@ function SettingsView({
 
 function AdminView({
   referralProgram,
+  feedbackSubmissions,
   insights,
   referralSubmissions,
   referrals,
   rewards,
   applyingRewardId,
+  reviewingFeedbackId,
   reviewingSubmissionId,
   onApplyReward,
   onConvertSubmission,
   onDismissSubmission,
+  onUpdateFeedbackStatus,
 }) {
   const openReferralSubmissions = referralSubmissions.filter((submission) => submission.status === "submitted");
+  const openFeedbackSubmissions = feedbackSubmissions.filter((submission) => submission.status === "new");
   const availableRewards = insights?.qualifiedRewards ?? [];
   const awardedRewards = insights?.appliedRewards ?? [];
   const topReferrers = insights?.topReferrers ?? [];
@@ -4540,13 +4891,113 @@ function AdminView({
         </div>
       </div>
       <div className="content">
-        <div className="metrics c4">
+        <div className="metrics c5">
           <MetricCard accent label="Program status" value={referralProgram.enabled ? "Active" : "Disabled"} />
           <MetricCard label="Tracked relationships" value={referrals.length} />
           <MetricCard label="Open intake submissions" value={openReferralSubmissions.length} />
+          <MetricCard label="Open feedback" value={openFeedbackSubmissions.length} />
           <MetricCard label="Qualified bonuses" value={availableRewards.length} />
-          <MetricCard label="Bonus spent" value={formatCurrency(insights?.totalBonusSpent ?? 0)} />
         </div>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>User feedback</h2>
+          </div>
+          <div className="section-desc">
+            This queue is fed by the public no-login form at <span className="mono">/feedback</span>.
+            Attachments are accepted as optional context, while engineering follow-up can still be
+            tracked later in GitHub Issues when appropriate.
+          </div>
+          <div className="tcard">
+            <div className="trow head feedback-grid">
+              <div>Submitted by</div>
+              <div>Feedback</div>
+              <div>Attachments</div>
+              <div>Status</div>
+              <div>Action</div>
+            </div>
+            {feedbackSubmissions.map((submission) => {
+              const isWorking = reviewingFeedbackId === submission.id;
+              const isOpen = submission.status === "new";
+
+              return (
+                <div className="trow feedback-grid" key={submission.id}>
+                  <div>
+                    <div className="cust">{submission.name}</div>
+                    <div className="sub">
+                      {submission.email}
+                      {submission.customerCode ? ` · ${submission.customerCode}` : ""}
+                    </div>
+                    {submission.phone ? <div className="sub">{submission.phone}</div> : null}
+                  </div>
+                  <div>
+                    <div className="cust">
+                      {formatFeedbackCategoryLabel(submission.category)}
+                      {submission.rating ? ` · ${submission.rating}/5` : ""}
+                    </div>
+                    <div className="sub">{submission.message}</div>
+                    <div className="sub">Submitted {formatDateTimeValue(submission.submittedAt)}</div>
+                  </div>
+                  <div className="sub">
+                    {submission.attachments.length ? (
+                      submission.attachments.map((attachment) => (
+                        <div key={attachment.id ?? attachment.fileName}>
+                          <a
+                            href={`/api/admin/feedback/${encodeURIComponent(
+                              submission.id,
+                            )}/attachments/${encodeURIComponent(attachment.id)}`}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            {attachment.fileName}
+                          </a>{" "}
+                          · {formatFileSize(attachment.size)}
+                        </div>
+                      ))
+                    ) : (
+                      "No attachments"
+                    )}
+                  </div>
+                  <div>
+                    <span className={`search-status-chip tone-${formatFeedbackStatusTone(submission.status)}`}>
+                      {formatFeedbackStatusLabel(submission.status)}
+                    </span>
+                    {submission.reviewedAt ? (
+                      <div className="sub">
+                        {formatDateTimeValue(submission.reviewedAt)} · {submission.reviewedByUsername ?? "admin"}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="referral-submission-actions">
+                    {isOpen ? (
+                      <>
+                        <button
+                          className="btn btn-sm btn-primary"
+                          onClick={() => onUpdateFeedbackStatus(submission.id, "review")}
+                          disabled={isWorking}
+                        >
+                          {isWorking ? "Working…" : "Mark reviewed"}
+                        </button>
+                        <button
+                          className="btn btn-sm"
+                          onClick={() => onUpdateFeedbackStatus(submission.id, "archive")}
+                          disabled={isWorking}
+                        >
+                          Archive
+                        </button>
+                      </>
+                    ) : (
+                      <span className="sub">Closed</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            {!feedbackSubmissions.length && (
+              <div className="empty">No user feedback has been submitted yet.</div>
+            )}
+          </div>
+        </section>
 
         <section className="section">
           <div className="section-head">
@@ -5432,6 +5883,30 @@ function formatReferralSubmissionStatusTone(value) {
     submitted: "warn",
     converted: "success",
     dismissed: "neutral",
+  };
+
+  return tones[value] ?? "neutral";
+}
+
+function formatFeedbackCategoryLabel(value) {
+  return FEEDBACK_CATEGORY_OPTIONS.find((option) => option.value === value)?.label ?? "General feedback";
+}
+
+function formatFeedbackStatusLabel(value) {
+  const labels = {
+    new: "Needs review",
+    reviewed: "Reviewed",
+    archived: "Archived",
+  };
+
+  return labels[value] ?? "Unknown";
+}
+
+function formatFeedbackStatusTone(value) {
+  const tones = {
+    new: "warn",
+    reviewed: "success",
+    archived: "neutral",
   };
 
   return tones[value] ?? "neutral";

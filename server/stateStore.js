@@ -34,6 +34,16 @@ const MANUAL_PAYMENT_ROUTES = {
   card: "Card processor",
   other: "Other secured route",
 };
+const FEEDBACK_CATEGORIES = new Set([
+  "general",
+  "billing",
+  "payment",
+  "portal",
+  "referral",
+  "contract",
+]);
+const MAX_FEEDBACK_ATTACHMENTS = 3;
+const MAX_FEEDBACK_ATTACHMENT_BYTES = 3 * 1024 * 1024;
 
 function roundCurrency(value) {
   return Math.round(Number(value || 0) * 100) / 100;
@@ -305,6 +315,39 @@ function mapReferralSubmissionRow(row, customerMap) {
     dismissedAt: formatTimestamp(row.dismissed_at),
     reviewedByUsername: row.reviewed_by_username ?? null,
     reviewNotes: row.review_notes ?? null,
+  };
+}
+
+function mapFeedbackSubmissionRow(row, customerMap) {
+  const matchedCustomer = customerMap.get(row.customer_id) ?? null;
+  return {
+    id: row.id,
+    customerId: matchedCustomer?.id ?? row.customer_id ?? null,
+    customerName: matchedCustomer?.name ?? null,
+    customerCode:
+      normalizeCustomerCode(matchedCustomer?.customerCode ?? row.customer_code) ??
+      matchedCustomer?.customerCode ??
+      row.customer_code ??
+      null,
+    name: row.submitted_name,
+    email: row.submitted_email,
+    phone: row.submitted_phone ?? null,
+    category: row.category ?? "general",
+    rating: row.rating === null || row.rating === undefined ? null : Number(row.rating),
+    message: row.message,
+    attachments: Array.isArray(row.attachments)
+      ? row.attachments.map((attachment) => ({
+          id: attachment.id,
+          fileName: attachment.fileName,
+          mimeType: attachment.mimeType,
+          size: attachment.size,
+        }))
+      : [],
+    source: row.source ?? "public_form",
+    status: row.status,
+    submittedAt: formatTimestamp(row.submitted_at ?? row.created_at),
+    reviewedAt: formatTimestamp(row.reviewed_at),
+    reviewedByUsername: row.reviewed_by_username ?? null,
   };
 }
 
@@ -1763,6 +1806,12 @@ async function hydratePortalState(client) {
     FROM referral_submissions
     ORDER BY submitted_at DESC, created_at DESC, id DESC
   `);
+  const feedbackSubmissionsResult = await client.query(`
+    SELECT fs.*, c.customer_code
+    FROM feedback_submissions fs
+    LEFT JOIN customers c ON c.id = fs.customer_id
+    ORDER BY fs.submitted_at DESC, fs.created_at DESC, fs.id DESC
+  `);
   const referralsResult = await client.query(`
     SELECT *
     FROM customer_referrals
@@ -1995,6 +2044,9 @@ async function hydratePortalState(client) {
   const referralSubmissions = referralSubmissionsResult.rows.map((row) =>
     mapReferralSubmissionRow(row, customerMap),
   );
+  const feedbackSubmissions = feedbackSubmissionsResult.rows.map((row) =>
+    mapFeedbackSubmissionRow(row, customerMap),
+  );
 
   return {
     customers,
@@ -2075,6 +2127,7 @@ async function hydratePortalState(client) {
       },
     },
     admin: {
+      feedbackSubmissions,
       referralProgram,
       referralSubmissions,
       referrals,
@@ -3037,6 +3090,59 @@ export async function loadPublicReferralProgramState() {
   );
 }
 
+function normalizeFeedbackAttachments(attachments = []) {
+  if (!Array.isArray(attachments)) {
+    return [];
+  }
+
+  if (attachments.length > MAX_FEEDBACK_ATTACHMENTS) {
+    throw new Error(`Attach up to ${MAX_FEEDBACK_ATTACHMENTS} files.`);
+  }
+
+  return attachments.map((attachment) => {
+    const fileName = String(attachment?.fileName || "").trim().slice(0, 160);
+    const mimeType = String(attachment?.mimeType || "application/octet-stream").trim().slice(0, 120);
+    const size = Number(attachment?.size || 0);
+    const dataUrl = String(attachment?.dataUrl || "");
+
+    if (!fileName) {
+      throw new Error("Each attachment must have a file name.");
+    }
+
+    if (!Number.isFinite(size) || size < 0 || size > MAX_FEEDBACK_ATTACHMENT_BYTES) {
+      throw new Error(`${fileName} is larger than 3 MB.`);
+    }
+
+    if (dataUrl && !dataUrl.startsWith("data:")) {
+      throw new Error(`${fileName} is not a supported browser attachment.`);
+    }
+
+    return {
+      id: String(attachment?.id || crypto.randomUUID()),
+      fileName,
+      mimeType,
+      size,
+      dataUrl,
+    };
+  });
+}
+
+async function findCustomerForFeedback(client, { customerCode, email, phoneDigits }) {
+  const normalizedCode = normalizeCustomerCode(customerCode);
+  const normalizedEmail = normalizeEmail(email || "");
+  if (normalizedCode && normalizedEmail) {
+    const exactCustomer = await fetchCustomerByCodeAndEmail(client, normalizedCode, normalizedEmail);
+    if (exactCustomer) {
+      return exactCustomer;
+    }
+  }
+
+  return findCustomerByReferralContact(client, {
+    email,
+    phoneDigits,
+  });
+}
+
 export async function loadContractDownloadRecord(contractId) {
   return withTransaction(
     async (client) => {
@@ -3055,6 +3161,49 @@ export async function loadContractDownloadRecord(contractId) {
       return {
         contract: mapContractRow(record),
         file,
+      };
+    },
+    { readOnly: true },
+  );
+}
+
+export async function loadFeedbackAttachmentRecord(feedbackId, attachmentId) {
+  return withTransaction(
+    async (client) => {
+      const result = await client.query(
+        `
+          SELECT attachments
+          FROM feedback_submissions
+          WHERE id = $1
+        `,
+        [feedbackId],
+      );
+
+      const attachments = result.rows[0]?.attachments;
+      const attachment = Array.isArray(attachments)
+        ? attachments.find((item) => item.id === attachmentId)
+        : null;
+
+      if (!attachment?.dataUrl) {
+        throw new Error("Feedback attachment not found.");
+      }
+
+      const match = String(attachment.dataUrl).match(/^data:([^;,]+)?(;base64)?,(.*)$/);
+      if (!match) {
+        throw new Error("Feedback attachment data is not readable.");
+      }
+
+      const mimeType = attachment.mimeType || match[1] || "application/octet-stream";
+      const isBase64 = Boolean(match[2]);
+      const payload = match[3] || "";
+      const buffer = isBase64
+        ? Buffer.from(payload, "base64")
+        : Buffer.from(decodeURIComponent(payload), "utf8");
+
+      return {
+        fileName: attachment.fileName || "feedback-attachment",
+        mimeType,
+        buffer,
       };
     },
     { readOnly: true },
@@ -3089,6 +3238,91 @@ export async function listPendingPaymentIds() {
     },
     { readOnly: true },
   );
+}
+
+export async function submitPublicFeedbackEntry(form) {
+  return withTransaction(async (client) => {
+    const customerCode = normalizeCustomerCode(form?.customerCode);
+    const submittedName = String(form?.name || "").replace(/\s+/g, " ").trim();
+    const submittedEmail = String(form?.email || "").trim();
+    const submittedPhone = String(form?.phone || "").trim();
+    const normalizedEmail = normalizeEmail(submittedEmail);
+    const phoneDigits = normalizeDigits(submittedPhone);
+    const category = FEEDBACK_CATEGORIES.has(String(form?.category || "").trim())
+      ? String(form.category).trim()
+      : "general";
+    const rating = form?.rating === "" || form?.rating === null || form?.rating === undefined
+      ? null
+      : Number(form.rating);
+    const message = String(form?.message || "").replace(/\s+/g, " ").trim();
+    const attachments = normalizeFeedbackAttachments(form?.attachments ?? []);
+
+    if (!submittedName) {
+      throw new Error("Your name is required.");
+    }
+
+    if (!normalizedEmail) {
+      throw new Error("Your email is required.");
+    }
+
+    if (!message) {
+      throw new Error("Feedback message is required.");
+    }
+
+    if (rating !== null && (!Number.isInteger(rating) || rating < 1 || rating > 5)) {
+      throw new Error("Rating must be between 1 and 5.");
+    }
+
+    const matchedCustomer = await findCustomerForFeedback(client, {
+      customerCode,
+      email: normalizedEmail,
+      phoneDigits,
+    });
+
+    const feedbackId = `fb-${crypto.randomUUID()}`;
+    await client.query(
+      `
+        INSERT INTO feedback_submissions (
+          id,
+          customer_id,
+          submitted_name,
+          submitted_email,
+          submitted_phone,
+          normalized_email,
+          phone_digits,
+          category,
+          rating,
+          message,
+          attachments,
+          source,
+          status,
+          submitted_at,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, 'public_form', 'new', NOW(), NOW(), NOW())
+      `,
+      [
+        feedbackId,
+        matchedCustomer?.id ?? null,
+        submittedName,
+        submittedEmail,
+        submittedPhone || null,
+        normalizedEmail,
+        phoneDigits || null,
+        category,
+        rating,
+        message,
+        JSON.stringify(attachments),
+      ],
+    );
+
+    await insertActivity(client, `Feedback submitted by ${submittedName}`, "public-form");
+
+    return {
+      message: "Thanks. Your feedback was submitted for Setu admin review.",
+    };
+  });
 }
 
 export async function sendQueuedInvoice(invoiceId, deliverInvoice) {
@@ -4224,6 +4458,49 @@ export async function updateGmailAutoSyncSettings(config, actingUsername = "unkn
       message: normalizedSettings.enabled
         ? `Gmail auto-sync will run every ${normalizedSettings.intervalMinutes} minute${normalizedSettings.intervalMinutes === 1 ? "" : "s"}.`
         : "Gmail auto-sync paused.",
+    };
+  });
+}
+
+export async function updateFeedbackSubmissionStatus(
+  feedbackId,
+  status,
+  actingUsername = "unknown",
+) {
+  const normalizedStatus = status === "archived" ? "archived" : "reviewed";
+
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `
+        UPDATE feedback_submissions
+        SET status = $2,
+            reviewed_at = NOW(),
+            reviewed_by_username = $3,
+            updated_at = NOW()
+        WHERE id = $1
+          AND status = 'new'
+        RETURNING *
+      `,
+      [feedbackId, normalizedStatus, actingUsername],
+    );
+
+    const feedback = result.rows[0];
+    if (!feedback) {
+      throw new Error("This feedback item is no longer waiting for review.");
+    }
+
+    await insertActivity(
+      client,
+      `Feedback ${normalizedStatus} for ${feedback.submitted_name}`,
+      actingUsername,
+    );
+
+    return {
+      state: await hydratePortalState(client),
+      message:
+        normalizedStatus === "archived"
+          ? "Feedback archived."
+          : "Feedback marked reviewed.",
     };
   });
 }

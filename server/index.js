@@ -8,6 +8,7 @@ import {
   dismissReferralSubmission,
   listDueInvoiceIds,
   loadContractDownloadRecord,
+  loadFeedbackAttachmentRecord,
   loadPublicReferralProgramState,
   listPendingPaymentIds,
   loadState,
@@ -16,7 +17,9 @@ import {
   resolveExceptionRecord,
   sendReceiptForPaymentRecord,
   sendQueuedInvoice,
+  submitPublicFeedbackEntry,
   submitPublicReferralEntry,
+  updateFeedbackSubmissionStatus,
   updateGmailAutoSyncSettings,
   updateReferralProgramSettings,
 } from "./stateStore.js";
@@ -133,6 +136,15 @@ app.get("/api/public/referral-program", async (_request, response, next) => {
 app.post("/api/public/referrals", async (request, response, next) => {
   try {
     const result = await submitPublicReferralEntry(request.body ?? {});
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/public/feedback", async (request, response, next) => {
+  try {
+    const result = await submitPublicFeedbackEntry(request.body ?? {});
     response.json(result);
   } catch (error) {
     next(error);
@@ -382,6 +394,57 @@ app.post("/api/admin/referral-submissions/:submissionId/dismiss", async (request
       message: result.message,
       state: formatApiState(result.state),
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/feedback/:feedbackId/review", async (request, response, next) => {
+  try {
+    const result = await updateFeedbackSubmissionStatus(
+      request.params.feedbackId,
+      "reviewed",
+      request.portalUser?.username ?? "unknown",
+    );
+
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/feedback/:feedbackId/archive", async (request, response, next) => {
+  try {
+    const result = await updateFeedbackSubmissionStatus(
+      request.params.feedbackId,
+      "archived",
+      request.portalUser?.username ?? "unknown",
+    );
+
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/feedback/:feedbackId/attachments/:attachmentId", async (request, response, next) => {
+  try {
+    const result = await loadFeedbackAttachmentRecord(
+      request.params.feedbackId,
+      request.params.attachmentId,
+    );
+    response.setHeader("Content-Type", result.mimeType || "application/octet-stream");
+    response.setHeader(
+      "Content-Disposition",
+      `inline; filename="${result.fileName.replace(/"/g, "")}"`,
+    );
+    response.send(result.buffer);
   } catch (error) {
     next(error);
   }

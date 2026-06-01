@@ -41,3 +41,10 @@ export function submitPublicReferral(form) {
     body: form,
   });
 }
+
+export function submitPublicFeedback(form) {
+  return apiRequest("/api/public/feedback", {
+    method: "POST",
+    body: form,
+  });
+}

@@ -298,7 +298,26 @@ Use this when customers submit referrals without logging in.
 4. Finance reviews submissions in the referral/admin workflow.
 5. Convert valid submissions when the referred person becomes a customer.
 
-## 15. Settings
+## 15. Public Feedback Form
+
+Use this when customers, prospects, or test users need a simple place to share feedback.
+
+1. Share `/feedback` with users.
+2. User enters name, email, optional customer ID, optional phone, feedback area, optional rating, and feedback message.
+3. User may attach up to 3 optional files, such as screenshots or PDFs.
+4. The portal saves the feedback into the admin review queue.
+5. Admin opens `Referral Program` and reviews the `User feedback` section.
+6. Admin opens any uploaded attachment when more context is needed.
+7. Admin marks the feedback as reviewed or archives it.
+8. If engineering follow-up is needed, admins can separately create a GitHub Issue from the reviewed feedback.
+
+Important rules:
+
+- Do not ask customers to use GitHub Issues directly for sensitive billing or payment details.
+- Use GitHub Issues for internal engineering follow-up, not as the primary public feedback intake.
+- Attachments should be used only when helpful and should not include unnecessary sensitive data.
+
+## 16. Settings
 
 Use this for admin-controlled configuration.
 
@@ -317,7 +336,7 @@ Admin notes:
 - Changes are stored in the backend database.
 - Production secrets should be managed outside Git.
 
-## 16. Daily Operating Checklist
+## 17. Daily Operating Checklist
 
 Use this each business day.
 
@@ -331,8 +350,9 @@ Use this each business day.
 8. Send receipts for completed payments.
 9. Review referral rewards.
 10. Check customer records that need follow-up.
+11. Review new user feedback.
 
-## 17. Safety Checklist
+## 18. Safety Checklist
 
 Before applying money:
 
