@@ -3,6 +3,8 @@ dist/
 .env
 .DS_Store
 files.zip
+aws_DeployCommands_files.zip
+aws_DeployCommands_files/
 server/credentials/*.json
 server/credentials/*.token
 server/credentials/gmail-token.json
