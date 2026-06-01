@@ -90,9 +90,10 @@ function parseAddressHeader(value) {
 }
 
 function extractAmount(text) {
+  const amountToken = "([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)";
   const preferredPatterns = [
-    /(?:sent|payment|paid|amount)[^$]{0,40}\$([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)/i,
-    /\$([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)/,
+    new RegExp(`(?:sent|payment|paid|amount)[^$]{0,40}\\$${amountToken}`, "i"),
+    new RegExp(`\\$${amountToken}`),
   ];
 
   for (const pattern of preferredPatterns) {
@@ -235,7 +236,7 @@ function extractMemo(text) {
   return null;
 }
 
-function parseZelleLikeMessage(message) {
+export function parseZelleLikeMessage(message) {
   const subject = getHeader(message, "Subject");
   const bodyText = extractBodyText(message);
   const joinedText = [subject, bodyText, message.snippet].filter(Boolean).join("\n");
