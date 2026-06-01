@@ -151,11 +151,13 @@ The repo includes the current-state product artifacts alongside the live code:
 
 - updated wireframe: [files/phase1_prototype.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/phase1_prototype.html)
 - business requirements handoff: [files/setu_phase1_requirements.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_phase1_requirements.html)
+- detailed requirements document: [docs/requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/requirements.md)
 - business pitch deck notes: [docs/pitch-deck.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/pitch-deck.md)
 - business pitch deck slides: [files/setu_finance_pitch_deck.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_finance_pitch_deck.html)
 - PowerPoint deck: [files/setu_finance_pitch_deck.pptx](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_finance_pitch_deck.pptx)
 - pitch deck builder: [scripts/build-setu-pitch-deck.mjs](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/scripts/build-setu-pitch-deck.mjs) for Codex presentation-runtime rebuilds
 - simple process flow: [docs/process-flow.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/process-flow.md)
+- flow and process diagrams: [docs/flow-diagrams.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/flow-diagrams.md)
 - detailed feature list: [docs/feature-list.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/feature-list.md)
 - non-technical requirements: [docs/non-technical-requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/non-technical-requirements.md)
 - low-cost AWS solution architecture: [docs/aws-solution-architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/aws-solution-architecture.md)

@@ -2,6 +2,8 @@
 
 This is the current business workflow for Setu Finance, written for operations and leadership teams.
 
+For the expanded diagram pack covering business flow, contract-to-invoice, matching, exceptions, manual secured payments, referrals, and AWS user flow, see [flow-diagrams.md](flow-diagrams.md).
+
 ## Quick Business View
 
 ```mermaid

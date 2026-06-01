@@ -1,5 +1,7 @@
 # Setu Finance Non-Technical Requirements
 
+For the more detailed product and acceptance requirements, see [requirements.md](requirements.md).
+
 ## Purpose
 
 Setu Finance should give the operations team one place to onboard clients, bill them, capture payments, review exceptions, and send receipts without depending on disconnected spreadsheets, inboxes, and manual memory.
