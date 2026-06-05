@@ -126,7 +126,18 @@ This is the current end-to-end feature inventory for Setu Finance.
 - Applied bonus history includes invoice reference, applied date, and user attribution
 - Dashboard reporting includes referral counts and total bonus spent
 
-## 9. Admin, Security, And Auditability
+## 9. Public Feedback Intake
+
+- Public no-login `/feedback` form for customers, prospects, and test users
+- Captures name, email, optional customer ID, optional phone, feedback category, optional rating, and message
+- Supports up to 3 optional attachments for screenshots, PDFs, or supporting files
+- Stores feedback in PostgreSQL with review status
+- Shows feedback in the admin workspace for review
+- Admins can mark feedback reviewed or archived
+- Attachment payloads are protected and downloaded only through authenticated admin endpoints
+- GitHub Issues remain an internal engineering follow-up path, not the public feedback intake channel
+
+## 10. Admin, Security, And Auditability
 
 - Portal login required before finance data is visible
 - Browser tab uses the product name `Setu.Finance`
@@ -137,7 +148,7 @@ This is the current end-to-end feature inventory for Setu Finance.
 - Human approval before final payment apply
 - Customer primary email as the source of truth for receipt delivery
 
-## 10. Architecture And Platform Readiness
+## 11. Architecture And Platform Readiness
 
 - React + Vite frontend
 - Express API backend

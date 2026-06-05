@@ -19,6 +19,7 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Same Zelle transaction-number replay protection.
 - PDF receipt generation and outbound receipt email.
 - Configurable referral program with invoice-discount reward application.
+- Public referral and feedback intake forms.
 - Dashboard reporting for payments, exceptions, invoices, and referral performance.
 - PostgreSQL persistence with migration-managed schema.
 - AWS-ready deployment model using low-cost services and an upgrade path.
@@ -39,6 +40,7 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 | Finance operator | Onboards customers, sends invoices, reviews payments, resolves exceptions, sends receipts | Onboarding, Billing console, Customers |
 | Finance admin | Maintains referral rules, Gmail sync settings, operational settings | Settings, Referral Program |
 | Leadership user | Reviews collections, outstanding work, referral performance, risk queues | Dashboard, Referral Program |
+| Customer/member | Submits referrals and feedback without portal login | `/refer`, `/feedback` |
 | Future integration worker | Runs background email sync, email sending, reconciliation, backups | AWS worker layer |
 
 ## 4. Functional Requirements
@@ -201,7 +203,27 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Transaction chart must show sum of received amounts by day, week, month, or year, with month as default.
 - Duplicate-blocked, archived, or replay-risk transactions must not count toward received totals.
 
-### 4.11 Settings
+### 4.11 Public Feedback Intake
+
+- Users must be able to submit feedback without logging into the finance portal.
+- Public feedback form must capture:
+  - name
+  - email
+  - optional customer ID
+  - optional phone
+  - category
+  - optional rating
+  - message
+  - optional attachments
+- Attachments must be optional and size-limited.
+- Feedback must be stored in PostgreSQL with status.
+- Admins must be able to review feedback in the portal.
+- Admins must be able to mark feedback reviewed or archived.
+- Feedback attachments must not be embedded in the main portal state response.
+- Feedback attachments must be available only through protected admin endpoints.
+- GitHub Issues may be used for internal engineering follow-up, but must not be the primary public intake channel for sensitive customer feedback.
+
+### 4.12 Settings
 
 - Admin-facing settings should live under the user profile/settings area rather than cluttering the main operational workspace.
 - Settings must include Gmail auto-sync enablement and interval.
@@ -244,5 +266,6 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Finance can record a manually secured payment and later send a PDF receipt.
 - Finance can send or re-send PDF receipts from completed transactions.
 - Referral rules can be changed by admins, and qualified rewards apply as invoice discounts.
+- Public feedback can be submitted from `/feedback` and reviewed by admins.
 - Dashboard and customer 360 update after applied payments.
 - Local and AWS deployments can run the same committed code.

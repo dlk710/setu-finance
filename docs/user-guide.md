@@ -8,7 +8,8 @@ Use this when you need to sign in and start work.
 
 1. Open the portal.
    - Local: `http://127.0.0.1:4173`
-   - AWS dev: `https://18.218.196.158.sslip.io`
+   - AWS dev primary: `https://3.135.234.59.sslip.io`
+   - AWS dev recovery: `https://18.218.196.158.sslip.io`
 2. Enter the portal username.
    - Default username: `admin`
 3. Enter the portal password configured by the admin.

@@ -152,6 +152,7 @@ The repo includes the current-state product artifacts alongside the live code:
 
 - updated wireframe: [files/phase1_prototype.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/phase1_prototype.html)
 - business requirements handoff: [files/setu_phase1_requirements.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_phase1_requirements.html)
+- consolidated current-state handoff: [docs/current-state.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/current-state.md)
 - portal user guide by function: [docs/user-guide.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/user-guide.md)
 - detailed requirements document: [docs/requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/requirements.md)
 - business pitch deck notes: [docs/pitch-deck.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/pitch-deck.md)

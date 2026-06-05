@@ -27,7 +27,7 @@ flowchart TD
 
 | Layer | Main files | Responsibility |
 | --- | --- | --- |
-| Frontend | `src/App.jsx`, `src/lib/*`, `src/styles.css` | Operator UI, route-based navigation, modal workflows, dashboard/chart presentation, customer 360, billing console, referral admin, settings. |
+| Frontend | `src/App.jsx`, `src/lib/*`, `src/styles.css` | Operator UI, public referral and feedback forms, route-based navigation, modal workflows, dashboard/chart presentation, customer 360, billing console, referral admin, settings. |
 | API | `server/index.js` | Auth middleware, HTTP routes, request validation boundary, integration wiring for invoice/receipt email and Gmail sync. |
 | Store / application service | `server/stateStore.js` | Transactional business operations, read-model hydration, customer/invoice/payment/referral writes, exception history, manual payment application. |
 | Domain services | `server/services/*` | Gmail parsing, matching, email templates, receipt PDF, contract parsing, contract storage, auth helpers, sync settings. |
@@ -98,6 +98,7 @@ flowchart TD
 | Payments | `payments`, `processed_messages` | Confirm queue, confirmed ledger, source provider, transaction reference, receipt status, duplicate guards. |
 | Exceptions | `exceptions`, `exception_candidates`, `exception_resolution_history` | Open review queue plus durable action history with actor and customer/payment resolution. |
 | Referrals | `customer_referrals`, `customer_reward_ledger`, `referral_submissions` | Rule snapshots, public referral intake, reward qualification, invoice discount application. |
+| Feedback | `feedback_submissions` | Public feedback intake, optional attachment metadata, admin review/archive state. |
 | Integrations/settings | `integration_states`, `system_settings` | Gmail sync state, auto-sync settings, referral program rules. |
 | Dashboard | `dashboard_snapshots`, `dashboard_aging_buckets`, `dashboard_collection_series` | Current projection storage and future analytics seam. |
 | System | `app_sequences`, `activity_events`, `schema_migrations` | Numeric ID sequencing, audit timeline, migration tracking. |
@@ -113,6 +114,7 @@ flowchart TD
 | Manual payment | Manual payment insert and apply happen together; if replay risk is detected the payment moves to exception instead of confirmed ledger. |
 | Exception resolution | Exception status, payment movement, customer assignment, history row, and activity event are preserved together. |
 | Referral bonus apply | Invoice discount, reward ledger status, referral status, and activity event update together. |
+| Feedback submit/review | Feedback records are stored independently, attachment payloads stay out of main read-model state, and review/archive actions preserve actor and timestamp. |
 
 ## 7. Payment Integrity Design
 
