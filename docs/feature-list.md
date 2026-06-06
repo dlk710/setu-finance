@@ -105,8 +105,9 @@ This is the current end-to-end feature inventory for Setu Finance.
 
 ## 7. Dashboard And Reporting
 
-- Finance dashboard with collection metrics and queue visibility
-- Dashboard is the default landing page for signed-in users
+- v2 `Executive` section is the default signed-in finance landing page
+- Existing `/dashboard` route and dashboard read model remain valid
+- Collection metrics and queue visibility
 - Time-series received-amount chart
 - Day, week, month, and year drilldowns
 - Duplicate-blocked payments excluded from totals
@@ -115,6 +116,10 @@ This is the current end-to-end feature inventory for Setu Finance.
 ## 8. Referral Program
 
 - Referral relationship capture during onboarding
+- Public referral submissions are linked to normalized referral parties behind the scenes
+- Referral relationships carry unique referral codes using the `REF-YYYY-000001` format
+- Referral legitimacy metadata supports pending review, verified, rejected, and abuse-flagged states
+- Referral lifecycle events preserve audit history for future review and payout controls
 - Relationship label and referral date captured per referred customer
 - Admin-configurable referral bonus amount
 - Admin-configurable qualification rule, program name, and program description
@@ -126,7 +131,18 @@ This is the current end-to-end feature inventory for Setu Finance.
 - Applied bonus history includes invoice reference, applied date, and user attribution
 - Dashboard reporting includes referral counts and total bonus spent
 
-## 9. Public Feedback Intake
+## 9. V2 Finance Information Architecture
+
+- New v2 shell navigation: `Executive`, `Clients`, `Receivables`, `Payables`, `Referrals`, `People`, `Settings`, and `Audit`
+- Legacy operational routes are preserved: `/dashboard`, `/billing`, `/customers`, `/customers/:id`, `/onboarding`, `/admin`, and `/settings`
+- New aliases are available for the merged IA: `/clients`, `/receivables`, `/referrals`, `/payables`, `/people`, and `/audit`
+- `Clients` wraps existing onboarding, customer register, and customer 360 flows without changing their backend contracts
+- `Receivables` wraps the existing billing console and keeps Gmail/Zelle sync, payment application, exception review, manual payment entry, and receipt sending intact
+- Receivables is organized into tabs for `Overview`, `Invoices`, `Payments to confirm`, `Exceptions`, `Receipts`, and `Inbox sync` so finance users can move through one queue at a time
+- `Payables`, `People`, and `Audit` are safe local hub views for the next product-suite phases
+- Existing Gmail sync credentials, token path, SMTP settings, and sync services are preserved
+
+## 10. Public Feedback Intake
 
 - Public no-login `/feedback` form for customers, prospects, and test users
 - Captures name, email, optional customer ID, optional phone, feedback category, optional rating, and message
@@ -137,7 +153,7 @@ This is the current end-to-end feature inventory for Setu Finance.
 - Attachment payloads are protected and downloaded only through authenticated admin endpoints
 - GitHub Issues remain an internal engineering follow-up path, not the public feedback intake channel
 
-## 10. Admin, Security, And Auditability
+## 11. Admin, Security, And Auditability
 
 - Portal login required before finance data is visible
 - Browser tab uses the product name `Setu.Finance`

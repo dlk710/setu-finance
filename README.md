@@ -85,9 +85,11 @@ Change them in [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinancePr
 - default landing page is the dashboard at `/dashboard`
 - the browser tab title is `Setu.Finance`
 - the `setu` brand in the left rail is a home action that returns users to the dashboard
+- the left rail is focused on finance only; the old `Finance / Portal` context switch has been removed
 - onboarding now uses a full-width single-column intake flow instead of a split rail
 - service history appears only when an existing customer is selected for follow-up enrollment
 - the `Referral Program` workspace defines configurable rules, tracks relationship history, and applies earned bonuses as invoice discounts
+- public referral intake supports both `/refer` and personalized gateway links such as `/refer/100001`, `/referral-gateway/100001`, or `/r/100001`
 
 ## Postgres backend
 
@@ -108,6 +110,15 @@ Default local database:
 - port: `54322`
 - database: `setu_portal`
 - user: `setu`
+
+The local frontend now uses the merged v2 finance shell:
+
+- `Executive` is the default dashboard summary at `/dashboard`
+- `Clients` is the new entry point for onboarding, customer register, and customer 360 (`/clients`, plus existing `/onboarding` and `/customers`)
+- `Receivables` wraps the existing billing console at `/receivables` while `/billing` remains valid, now organized into `Overview`, `Invoices`, `Payments to confirm`, `Exceptions`, `Receipts`, and `Inbox sync` tabs
+- `Referrals` wraps the existing Referral Program at `/referrals` while `/admin` remains valid
+- `Payables`, `People`, and `Audit` are safe hub views for the next product-suite phases
+- Gmail/Zelle sync credentials, SMTP settings, and existing backend routes are preserved
 
 The database connection is configured through [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/.env). The current seed source is:
 
@@ -213,6 +224,9 @@ Current exception-review flow:
 Current referral-program flow:
 
 - admins define the live rule name, description, bonus amount, and qualification thresholds
+- client referrers are also represented as normalized referral parties so the model can later support employees, sales partners, and external partners
+- referral relationships receive unique referral codes in `REF-YYYY-000001` format
+- referral legitimacy and event history are stored for review and auditability
 - each referral stores its own snapshot of the rule, relationship label, and referral date
 - once the referred client qualifies, the reward enters a green review queue
 - finance applies the bonus to the next draft invoice for the referrer

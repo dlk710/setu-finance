@@ -35,6 +35,21 @@ flowchart TD
 | Shared catalog | `shared/*` | Shared service catalog and numeric ID helpers used by frontend and backend. |
 | Documentation/artifacts | `docs/*`, `files/*` | Requirements, process flows, architecture, pitch artifacts, clickable wireframes. |
 
+### V2 Shell Mapping
+
+The current local frontend uses the merged v2 finance information architecture while preserving the original operational routes and backend contracts.
+
+| V2 section | Live implementation |
+| --- | --- |
+| Executive | Existing dashboard read model at `/dashboard`. |
+| Clients | New `/clients` hub plus existing `/onboarding`, `/customers`, and `/customers/:id`. |
+| Receivables | New `/receivables` alias around the existing billing console; `/billing` remains valid. The frontend presents the same APIs through tabs for overview, invoices, payment review, exceptions, receipts, and inbox sync. |
+| Payables | New read-only hub for money-out categories and referral discount ledger visibility. |
+| Referrals | New `/referrals` alias around the existing Referral Program admin workspace; `/admin` remains valid. |
+| People | New read-only hub around normalized referral parties until the employee-directory phase is built. |
+| Settings | Existing settings, including Gmail sync automation and referral-program config. |
+| Audit | New hub reading existing activity, resolved exception history, and structured referral events. |
+
 ## 4. Runtime Deployment Views
 
 ### Local Development
@@ -97,7 +112,7 @@ flowchart TD
 | Invoices | `invoices`, `invoice_reward_applications` | Draft/sent/paid/overdue status, numeric invoice codes, referral discounts. |
 | Payments | `payments`, `processed_messages` | Confirm queue, confirmed ledger, source provider, transaction reference, receipt status, duplicate guards. |
 | Exceptions | `exceptions`, `exception_candidates`, `exception_resolution_history` | Open review queue plus durable action history with actor and customer/payment resolution. |
-| Referrals | `customer_referrals`, `customer_reward_ledger`, `referral_submissions` | Rule snapshots, public referral intake, reward qualification, invoice discount application. |
+| Referrals | `referral_parties`, `customer_referrals`, `customer_reward_ledger`, `referral_submissions`, `referral_events`, `referral_payouts` | Party-normalized referrers, referral codes, legitimacy review status, public referral intake, reward qualification, invoice discount application, future payout seam. |
 | Feedback | `feedback_submissions` | Public feedback intake, optional attachment metadata, admin review/archive state. |
 | Integrations/settings | `integration_states`, `system_settings` | Gmail sync state, auto-sync settings, referral program rules. |
 | Dashboard | `dashboard_snapshots`, `dashboard_aging_buckets`, `dashboard_collection_series` | Current projection storage and future analytics seam. |
@@ -114,6 +129,7 @@ flowchart TD
 | Manual payment | Manual payment insert and apply happen together; if replay risk is detected the payment moves to exception instead of confirmed ledger. |
 | Exception resolution | Exception status, payment movement, customer assignment, history row, and activity event are preserved together. |
 | Referral bonus apply | Invoice discount, reward ledger status, referral status, and activity event update together. |
+| Referral intake/party link | Public referral submissions and customer onboarding preserve the legacy referrer customer ID while also stamping the normalized referrer party ID. |
 | Feedback submit/review | Feedback records are stored independently, attachment payloads stay out of main read-model state, and review/archive actions preserve actor and timestamp. |
 
 ## 7. Payment Integrity Design

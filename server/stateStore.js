@@ -77,6 +77,11 @@ function createCustomerCodePreview(sequence) {
   return makeCustomerCode(sequence);
 }
 
+function createReferralCodePreview(sequence, issuedAt = new Date()) {
+  const year = new Date(issuedAt).getFullYear();
+  return `REF-${year}-${String(Number(sequence || 0)).padStart(6, "0")}`;
+}
+
 function normalizeLegacyIdentifierText(text) {
   if (!text) {
     return text;
@@ -274,8 +279,60 @@ function mapExceptionHistoryRow(row) {
   };
 }
 
-function mapReferralSubmissionRow(row, customerMap) {
+function mapReferralPartyRow(row, customerMap = new Map()) {
+  const linkedCustomer = customerMap.get(row.customer_id);
+
+  return {
+    id: row.id,
+    partyType: row.party_type,
+    displayName: row.display_name,
+    email: row.email ?? null,
+    phoneDigits: row.phone_digits ?? null,
+    customerId: row.customer_id ?? null,
+    customerName: linkedCustomer?.name ?? null,
+    customerCode:
+      normalizeCustomerCode(linkedCustomer?.customerCode ?? row.customer_code) ??
+      linkedCustomer?.customerCode ??
+      row.customer_code ??
+      null,
+    referralCode: row.referral_code ?? null,
+    payoutMethod: row.payout_method,
+    payoutHandle: row.payout_handle ?? null,
+    taxStatus: row.tax_status,
+    status: row.status,
+    createdAt: formatTimestamp(row.created_at),
+    updatedAt: formatTimestamp(row.updated_at),
+  };
+}
+
+function mapLegacyCustomerReferralParty(customer) {
+  if (!customer) {
+    return null;
+  }
+
+  return {
+    id: null,
+    partyType: "client",
+    displayName: customer.name,
+    email: customer.emails?.find((email) => email.isPrimary)?.value ?? customer.emails?.[0]?.value ?? null,
+    phoneDigits: null,
+    customerId: customer.id,
+    customerName: customer.name,
+    customerCode: customer.customerCode ?? null,
+    referralCode: null,
+    payoutMethod: "invoice_discount",
+    payoutHandle: null,
+    taxStatus: "not_required",
+    status: "active",
+    createdAt: null,
+    updatedAt: null,
+  };
+}
+
+function mapReferralSubmissionRow(row, customerMap, referralPartyMap = new Map()) {
   const referrer = customerMap.get(row.referrer_customer_id);
+  const referrerParty =
+    referralPartyMap.get(row.referrer_party_id) ?? mapLegacyCustomerReferralParty(referrer);
   const matchedCustomer =
     customerMap.get(row.matched_customer_id) ??
     customerMap.get(row.converted_customer_id) ??
@@ -287,6 +344,8 @@ function mapReferralSubmissionRow(row, customerMap) {
     referrerCustomerId: row.referrer_customer_id,
     referrerCustomerName: referrer?.name ?? "Unknown customer",
     referrerCustomerCode: referrer?.customerCode ?? null,
+    referrerPartyId: row.referrer_party_id ?? null,
+    referrerParty,
     referrerEmail: row.referrer_email,
     referredFullName: row.referred_full_name,
     referredEmail: row.referred_email,
@@ -1366,10 +1425,168 @@ async function findPendingReferralSubmissionByContact(
   return result.rows[0] ?? null;
 }
 
+async function ensureClientReferralParty(client, customerId) {
+  if (!customerId) {
+    return null;
+  }
+
+  const existingResult = await client.query(
+    `
+      SELECT rp.*, c.customer_code
+      FROM referral_parties rp
+      LEFT JOIN customers c ON c.id = rp.customer_id
+      WHERE rp.customer_id = $1
+        AND rp.party_type = 'client'
+      ORDER BY rp.created_at ASC, rp.id ASC
+      LIMIT 1
+    `,
+    [customerId],
+  );
+
+  if (existingResult.rowCount) {
+    return existingResult.rows[0];
+  }
+
+  const profileResult = await client.query(
+    `
+      SELECT
+        c.id,
+        c.customer_code,
+        c.full_name,
+        email_profile.email,
+        phone_profile.phone_digits
+      FROM customers c
+      LEFT JOIN LATERAL (
+        SELECT ce.email
+        FROM customer_emails ce
+        WHERE ce.customer_id = c.id
+        ORDER BY ce.is_primary DESC, ce.created_at ASC, ce.id ASC
+        LIMIT 1
+      ) email_profile ON TRUE
+      LEFT JOIN LATERAL (
+        SELECT cp.normalized_digits AS phone_digits
+        FROM customer_phones cp
+        WHERE cp.customer_id = c.id
+        ORDER BY cp.is_primary DESC, cp.created_at ASC, cp.id ASC
+        LIMIT 1
+      ) phone_profile ON TRUE
+      WHERE c.id = $1
+      LIMIT 1
+    `,
+    [customerId],
+  );
+
+  const profile = profileResult.rows[0];
+  if (!profile) {
+    return null;
+  }
+
+  const normalizedCustomerCode =
+    normalizeCustomerCode(profile.customer_code) ?? profile.customer_code ?? String(profile.id).slice(0, 10);
+  const partyId = `party-client-${profile.id}`;
+  const partyReferralCode = `PTY-${normalizedCustomerCode}`;
+  const insertResult = await client.query(
+    `
+      INSERT INTO referral_parties (
+        id,
+        party_type,
+        display_name,
+        email,
+        phone_digits,
+        customer_id,
+        referral_code,
+        payout_method,
+        tax_status,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, 'client', $2, $3, $4, $5, $6, 'invoice_discount', 'not_required', 'active', NOW(), NOW())
+      ON CONFLICT DO NOTHING
+      RETURNING *
+    `,
+    [
+      partyId,
+      profile.full_name,
+      profile.email ?? null,
+      profile.phone_digits ?? null,
+      profile.id,
+      partyReferralCode,
+    ],
+  );
+
+  if (insertResult.rowCount) {
+    return { ...insertResult.rows[0], customer_code: profile.customer_code };
+  }
+
+  const fallbackResult = await client.query(
+    `
+      SELECT rp.*, c.customer_code
+      FROM referral_parties rp
+      LEFT JOIN customers c ON c.id = rp.customer_id
+      WHERE rp.customer_id = $1
+         OR rp.id = $2
+         OR rp.referral_code = $3
+      ORDER BY rp.customer_id = $1 DESC, rp.created_at ASC, rp.id ASC
+      LIMIT 1
+    `,
+    [profile.id, partyId, partyReferralCode],
+  );
+
+  return fallbackResult.rows[0] ?? null;
+}
+
+async function insertReferralEvent(
+  client,
+  {
+    referralId,
+    referralCode = null,
+    eventType,
+    fromStatus = null,
+    toStatus = null,
+    actorUsername = "system",
+    actorKind = "system",
+    detail = null,
+    payload = {},
+  },
+) {
+  await client.query(
+    `
+      INSERT INTO referral_events (
+        id,
+        referral_id,
+        referral_code,
+        event_type,
+        from_status,
+        to_status,
+        actor_username,
+        actor_kind,
+        detail,
+        payload,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW())
+    `,
+    [
+      `evt-${crypto.randomUUID()}`,
+      referralId ?? null,
+      referralCode ?? null,
+      eventType,
+      fromStatus ?? null,
+      toStatus ?? null,
+      actorUsername,
+      actorKind,
+      detail,
+      JSON.stringify(payload ?? {}),
+    ],
+  );
+}
+
 async function createReferralSubmissionRecord(
   client,
   {
     referrerCustomerId,
+    referrerPartyId = null,
     referrerEmail,
     referredFullName,
     referredEmail,
@@ -1389,6 +1606,7 @@ async function createReferralSubmissionRecord(
       INSERT INTO referral_submissions (
         id,
         referrer_customer_id,
+        referrer_party_id,
         matched_customer_id,
         source,
         status,
@@ -1405,12 +1623,13 @@ async function createReferralSubmissionRecord(
         updated_at
       )
       VALUES (
-        $1, $2, $3, $4, 'submitted', $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW(), NOW()
+        $1, $2, $3, $4, $5, 'submitted', $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW(), NOW()
       )
     `,
     [
       submissionId,
       referrerCustomerId,
+      referrerPartyId ?? null,
       matchedCustomerId,
       source,
       referrerEmail,
@@ -1429,7 +1648,14 @@ async function createReferralSubmissionRecord(
 
 async function markReferralSubmissionConverted(
   client,
-  { submissionId, matchedCustomerId, convertedCustomerId, convertedReferralId, actingUsername = "unknown" },
+  {
+    submissionId,
+    matchedCustomerId,
+    convertedCustomerId,
+    convertedReferralId,
+    actingUsername = "unknown",
+    referrerPartyId = null,
+  },
 ) {
   await client.query(
     `
@@ -1440,10 +1666,18 @@ async function markReferralSubmissionConverted(
           converted_referral_id = $4,
           converted_at = NOW(),
           reviewed_by_username = $5,
+          referrer_party_id = COALESCE(referrer_party_id, $6),
           updated_at = NOW()
       WHERE id = $1
     `,
-    [submissionId, matchedCustomerId ?? null, convertedCustomerId ?? null, convertedReferralId ?? null, actingUsername],
+    [
+      submissionId,
+      matchedCustomerId ?? null,
+      convertedCustomerId ?? null,
+      convertedReferralId ?? null,
+      actingUsername,
+      referrerPartyId ?? null,
+    ],
   );
 }
 
@@ -1487,10 +1721,13 @@ async function upsertCustomerReferral(
   client,
   {
     referrerCustomerId,
+    referrerPartyId = null,
     referredCustomerId,
     relationshipLabel = null,
     referredOn = null,
     notes = null,
+    actorUsername = "system",
+    actorKind = "system",
   },
 ) {
   if (!referrerCustomerId || !referredCustomerId || referrerCustomerId === referredCustomerId) {
@@ -1502,9 +1739,12 @@ async function upsertCustomerReferral(
     return null;
   }
 
+  const effectiveReferrerPartyId =
+    referrerPartyId ?? (await ensureClientReferralParty(client, referrerCustomerId))?.id ?? null;
+
   const existingResult = await client.query(
     `
-      SELECT id
+      SELECT id, referral_code
       FROM customer_referrals
       WHERE referred_customer_id = $1
       LIMIT 1
@@ -1513,6 +1753,10 @@ async function upsertCustomerReferral(
   );
 
   if (existingResult.rowCount) {
+    const missingReferralCode = !existingResult.rows[0].referral_code;
+    const referralCode = missingReferralCode
+      ? (await reserveNextReferralCode(client)).referralCode
+      : existingResult.rows[0].referral_code;
     await client.query(
       `
         UPDATE customer_referrals
@@ -1520,6 +1764,8 @@ async function upsertCustomerReferral(
             relationship_label = COALESCE($3, relationship_label),
             referred_on = COALESCE($4::date, referred_on),
             notes = COALESCE($5, notes),
+            referrer_party_id = COALESCE($6, referrer_party_id),
+            referral_code = COALESCE(referral_code, $7),
             updated_at = NOW()
         WHERE id = $1
       `,
@@ -1529,18 +1775,23 @@ async function upsertCustomerReferral(
         relationshipLabel?.trim() || null,
         formatDateOnlyOutput(referredOn),
         notes,
+        effectiveReferrerPartyId,
+        referralCode,
       ],
     );
     return existingResult.rows[0].id;
   }
 
   const referralId = `ref-${crypto.randomUUID()}`;
+  const { referralCode } = await reserveNextReferralCode(client);
   await client.query(
     `
       INSERT INTO customer_referrals (
         id,
         referrer_customer_id,
+        referrer_party_id,
         referred_customer_id,
+        referral_code,
         relationship_label,
         referred_on,
         status,
@@ -1552,12 +1803,14 @@ async function upsertCustomerReferral(
         created_at,
         updated_at
       )
-      VALUES ($1, $2, $3, $4, $5::date, 'active', $6, $7, $8, $9::jsonb, $10, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7::date, 'active', $8, $9, $10, $11::jsonb, $12, NOW(), NOW())
     `,
     [
       referralId,
       referrerCustomerId,
+      effectiveReferrerPartyId,
       referredCustomerId,
+      referralCode,
       relationshipLabel?.trim() || null,
       formatDateOnlyOutput(referredOn),
       Number(config.bonusAmount || 0),
@@ -1567,6 +1820,23 @@ async function upsertCustomerReferral(
       notes,
     ],
   );
+
+  await insertReferralEvent(client, {
+    referralId,
+    referralCode,
+    eventType: "referral_submitted",
+    fromStatus: null,
+    toStatus: "pending_review",
+    actorUsername,
+    actorKind,
+    detail: "Referral relationship created.",
+    payload: {
+      referrerCustomerId,
+      referrerPartyId: effectiveReferrerPartyId,
+      referredCustomerId,
+      relationshipLabel: relationshipLabel?.trim() || null,
+    },
+  });
 
   return referralId;
 }
@@ -1612,7 +1882,7 @@ async function awardReferralRewardsForCustomer(client, customerId) {
     }
 
     const rewardId = `reward-${referral.id}`;
-    await client.query(
+    const rewardResult = await client.query(
       `
         INSERT INTO customer_reward_ledger (
           id,
@@ -1622,11 +1892,14 @@ async function awardReferralRewardsForCustomer(client, customerId) {
           status,
           amount,
           description,
+          delivery_method,
+          party_id,
           earned_at,
           created_at
         )
-        VALUES ($1, $2, $3, 'referral_bonus', 'available', $4, $5, NOW(), NOW())
+        VALUES ($1, $2, $3, 'referral_bonus', 'available', $4, $5, 'invoice_discount', $6, NOW(), NOW())
         ON CONFLICT DO NOTHING
+        RETURNING id
       `,
       [
         rewardId,
@@ -1634,6 +1907,7 @@ async function awardReferralRewardsForCustomer(client, customerId) {
         referral.id,
         Number(referral.bonus_amount || 0),
         `Referral bonus unlocked for customer ${customerId}`,
+        referral.referrer_party_id ?? null,
       ],
     );
 
@@ -1647,6 +1921,25 @@ async function awardReferralRewardsForCustomer(client, customerId) {
       `,
       [referral.id],
     );
+
+    if (rewardResult.rowCount) {
+      await insertReferralEvent(client, {
+        referralId: referral.id,
+        referralCode: referral.referral_code ?? null,
+        eventType: "reward_accrued",
+        fromStatus: "active",
+        toStatus: "qualified",
+        actorUsername: "system",
+        actorKind: "system",
+        detail: `Referral reward accrued for customer ${customerId}.`,
+        payload: {
+          rewardId,
+          rewardCustomerId: referral.referrer_customer_id,
+          rewardPartyId: referral.referrer_party_id ?? null,
+          amount: Number(referral.bonus_amount || 0),
+        },
+      });
+    }
 
     awarded.push({
       referralId: referral.id,
@@ -1801,6 +2094,12 @@ async function hydratePortalState(client) {
     FROM system_settings
     WHERE setting_key = 'referral_program'
   `);
+  const referralPartiesResult = await client.query(`
+    SELECT rp.*, c.customer_code
+    FROM referral_parties rp
+    LEFT JOIN customers c ON c.id = rp.customer_id
+    ORDER BY rp.created_at DESC, rp.id DESC
+  `);
   const referralSubmissionsResult = await client.query(`
     SELECT *
     FROM referral_submissions
@@ -1821,6 +2120,11 @@ async function hydratePortalState(client) {
     SELECT *
     FROM customer_reward_ledger
     ORDER BY earned_at DESC, created_at DESC, id DESC
+  `);
+  const referralEventsResult = await client.query(`
+    SELECT *
+    FROM referral_events
+    ORDER BY created_at DESC, id DESC
   `);
   const dashboardResult = await client.query(
     `
@@ -1995,6 +2299,10 @@ async function hydratePortalState(client) {
   const referralProgram = normalizeReferralProgramConfig(
     referralProgramResult.rows[0]?.setting_json ?? DEFAULT_REFERRAL_PROGRAM,
   );
+  const referralParties = referralPartiesResult.rows.map((row) =>
+    mapReferralPartyRow(row, customerMap),
+  );
+  const referralPartyMap = new Map(referralParties.map((party) => [party.id, party]));
   const rewards = rewardsResult.rows.map((row) => ({
     id: row.id,
     customerId: row.customer_id,
@@ -2013,9 +2321,14 @@ async function hydratePortalState(client) {
       invoiceMap.get(row.applied_invoice_id)?.invoiceCode ??
       null,
     appliedByUsername: row.applied_by_username ?? null,
+    deliveryMethod: row.delivery_method ?? "invoice_discount",
+    partyId: row.party_id ?? null,
+    party: referralPartyMap.get(row.party_id) ?? null,
   }));
   const referrals = referralsResult.rows.map((row) => {
     const referrer = customerMap.get(row.referrer_customer_id);
+    const referrerParty =
+      referralPartyMap.get(row.referrer_party_id) ?? mapLegacyCustomerReferralParty(referrer);
     const referred = customerMap.get(row.referred_customer_id);
     if (referred) {
       referred.profile.referredByCustomerId = row.referrer_customer_id;
@@ -2026,10 +2339,18 @@ async function hydratePortalState(client) {
       referrerCustomerId: row.referrer_customer_id,
       referrerCustomerName: referrer?.name ?? "Unknown customer",
       referrerCustomerCode: referrer?.customerCode ?? null,
+      referrerPartyId: row.referrer_party_id ?? null,
+      referrerParty,
       referredCustomerId: row.referred_customer_id,
       referredCustomerName: referred?.name ?? "Unknown customer",
       referredCustomerCode: referred?.customerCode ?? null,
+      referralCode: row.referral_code ?? null,
       status: row.status,
+      legitimacyStatus: row.legitimacy_status ?? "pending_review",
+      legitimacyReviewedBy: row.legitimacy_reviewed_by ?? null,
+      legitimacyReviewedAt: formatTimestamp(row.legitimacy_reviewed_at),
+      legitimacyNotes: row.legitimacy_notes ?? null,
+      rejectionReason: row.rejection_reason ?? null,
       relationshipLabel: row.relationship_label ?? null,
       bonusAmount: Number(row.bonus_amount || 0),
       qualifyingPaidAmount: Number(row.qualifying_paid_amount || 0),
@@ -2042,8 +2363,21 @@ async function hydratePortalState(client) {
     };
   });
   const referralSubmissions = referralSubmissionsResult.rows.map((row) =>
-    mapReferralSubmissionRow(row, customerMap),
+    mapReferralSubmissionRow(row, customerMap, referralPartyMap),
   );
+  const referralEvents = referralEventsResult.rows.map((row) => ({
+    id: row.id,
+    referralId: row.referral_id ?? null,
+    referralCode: row.referral_code ?? null,
+    eventType: row.event_type,
+    fromStatus: row.from_status ?? null,
+    toStatus: row.to_status ?? null,
+    actorUsername: row.actor_username ?? null,
+    actorKind: row.actor_kind ?? "admin",
+    detail: row.detail ?? null,
+    payload: row.payload ?? {},
+    createdAt: formatTimestamp(row.created_at),
+  }));
   const feedbackSubmissions = feedbackSubmissionsResult.rows.map((row) =>
     mapFeedbackSubmissionRow(row, customerMap),
   );
@@ -2129,8 +2463,10 @@ async function hydratePortalState(client) {
     admin: {
       feedbackSubmissions,
       referralProgram,
+      referralParties,
       referralSubmissions,
       referrals,
+      referralEvents,
       rewards,
     },
   };
@@ -2354,6 +2690,14 @@ async function reserveNextCustomerCode(client) {
   return {
     sequence,
     customerCode: createCustomerCodePreview(sequence),
+  };
+}
+
+async function reserveNextReferralCode(client) {
+  const sequence = await reserveSequenceValue(client, "referral", 1);
+  return {
+    sequence,
+    referralCode: createReferralCodePreview(sequence),
   };
 }
 
@@ -3431,9 +3775,12 @@ export async function submitPublicReferralEntry(form) {
       );
     }
 
+    const referrerParty = await ensureClientReferralParty(client, referrer.id);
+
     try {
       await createReferralSubmissionRecord(client, {
         referrerCustomerId: referrer.id,
+        referrerPartyId: referrerParty?.id ?? null,
         referrerEmail,
         referredFullName,
         referredEmail,
@@ -3622,12 +3969,21 @@ export async function createCustomerOnboardingRecord({ form, actingUsername = "u
         })
       : [];
 
+    const effectiveReferrerPartyId = effectiveReferringCustomerId
+      ? matchedReferralSubmission?.referrer_party_id ??
+        (await ensureClientReferralParty(client, effectiveReferringCustomerId))?.id ??
+        null
+      : null;
+
     const referralId = await upsertCustomerReferral(client, {
       referrerCustomerId: effectiveReferringCustomerId,
+      referrerPartyId: effectiveReferrerPartyId,
       referredCustomerId: customerId,
       relationshipLabel: effectiveRelationshipLabel,
       referredOn: matchedReferralSubmission?.submitted_at || form.onboardedAt || new Date().toISOString(),
       notes: effectiveReferralSource,
+      actorUsername: actingUsername,
+      actorKind: "admin",
     });
 
     if (referralId && matchedReferralSubmission?.id) {
@@ -3637,6 +3993,7 @@ export async function createCustomerOnboardingRecord({ form, actingUsername = "u
         convertedCustomerId: customerId,
         convertedReferralId: referralId,
         actingUsername,
+        referrerPartyId: effectiveReferrerPartyId,
       });
       await insertActivity(client, `Referral submission converted for ${customerName}`, actingUsername);
     }
@@ -4535,12 +4892,19 @@ export async function convertReferralSubmissionToRelationship(submissionId, acti
     }
 
     if (!referralId) {
+      const referrerPartyId =
+        submission.referrer_party_id ??
+        (await ensureClientReferralParty(client, submission.referrer_customer_id))?.id ??
+        null;
       referralId = await upsertCustomerReferral(client, {
         referrerCustomerId: submission.referrer_customer_id,
+        referrerPartyId,
         referredCustomerId: matchedCustomer.id,
         relationshipLabel: submission.relationship_label ?? null,
         referredOn: submission.submitted_at,
         notes: submission.notes ?? "Public referral form",
+        actorUsername: actingUsername,
+        actorKind: "admin",
       });
     }
 
@@ -4550,6 +4914,10 @@ export async function convertReferralSubmissionToRelationship(submissionId, acti
       convertedCustomerId: matchedCustomer.id,
       convertedReferralId: referralId,
       actingUsername,
+      referrerPartyId:
+        submission.referrer_party_id ??
+        (await ensureClientReferralParty(client, submission.referrer_customer_id))?.id ??
+        null,
     });
 
     await insertActivity(

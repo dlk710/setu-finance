@@ -12,6 +12,7 @@ This document is the consolidated current-state handoff for the Setu Finance por
 | AWS dev primary | `https://3.135.234.59.sslip.io/` | Current externally reachable dev portal. |
 | AWS dev recovery | `https://18.218.196.158.sslip.io/` | Recovery/backup dev endpoint. |
 | Public referral form | `/refer` | No-login referral intake. |
+| Public referral gateway | `/refer/:customerId`, `/referral-gateway/:customerId`, `/r/:customerId` | No-login referral intake with the referrer customer ID prefilled from the URL. |
 | Public feedback form | `/feedback` | No-login feedback intake with optional attachments. |
 
 Security note: real passwords, OAuth tokens, SMTP passwords, and customer-sensitive secrets are not stored in documentation. Portal credentials are configured through environment variables or cloud secret storage.
@@ -60,14 +61,16 @@ flowchart TD
 
 | Area | Current purpose |
 | --- | --- |
-| Dashboard | Default landing page with finance metrics, transaction trend, exception visibility, referral trend, and bonus spend. |
-| Client onboarding | Contract-first intake, required customer fields, services, fee type, recurring/one-time details, and invoice schedule. |
-| Billing console | Invoice sending, Zelle sync, payment review, exception resolution, manual payments, completed transactions, receipts. |
-| Customer search | Excel-like searchable customer register with status. |
-| Customer 360 | Full customer profile page with contact data, contracts, services, invoices, payments, exceptions, referrals, and history. |
-| Referral Program | Referral rules, public referral submissions, relationship tracking, reward qualification, invoice-discount application, feedback queue. |
-| Settings | Gmail auto-sync settings and referral-program configuration. |
+| Executive | Default summary landing page using the existing Dashboard route and read model. Legacy `/dashboard` still works. |
+| Clients | Merged v2 section for contract-first onboarding, customer register, and customer 360 entry points. Existing `/onboarding`, `/customers`, and `/customers/:id` routes still work. |
+| Receivables | Merged v2 section for the existing billing console. It now uses tabs for `Overview`, `Invoices`, `Payments to confirm`, `Exceptions`, `Receipts`, and `Inbox sync`, while preserving invoice sending, Zelle sync, payment review, exception resolution, manual payments, completed transactions, and receipt actions. Existing `/billing` still works. |
+| Payables | New v2 hub for money-out categories. Current local build reads the live referral reward ledger and preserves the client invoice-discount path; cash payout, payroll, vendor bill, reimbursement, and expense-import pipelines remain future additive phases. |
+| Referrals | Merged v2 section for referral rules, public referral submissions, relationship tracking, reward qualification, invoice-discount application, feedback queue, parties, codes, and event history. Existing `/admin` still works. |
+| People | New v2 hub showing normalized referral parties today and reserving space for the employee/sales directory phase. |
+| Settings | Gmail auto-sync settings, outbound email status, access, and referral-program configuration. Existing Gmail credentials and token paths are not changed by the v2 shell. |
+| Audit | New v2 hub combining activity history, resolved exception history, and structured referral events. |
 | `/refer` | Public no-login referral submission form. |
+| `/refer/:customerId` | Personalized referral gateway for a specific referrer. The customer ID is prefilled from the URL and the email is still verified before finance can convert the submission. |
 | `/feedback` | Public no-login feedback submission form with optional attachments. |
 
 ## 6. Client Onboarding
@@ -111,7 +114,7 @@ The customer 360 page shows:
 
 ## 8. Invoicing
 
-The billing console supports:
+The tabbed Receivables workspace supports:
 
 - new invoice creation for existing customers
 - customer search during invoice creation
@@ -201,6 +204,10 @@ Supported today:
 - public no-login `/refer` form
 - duplicate prevention by referred email or phone for active submissions
 - admin referral queue
+- normalized referral-party foundation for client referrers, with room for employee, sales partner, and external partner referrers later
+- unique referral codes on referral relationships, currently generated as `REF-YYYY-000001`
+- legitimacy status fields for referral review: pending review, verified, rejected, or abuse flagged
+- referral event history for key lifecycle actions such as grandfathered approval and reward accrual
 - referral relationship tracking
 - relationship label and referral date
 - configurable referral program name, description, bonus amount, qualification paid amount, and qualification months
@@ -213,6 +220,7 @@ Supported today:
 
 Current limitation:
 
+- Phase 1 keeps the existing invoice-discount reward flow unchanged. Pending-review gating for new referrals is designed into the data model but not enforced in the current local build.
 - Dedicated employee/sales/partner referral payout portal is not yet implemented.
 - Employee/sales commissions and partner payouts should be modeled as a future `Referral Growth Portal` while Setu Finance remains the financial source of truth.
 

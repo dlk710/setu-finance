@@ -107,6 +107,12 @@ const DEFAULT_AUTH_FORM = {
 const PORTAL_VIEW_PATHS = {
   publicReferral: "/refer",
   publicFeedback: "/feedback",
+  clients: "/clients",
+  receivables: "/receivables",
+  referrals: "/referrals",
+  payables: "/payables",
+  people: "/people",
+  audit: "/audit",
   onboarding: "/onboarding",
   dashboard: "/dashboard",
   console: "/billing",
@@ -115,10 +121,129 @@ const PORTAL_VIEW_PATHS = {
   settings: "/settings",
 };
 
-function createPortalRoute(view = "dashboard", customerId = "") {
+const FINANCE_NAV_SECTIONS = [
+  {
+    section: "executive",
+    label: "Executive",
+    view: "dashboard",
+    icon: IconLayoutDashboard,
+    marker: "new",
+    helper: "Company summary",
+  },
+  {
+    section: "clients",
+    label: "Clients",
+    view: "clients",
+    icon: IconUsers,
+    marker: "existing",
+    helper: "Onboard + register",
+  },
+  {
+    section: "receivables",
+    label: "Receivables",
+    view: "receivables",
+    icon: IconFileInvoice,
+    marker: "existing",
+    helper: "Invoices + Zelle",
+  },
+  {
+    section: "payables",
+    label: "Payables",
+    view: "payables",
+    icon: IconFileInvoice,
+    marker: "new",
+    helper: "Money out",
+  },
+  {
+    section: "referrals",
+    label: "Referrals",
+    view: "referrals",
+    icon: IconTable,
+    marker: "extended",
+    helper: "Intake + rewards",
+  },
+  {
+    section: "people",
+    label: "People",
+    view: "people",
+    icon: IconUsers,
+    marker: "new",
+    helper: "Org directory",
+  },
+  {
+    section: "settings",
+    label: "Settings",
+    view: "settings",
+    icon: IconSettings,
+    marker: "extended",
+    helper: "Access + sync",
+  },
+  {
+    section: "audit",
+    label: "Audit",
+    view: "audit",
+    icon: IconTable,
+    marker: "extended",
+    helper: "Events + history",
+  },
+];
+
+function getFinanceSection(view) {
+  if (view === "clients" || view === "onboarding" || view === "search" || view === "customer360") {
+    return "clients";
+  }
+  if (view === "receivables" || view === "console") {
+    return "receivables";
+  }
+  if (view === "referrals" || view === "admin") {
+    return "referrals";
+  }
+  if (view === "payables") {
+    return "payables";
+  }
+  if (view === "people") {
+    return "people";
+  }
+  if (view === "settings") {
+    return "settings";
+  }
+  if (view === "audit") {
+    return "audit";
+  }
+  return "executive";
+}
+
+function getFinanceShellCopy({ view, customer }) {
+  const section = getFinanceSection(view);
+  const defaults = {
+    executive: ["Executive", "Company P&L, collections, referrals, and operational attention"],
+    clients: ["Clients", "Contract-first onboarding, searchable register, and 360 views"],
+    receivables: ["Receivables", "Invoices, Zelle/Gmail sync, payment confirmation, exceptions, and receipts"],
+    payables: ["Payables", "Referral bonuses and future money-out queues"],
+    referrals: ["Referrals", "Referral intake, relationships, rewards, and feedback"],
+    people: ["People", "Future employee and sales referrer directory"],
+    settings: ["Settings", "Access, Gmail sync, outbound email, and referral rules"],
+    audit: ["Audit", "Referral events, finance activity, and resolved exception history"],
+  };
+
+  if (view === "customer360" && customer) {
+    return ["Customer 360", `${customer.name} · ${customer.customerCode ?? customer.id}`];
+  }
+  if (view === "onboarding") {
+    return ["Client onboarding", "Upload contracts first, then confirm services, fees, and billing schedule"];
+  }
+  if (view === "search") {
+    return ["Customer register", "Excel-like search across customer ID, name, email, phone, and service"];
+  }
+
+  return defaults[section] ?? defaults.executive;
+}
+
+function createPortalRoute(view = "dashboard", customerId = "", referrerCode = "") {
   return {
     view,
     customerId,
+    referrerCode,
   };
 }
 
@@ -127,11 +252,20 @@ function buildPortalPath(route) {
     return `/customers/${encodeURIComponent(route.customerId)}`;
   }
 
+  if (route?.view === "publicReferral" && route.referrerCode) {
+    return `/refer/${encodeURIComponent(route.referrerCode)}`;
+  }
+
   return PORTAL_VIEW_PATHS[route?.view] ?? PORTAL_VIEW_PATHS.dashboard;
 }
 
 function parsePortalRoute(pathname = "/") {
   const normalizedPath = String(pathname || "/").replace(/\/+$/, "") || "/";
+  const referralGatewayMatch = normalizedPath.match(/^\/(?:refer|referral-gateway|r)\/([^/]+)$/);
+  if (referralGatewayMatch) {
+    return createPortalRoute("publicReferral", "", decodeURIComponent(referralGatewayMatch[1]));
+  }
+
   const customerMatch = normalizedPath.match(/^\/customers\/([^/]+)$/);
   if (customerMatch) {
     return createPortalRoute("customer360", decodeURIComponent(customerMatch[1]));
@@ -829,6 +963,7 @@ function App() {
   const [saveAlias, setSaveAlias] = useState(true);
   const [syncingInbox, setSyncingInbox] = useState(false);
   const [sendingReceiptId, setSendingReceiptId] = useState("");
+  const [receivablesTab, setReceivablesTab] = useState("Overview");
   const [referralProgramForm, setReferralProgramForm] = useState(() =>
     createReferralProgramForm(createInitialState().admin?.referralProgram),
   );
@@ -879,7 +1014,8 @@ function App() {
   const isPublicReferralRoute = view === "publicReferral";
   const isPublicFeedbackRoute = view === "publicFeedback";
   const isPublicRoute = isPublicReferralRoute || isPublicFeedbackRoute;
-  const navView = route.view === "customer360" ? "search" : route.view;
+  const publicReferralGatewayCode =
+    isPublicReferralRoute && route.referrerCode ? String(route.referrerCode).trim() : "";
 
   const searchResults = searchCustomers(state.customers, searchQuery);
   const needsAttention = buildAttentionItems(state.exceptions);
@@ -905,6 +1041,11 @@ function App() {
             customer.id === route.customerId || customer.customerCode === route.customerId,
         ) ?? null
       : null;
+  const activeFinanceSection = getFinanceSection(view);
+  const [shellTitle, shellSubtitle] = getFinanceShellCopy({
+    view,
+    customer: selectedCustomer360,
+  });
   const onboardingCustomerResults = onboardingCustomerQuery.trim()
     ? searchCustomersByIdentity(state.customers, onboardingCustomerQuery)
     : [];
@@ -1134,6 +1275,17 @@ function App() {
       return;
     }
 
+    if (publicReferralGatewayCode) {
+      setPublicReferralForm((current) =>
+        current.referrerCustomerCode === publicReferralGatewayCode
+          ? current
+          : {
+              ...current,
+              referrerCustomerCode: publicReferralGatewayCode,
+            },
+      );
+    }
+
     let cancelled = false;
     setPublicReferralLoading(true);
     setPublicReferralError("");
@@ -1171,7 +1323,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [isPublicReferralRoute]);
+  }, [isPublicReferralRoute, publicReferralGatewayCode]);
 
   function pushToast(message) {
     const id = crypto.randomUUID();
@@ -1578,7 +1730,10 @@ function App() {
 
     try {
       const data = await submitPublicReferral(publicReferralForm);
-      setPublicReferralForm(DEFAULT_PUBLIC_REFERRAL_FORM);
+      setPublicReferralForm({
+        ...DEFAULT_PUBLIC_REFERRAL_FORM,
+        referrerCustomerCode: publicReferralGatewayCode,
+      });
       setPublicReferralMessage(data.message);
     } catch (error) {
       setPublicReferralError(error.message || "Could not submit the referral right now.");
@@ -2131,6 +2286,7 @@ function updateOnboardingForm(field, value) {
         <PublicReferralView
           error={publicReferralError}
           form={publicReferralForm}
+          gatewayCode={publicReferralGatewayCode}
           loading={publicReferralLoading}
           message={publicReferralMessage}
           program={publicReferralProgram}
@@ -2197,61 +2353,48 @@ function updateOnboardingForm(field, value) {
       <aside className="sidebar">
         <div className="logo-wrap">
           <button className="wordmark logo-home" onClick={() => navigateToView("dashboard")} type="button">
+            <span className="brand-dot" />
             <span className="letters">setu</span>
             <span className="deck" />
           </button>
         </div>
-        <div className="nav-label">Finance</div>
-        <button
-          className={`nav-item ${navView === "onboarding" ? "active" : ""}`}
-          onClick={() => navigateToView("onboarding")}
-        >
-          <IconUsers size={17} />
-          Client onboarding
-        </button>
-        <button
-          className={`nav-item ${navView === "dashboard" ? "active" : ""}`}
-          onClick={() => navigateToView("dashboard")}
-        >
-          <IconLayoutDashboard size={17} />
-          Dashboard
-        </button>
-        <button
-          className={`nav-item ${navView === "console" ? "active" : ""}`}
-          onClick={() => navigateToView("console")}
-        >
-          <IconFileInvoice size={17} />
-          Billing console
-          <span className="badge">{counts.due + counts.confirm + counts.exceptions}</span>
-        </button>
-        <button
-          className={`nav-item ${navView === "search" ? "active" : ""}`}
-          onClick={() => navigateToView("search")}
-        >
-          <IconSearch size={17} />
-          Customer search
-        </button>
-        <button
-          className={`nav-item ${navView === "admin" ? "active" : ""}`}
-          onClick={() => navigateToView("admin")}
-        >
-          <IconTable size={17} />
-          Referral Program
-        </button>
+        <div className="nav-label">Finance console</div>
+        <nav className="section-nav" aria-label="Finance console sections">
+          {FINANCE_NAV_SECTIONS.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeFinanceSection === item.section;
+            const badgeValue =
+              item.section === "receivables"
+                ? counts.due + counts.confirm + counts.exceptions
+                : item.section === "referrals"
+                  ? (state.admin?.referralSubmissions ?? []).filter((submission) => submission.status === "submitted").length
+                  : null;
+            return (
+              <button
+                className={`nav-item ${isActive ? "active" : ""}`}
+                key={item.section}
+                onClick={() => navigateToView(item.view)}
+                type="button"
+              >
+                <Icon size={17} />
+                <span className="nav-item-copy">
+                  <span>{item.label}</span>
+                  <small>{item.helper}</small>
+                </span>
+                {badgeValue ? <span className="badge">{badgeValue}</span> : <span className={`nav-marker ${item.marker}`} />}
+              </button>
+            );
+          })}
+        </nav>
         <div className="sidebar-foot">
           <div className="row">
             <IconCircleCheckFilled size={13} />
             Signed in as {auth.username}
           </div>
-          <div className="sidebar-foot-note">Schedule sheet synced 5 min ago · phase 1</div>
+          <div className="sidebar-foot-note">
+            Gmail credentials preserved · auto-sync {gmailSyncStatus?.autoSync?.active ? "on" : "configurable"}
+          </div>
           <div className="sidebar-actions">
-            <button
-              className={`btn btn-sm sidebar-profile-action ${navView === "settings" ? "active" : ""}`}
-              onClick={() => navigateToView("settings")}
-            >
-              <IconSettings size={14} />
-              Settings
-            </button>
             <button className="btn btn-sm sidebar-profile-action" onClick={signOut}>
               Sign out
             </button>
@@ -2260,6 +2403,39 @@ function updateOnboardingForm(field, value) {
       </aside>
 
       <main className="main">
+        <header className="shell-topbar">
+          <div>
+            <h1>{shellTitle}</h1>
+            <div className="sub">{shellSubtitle}</div>
+          </div>
+          <div className="topbar-right">
+            <span className={`chip ${state.integrationStatus?.email?.configured ? "chip-ok" : "chip-warn"}`}>
+              <IconMail size={14} />
+              {state.integrationStatus?.email?.configured ? "Email ready" : "Email setup needed"}
+            </span>
+            <span
+              className={`chip ${
+                state.integrationStatus?.gmail?.authorized ? "chip-ok" : "chip-warn"
+              }`}
+            >
+              <IconRefresh size={14} />
+              {state.integrationStatus?.gmail?.authorized ? "Gmail authorized" : "Gmail needs auth"}
+            </span>
+            <span className="chip chip-scope">All regions</span>
+          </div>
+        </header>
+        {view === "clients" && (
+          <ClientsHubView
+            counts={counts}
+            customers={state.customers}
+            dueInvoices={state.dueInvoices}
+            pendingPayments={state.pendingPayments}
+            exceptions={state.exceptions}
+            onOpenOnboarding={() => navigateToView("onboarding")}
+            onOpenRegister={() => navigateToView("search")}
+            onOpenCustomer={openCustomer360}
+          />
+        )}
         {view === "onboarding" && (
           <OnboardingView
             contractUploads={contractUploads}
@@ -2306,6 +2482,8 @@ function updateOnboardingForm(field, value) {
         )}
         {view === "console" && (
           <ConsoleView
+            activeTab={receivablesTab}
+            onTabChange={setReceivablesTab}
             counts={counts}
             dueInvoices={state.dueInvoices}
             integrationStatus={state.integrationStatus}
@@ -2330,6 +2508,45 @@ function updateOnboardingForm(field, value) {
             onOpenExceptionReview={(exception) => setModal({ type: "exception-review", payload: exception })}
             sendingReceiptId={sendingReceiptId}
             syncingInbox={syncingInbox}
+          />
+        )}
+        {view === "receivables" && (
+          <ConsoleView
+            activeTab={receivablesTab}
+            onTabChange={setReceivablesTab}
+            counts={counts}
+            dueInvoices={state.dueInvoices}
+            integrationStatus={state.integrationStatus}
+            pendingPayments={state.pendingPayments}
+            payments={state.payments}
+            exceptions={state.exceptions}
+            exceptionHistory={state.exceptionHistory ?? []}
+            onOpenNewInvoice={openNewInvoice}
+            onOpenManualPayment={() => {
+              setManualPaymentForm(createDefaultManualPaymentForm());
+              setManualPaymentCustomerQuery("");
+              setModal({ type: "manual-payment", payload: null });
+            }}
+            onSendAll={sendAllInvoices}
+            onPreviewInvoice={openSendPreview}
+            onConfirmPayment={confirmPayment}
+            onConfirmAll={confirmAllPayments}
+            onSendReceipt={sendReceipt}
+            onSyncInbox={syncInbox}
+            onOpenPayment={(payment) => setModal({ type: "payment-review", payload: payment })}
+            onOpenMismatch={(exception) => setModal({ type: "mismatch", payload: exception })}
+            onOpenExceptionReview={(exception) => setModal({ type: "exception-review", payload: exception })}
+            sendingReceiptId={sendingReceiptId}
+            syncingInbox={syncingInbox}
+          />
+        )}
+        {view === "payables" && (
+          <PayablesHubView
+            invoices={state.invoices}
+            referrals={state.admin?.referrals ?? []}
+            rewards={state.admin?.rewards ?? []}
+            onOpenReferrals={() => navigateToView("referrals")}
+            onOpenReceivables={() => navigateToView("receivables")}
           />
         )}
         {view === "search" && (
@@ -2359,7 +2576,7 @@ function updateOnboardingForm(field, value) {
             onBack={closeCustomer360}
           />
         )}
-        {view === "admin" && (
+        {(view === "admin" || view === "referrals") && (
           <AdminView
             referralProgram={referralProgram}
             feedbackSubmissions={feedbackSubmissions}
@@ -2375,6 +2592,15 @@ function updateOnboardingForm(field, value) {
             onConvertSubmission={convertReferralSubmission}
             onDismissSubmission={dismissReferralSubmissionEntry}
             onUpdateFeedbackStatus={updateFeedbackStatus}
+          />
+        )}
+        {view === "people" && (
+          <PeopleHubView
+            customers={state.customers}
+            referralParties={state.admin?.referralParties ?? []}
+            referrals={state.admin?.referrals ?? []}
+            onOpenClients={() => navigateToView("clients")}
+            onOpenReferrals={() => navigateToView("referrals")}
           />
         )}
         {view === "settings" && (
@@ -2399,6 +2625,15 @@ function updateOnboardingForm(field, value) {
             }
             onSaveReferralProgram={saveReferralProgram}
             onSaveGmailSync={saveGmailSyncSettings}
+          />
+        )}
+        {view === "audit" && (
+          <AuditHubView
+            activity={state.activity ?? []}
+            exceptionHistory={state.exceptionHistory ?? []}
+            referralEvents={state.admin?.referralEvents ?? []}
+            onOpenReceivables={() => navigateToView("receivables")}
+            onOpenReferrals={() => navigateToView("referrals")}
           />
         )}
       </main>
@@ -2622,6 +2857,7 @@ function PortalLoginView({
 function PublicReferralView({
   error,
   form,
+  gatewayCode = "",
   loading,
   message,
   program,
@@ -2635,6 +2871,7 @@ function PublicReferralView({
         program.qualifyingPaidAmount,
       )} paid or ${program.qualificationMonths} months, whichever comes first.`
     : "Referral intake is currently paused for new submissions.";
+  const hasGatewayCode = Boolean(gatewayCode);
 
   return (
     <div className="auth-shell public-referral-shell">
@@ -2644,11 +2881,12 @@ function PublicReferralView({
             <span className="letters">setu</span>
             <span className="deck" />
           </span>
-          <div className="auth-kicker">Referral intake</div>
-          <h1>Share a friend or family referral.</h1>
+          <div className="auth-kicker">{hasGatewayCode ? "Referral gateway" : "Referral intake"}</div>
+          <h1>{hasGatewayCode ? "Share referrals from your gateway." : "Share a friend or family referral."}</h1>
           <p className="auth-copy">
-            This public form does not require a login. Finance will review each entry before it
-            becomes a tracked referral relationship in Setu Finance.
+            {hasGatewayCode
+              ? "This personal referral link pre-fills your customer ID. Finance still verifies your email before converting an entry into the referral program."
+              : "This public form does not require a login. Finance will review each entry before it becomes a tracked referral relationship in Setu Finance."}
           </p>
           <div className="auth-points">
             <div className="auth-point">
@@ -2667,7 +2905,10 @@ function PublicReferralView({
           <div className="chart-card public-referral-summary">
             <div className="detail-label">{program.programName || "Referral program"}</div>
             <div className="cust">{rulesSummary}</div>
-            <div className="sub">{program.programDescription}</div>
+            <div className="sub">
+              {program.programDescription}
+              {hasGatewayCode ? ` Gateway customer ID: ${gatewayCode}.` : ""}
+            </div>
           </div>
           <button className="btn btn-sm public-referral-portal-link" type="button" onClick={onOpenPortal}>
             Open finance portal
@@ -2676,10 +2917,12 @@ function PublicReferralView({
 
         <section className="auth-card public-referral-card">
           <div className="auth-card-head">
-            <div className="auth-card-label">No login required</div>
+            <div className="auth-card-label">{hasGatewayCode ? "Personalized gateway" : "No login required"}</div>
             <h2>Submit a referral</h2>
             <p className="auth-card-copy">
-              Use the same customer ID and email that Setu already has on file for you.
+              {hasGatewayCode
+                ? "Your customer ID is locked from this link. Use the same email Setu already has on file for you."
+                : "Use the same customer ID and email that Setu already has on file for you."}
             </p>
           </div>
 
@@ -2691,13 +2934,17 @@ function PublicReferralView({
           <form onSubmit={onSubmit}>
             <div className="field-row">
               <div className="field">
-                <label htmlFor="refer-referrer-code">Your customer ID</label>
+                <label htmlFor="refer-referrer-code">
+                  {hasGatewayCode ? "Gateway customer ID" : "Your customer ID"}
+                </label>
                 <input
                   id="refer-referrer-code"
                   value={form.referrerCustomerCode}
                   onChange={(event) => onFieldChange("referrerCustomerCode", event.target.value)}
+                  readOnly={hasGatewayCode}
                   placeholder="100001"
                 />
+                {hasGatewayCode && <div className="field-help">Loaded from this user's referral gateway link.</div>}
               </div>
               <div className="field">
                 <label htmlFor="refer-referrer-email">Your email</label>
@@ -4060,9 +4307,9 @@ function DashboardView({
     <div>
       <div className="topbar">
         <div>
-          <h1>Finance dashboard</h1>
+          <h1>Executive dashboard</h1>
           <div className="sub">
-            {dashboard.dateLabel} · month to date
+            {dashboard.dateLabel} · month to date · summary view
           </div>
         </div>
         <div className="topbar-right">
@@ -4233,7 +4480,331 @@ function DashboardView({
   );
 }
 
+function ClientsHubView({
+  counts,
+  customers,
+  dueInvoices,
+  pendingPayments,
+  exceptions,
+  onOpenCustomer,
+  onOpenOnboarding,
+  onOpenRegister,
+}) {
+  const recentCustomers = [...customers]
+    .sort((left, right) => getComparableTime(right.profile?.onboardedAt) - getComparableTime(left.profile?.onboardedAt))
+    .slice(0, 8);
+  const customersWithWork = new Set([
+    ...dueInvoices.map((invoice) => invoice.customerId),
+    ...pendingPayments.map((payment) => payment.customerId),
+    ...exceptions.map((exception) => exception.customerId).filter(Boolean),
+  ]);
+
+  return (
+    <div>
+      <div className="content">
+        <div className="ia-hero">
+          <div>
+            <div className="detail-label">Clients</div>
+            <h2>Contract-first intake, register, and customer 360 now live in one section.</h2>
+            <p>
+              This wraps the existing onboarding and search pages, so contract parsing, service
+              prefill, customer IDs, and 360 history continue using the current backend paths.
+            </p>
+          </div>
+          <div className="ia-hero-actions">
+            <button className="btn btn-primary" onClick={onOpenOnboarding}>
+              Upload contract / onboard
+            </button>
+            <button className="btn" onClick={onOpenRegister}>
+              Open customer register
+            </button>
+          </div>
+        </div>
+
+        <div className="metrics c4">
+          <MetricCard accent label="Clients" value={counts.onboarded} delta="current customer records" />
+          <MetricCard label="Draft invoices" value={counts.due} delta="ready in Receivables" />
+          <MetricCard label="Payments matched" value={counts.confirm} delta="waiting for review" />
+          <MetricCard label="Client exceptions" value={counts.exceptions} delta="need human decision" />
+        </div>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Recent clients</h2>
+            <button className="btn btn-sm btn-ghost" onClick={onOpenRegister}>
+              Search all <IconArrowRight size={14} />
+            </button>
+          </div>
+          <div className="section-desc">
+            Click a row to open the existing full 360 page with contracts, services, invoices,
+            payments, referrals, and history.
+          </div>
+          <div className="tcard">
+            <div className="trow head clients-hub-grid">
+              <div>Customer</div>
+              <div>Primary contact</div>
+              <div>Services</div>
+              <div>Status</div>
+            </div>
+            {recentCustomers.map((customer) => (
+              <button className="trow clients-hub-grid trow-button" key={customer.id} onClick={() => onOpenCustomer(customer)}>
+                <div>
+                  <div className="cust">{customer.name}</div>
+                  <div className="sub mono">{customer.customerCode ?? customer.id}</div>
+                </div>
+                <div className="sub">
+                  {getPrimaryCustomerEmail(customer)}
+                  <br />
+                  {getPrimaryCustomerPhone(customer)}
+                </div>
+                <div className="sub">
+                  {summarizeCustomerServices(customer).primary}
+                  <br />
+                  {summarizeCustomerServices(customer).detail}
+                </div>
+                <div>
+                  <span className={`search-status-chip tone-${customersWithWork.has(customer.id) ? "warn" : "success"}`}>
+                    {customersWithWork.has(customer.id) ? "Active work" : "Current"}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function PayablesHubView({ invoices, referrals, rewards, onOpenReceivables, onOpenReferrals }) {
+  const availableRewards = rewards.filter((reward) => reward.status === "available");
+  const appliedRewards = rewards.filter((reward) => reward.status === "applied");
+  const referralDiscountInvoices = invoices.filter((invoice) => Number(invoice.referralBonusAmount || 0) > 0);
+  const availableRewardTotal = availableRewards.reduce((total, reward) => total + Number(reward.amount || 0), 0);
+  const appliedRewardTotal = appliedRewards.reduce((total, reward) => total + Number(reward.amount || 0), 0);
+  const verifiedReferrals = referrals.filter((referral) => referral.legitimacyStatus === "verified");
+
+  return (
+    <div>
+      <div className="content">
+        <div className="ia-hero">
+          <div>
+            <div className="detail-label">Payables</div>
+            <h2>Money-out foundation, with client referral discounts kept on the existing invoice path.</h2>
+            <p>
+              This section is the v2 home for future bonuses-to-pay, payroll, vendor bills,
+              reimbursements, and expenses. Today it reads the live referral reward ledger without
+              rerouting customer referral discounts.
+            </p>
+          </div>
+          <div className="ia-hero-actions">
+            <button className="btn btn-primary" onClick={onOpenReferrals}>
+              Open referral rewards
+            </button>
+            <button className="btn" onClick={onOpenReceivables}>
+              Open invoices
+            </button>
+          </div>
+        </div>
+
+        <div className="metrics c4">
+          <MetricCard accent label="Available discounts" value={formatCurrency(availableRewardTotal)} delta={`${availableRewards.length} rewards`} />
+          <MetricCard label="Applied discounts" value={formatCurrency(appliedRewardTotal)} delta={`${appliedRewards.length} rewards`} />
+          <MetricCard label="Invoices discounted" value={referralDiscountInvoices.length} delta="via referral_bonus_amount" />
+          <MetricCard label="Verified referrals" value={verifiedReferrals.length} delta="eligible client path" />
+        </div>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Current payable categories</h2>
+          </div>
+          <div className="section-desc">
+            Phase-safe view of the v2 payables IA. Cash payouts, payroll, vendor bills, reimbursements,
+            and Excel expenses remain future additive phases.
+          </div>
+          <div className="ia-card-grid">
+            {[
+              ["Referral payouts", "Future cash payout queue for employee and partner referrers.", "Future"],
+              ["Client invoice discounts", "Live today through customer_reward_ledger and invoice_reward_applications.", "Live"],
+              ["Payroll", "Future employee payables source.", "Planned"],
+              ["Vendor bills", "Future AP ledger category.", "Planned"],
+              ["Reimbursements", "Future employee reimbursement queue.", "Planned"],
+              ["Expenses", "Future Excel import into payables.", "Planned"],
+            ].map(([title, copy, status]) => (
+              <div className="detail-card ia-mini-card" key={title}>
+                <div className="detail-inline-head">
+                  <div>
+                    <div className="detail-title">{title}</div>
+                    <div className="sub">{copy}</div>
+                  </div>
+                  <span className={`search-status-chip tone-${status === "Live" ? "success" : "neutral"}`}>{status}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function PeopleHubView({ customers, referralParties, referrals, onOpenClients, onOpenReferrals }) {
+  const clientParties = referralParties.filter((party) => party.partyType === "client");
+  const customerReferrers = new Set(referrals.map((referral) => referral.referrerCustomerId).filter(Boolean));
+
+  return (
+    <div>
+      <div className="content">
+        <div className="ia-hero">
+          <div>
+            <div className="detail-label">People</div>
+            <h2>Future employee and sales directory, connected to today&apos;s customer referrers.</h2>
+            <p>
+              The v2 design expands referral parties beyond clients. This local build shows the
+              current normalized referral parties while preserving customer records as the source of truth.
+            </p>
+          </div>
+          <div className="ia-hero-actions">
+            <button className="btn btn-primary" onClick={onOpenReferrals}>
+              Review referrals
+            </button>
+            <button className="btn" onClick={onOpenClients}>
+              Open clients
+            </button>
+          </div>
+        </div>
+
+        <div className="metrics c3">
+          <MetricCard accent label="Referral parties" value={referralParties.length} delta="normalized records" />
+          <MetricCard label="Client parties" value={clientParties.length} delta="invoice discount path" />
+          <MetricCard label="Customer referrers" value={customerReferrers.size} delta="legacy ID preserved" />
+        </div>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Current referral parties</h2>
+          </div>
+          <div className="section-desc">
+            Employee, sales, and partner directories are planned as additive phases. Existing client
+            referrers are already normalized here.
+          </div>
+          <div className="tcard">
+            <div className="trow head people-grid">
+              <div>Party</div>
+              <div>Type</div>
+              <div>Linked customer</div>
+              <div>Referral code</div>
+            </div>
+            {referralParties.map((party) => (
+              <div className="trow people-grid" key={party.id}>
+                <div>
+                  <div className="cust">{party.displayName}</div>
+                  <div className="sub">{party.email ?? "No email captured"}</div>
+                </div>
+                <div><span className="search-status-chip tone-success">{party.partyType}</span></div>
+                <div className="sub">{party.customerName ?? customers.find((customer) => customer.id === party.customerId)?.name ?? "Not linked"}</div>
+                <div className="mono">{party.referralCode ?? "Not minted"}</div>
+              </div>
+            ))}
+            {!referralParties.length && <div className="empty">No referral parties have been created yet.</div>}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function AuditHubView({ activity, exceptionHistory, referralEvents, onOpenReceivables, onOpenReferrals }) {
+  const latestActivity = [...activity].slice(0, 8);
+  const latestReferralEvents = [...referralEvents].slice(0, 8);
+  const latestExceptions = [...exceptionHistory].slice(0, 6);
+
+  return (
+    <div>
+      <div className="content">
+        <div className="ia-hero">
+          <div>
+            <div className="detail-label">Audit</div>
+            <h2>One place to explain what happened, who did it, and when.</h2>
+            <p>
+              This combines the existing human-readable activity feed with resolved exception history
+              and the new structured referral event trail.
+            </p>
+          </div>
+          <div className="ia-hero-actions">
+            <button className="btn btn-primary" onClick={onOpenReceivables}>
+              Receivables history
+            </button>
+            <button className="btn" onClick={onOpenReferrals}>
+              Referral history
+            </button>
+          </div>
+        </div>
+
+        <div className="metrics c3">
+          <MetricCard accent label="Activity items" value={activity.length} delta="global feed" />
+          <MetricCard label="Referral events" value={referralEvents.length} delta="structured audit" />
+          <MetricCard label="Resolved exceptions" value={exceptionHistory.length} delta="actor retained" />
+        </div>
+
+        <div className="two-col">
+          <section className="section no-gap">
+            <div className="section-head"><h2>Referral events</h2></div>
+            <div className="tcard">
+              {latestReferralEvents.map((event) => (
+                <div className="audit-row" key={event.id}>
+                  <span className="mono">{formatDateTimeValue(event.createdAt)}</span>
+                  <div>
+                    <div className="cust">{event.eventType}</div>
+                    <div className="sub">{event.referralCode ?? event.referralId ?? "No referral code"} · {event.actorUsername ?? event.actorKind}</div>
+                  </div>
+                </div>
+              ))}
+              {!latestReferralEvents.length && <div className="empty">No referral events yet.</div>}
+            </div>
+          </section>
+          <section className="section no-gap">
+            <div className="section-head"><h2>Finance activity</h2></div>
+            <div className="tcard">
+              {latestActivity.map((item) => (
+                <div className="audit-row" key={item.id}>
+                  <span className="mono">{item.actorUsername ?? "system"}</span>
+                  <div>
+                    <div className="cust">{item.label}</div>
+                    <div className="sub">Activity event</div>
+                  </div>
+                </div>
+              ))}
+              {!latestActivity.length && <div className="empty">No activity yet.</div>}
+            </div>
+          </section>
+        </div>
+
+        <section className="section section-gap">
+          <div className="section-head"><h2>Resolved exception history</h2></div>
+          <div className="tcard">
+            {latestExceptions.map((item) => (
+              <div className="audit-row audit-row-wide" key={item.id}>
+                <span className="mono">{formatDateTimeValue(item.resolvedAt)}</span>
+                <div>
+                  <div className="cust">{formatExceptionResolutionAction(item.resolutionAction)}</div>
+                  <div className="sub">
+                    {item.senderName} · {item.resolvedCustomerName ?? "No customer linked"} · by {item.resolvedByUsername ?? "unknown"}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!latestExceptions.length && <div className="empty">No resolved exceptions yet.</div>}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 function ConsoleView({
+  activeTab = "Overview",
+  onTabChange = () => {},
   counts,
   dueInvoices,
   integrationStatus,
@@ -4275,13 +4846,27 @@ function ConsoleView({
   const recentExceptionHistory = [...(exceptionHistory ?? [])]
     .sort((left, right) => getComparableTime(right.resolvedAt) - getComparableTime(left.resolvedAt))
     .slice(0, 8);
+  const receivablesTabs = [
+    { label: "Overview", count: null },
+    { label: "Invoices", count: dueInvoices.length },
+    { label: "Payments to confirm", count: pendingPayments.length },
+    { label: "Exceptions", count: exceptions.length },
+    { label: "Receipts", count: completedPayments.length },
+    { label: "Inbox sync", count: null },
+  ];
+  const currentTab = receivablesTabs.some((tab) => tab.label === activeTab) ? activeTab : "Overview";
+  const inboxSyncCopy = gmailConfigured
+    ? gmailAuthorized
+      ? "Gmail is authorized for Zelle subject-only sync."
+      : "Gmail is configured but needs reauthorization before sync can run."
+    : "Gmail is not configured yet.";
 
   return (
     <div>
       <div className="topbar">
         <div>
-          <h1>Billing console</h1>
-          <div className="sub">Schedule sheet synced 5 min ago · Bloom no longer needed</div>
+          <h1>Receivables</h1>
+          <div className="sub">Invoices, Zelle payments, exceptions, receipts, and inbox sync.</div>
         </div>
         <div className="topbar-right">
           <span className="chip">
@@ -4319,12 +4904,95 @@ function ConsoleView({
         </div>
       </div>
       <div className="content">
-        <div className="metrics c3">
-          <MetricCard accent label="Invoices due to send" value={counts.due} />
-          <MetricCard label="Payments to confirm" value={counts.confirm} />
-          <MetricCard label="Exceptions" value={counts.exceptions} />
+        <div className="finance-tabs" role="tablist" aria-label="Receivables workspace">
+          {receivablesTabs.map((tab) => (
+            <button
+              className={`finance-tab ${currentTab === tab.label ? "active" : ""}`}
+              key={tab.label}
+              onClick={() => onTabChange(tab.label)}
+              role="tab"
+              type="button"
+              aria-selected={currentTab === tab.label}
+            >
+              {tab.label}
+              {typeof tab.count === "number" && <span>{tab.count}</span>}
+            </button>
+          ))}
         </div>
 
+        {currentTab === "Overview" && (
+          <>
+            <WorkflowStrip activeStep="invoice" />
+
+            <div className="metrics c3">
+              <MetricCard accent label="Invoices due to send" value={counts.due} />
+              <MetricCard label="Payments to confirm" value={counts.confirm} />
+              <MetricCard label="Exceptions" value={counts.exceptions} />
+            </div>
+
+            <section className="section">
+              <div className="section-head">
+                <h2>Receivables command center</h2>
+                <button className="btn btn-sm" onClick={onSyncInbox} disabled={syncingInbox}>
+                  <IconRefresh size={14} />
+                  {syncingInbox ? "Syncing..." : "Run inbox sync"}
+                </button>
+              </div>
+              <div className="section-desc">
+                Move through the same operational flow as the wireframe: generate invoices, confirm
+                money received, resolve exceptions, then send receipts.
+              </div>
+              <div className="receivables-command-grid">
+                <button className="detail-card receivables-command-card" onClick={() => onTabChange("Invoices")} type="button">
+                  <div className="detail-label">1. Invoice queue</div>
+                  <div className="detail-title">{counts.due} ready to send</div>
+                  <div className="sub">Scheduled invoices and referral-discounted invoices remain on the existing send path.</div>
+                </button>
+                <button className="detail-card receivables-command-card" onClick={() => onTabChange("Payments to confirm")} type="button">
+                  <div className="detail-label">2. Payment review</div>
+                  <div className="detail-title">{counts.confirm} matched payments</div>
+                  <div className="sub">Apply high-confidence Zelle or manual payments before any receipt is sent.</div>
+                </button>
+                <button className="detail-card receivables-command-card" onClick={() => onTabChange("Exceptions")} type="button">
+                  <div className="detail-label">3. Exceptions</div>
+                  <div className="detail-title">{counts.exceptions} need decision</div>
+                  <div className="sub">Manual review, duplicate protection, abuse flags, and resolution history stay together.</div>
+                </button>
+                <button className="detail-card receivables-command-card" onClick={() => onTabChange("Receipts")} type="button">
+                  <div className="detail-label">4. Receipts</div>
+                  <div className="detail-title">{completedPayments.length} completed</div>
+                  <div className="sub">Send or re-send PDF receipts only after transactions are applied to the ledger.</div>
+                </button>
+              </div>
+            </section>
+
+            <section className="section">
+              <div className="section-head">
+                <h2>Automation status</h2>
+                <button className="btn btn-sm" onClick={() => onTabChange("Inbox sync")}>
+                  View sync setup
+                </button>
+              </div>
+              <div className="sync-status-panel">
+                <div>
+                  <div className="detail-label">Gmail / Zelle inbox</div>
+                  <div className="detail-title">{inboxSyncCopy}</div>
+                  <div className="sub">
+                    {gmailSyncAt ? `Last sync: ${new Date(gmailSyncAt).toLocaleString()}.` : "No sync has run yet."}
+                    {gmailAutoSyncActive && gmailNextSyncAt
+                      ? ` Next automatic sync: ${new Date(gmailNextSyncAt).toLocaleString()}.`
+                      : ""}
+                  </div>
+                </div>
+                <span className={`search-status-chip tone-${gmailConfigured && gmailAuthorized ? "success" : "warn"}`}>
+                  {gmailAutoSyncLabel}
+                </span>
+              </div>
+            </section>
+          </>
+        )}
+
+        {currentTab === "Invoices" && (
         <section className="section">
           <div className="section-head">
             <h2>Due to send today</h2>
@@ -4373,7 +5041,9 @@ function ConsoleView({
             )}
           </div>
         </section>
+        )}
 
+        {currentTab === "Payments to confirm" && (
         <section className="section">
           <div className="section-head">
             <h2>Payments to confirm</h2>
@@ -4443,7 +5113,9 @@ function ConsoleView({
             )}
           </div>
         </section>
+        )}
 
+        {currentTab === "Receipts" && (
         <section className="section">
           <div className="section-head">
             <h2>Completed transactions</h2>
@@ -4522,7 +5194,10 @@ function ConsoleView({
             )}
           </div>
         </section>
+        )}
 
+        {currentTab === "Exceptions" && (
+        <>
         <section className="section">
           <div className="section-head">
             <h2>Exceptions</h2>
@@ -4643,6 +5318,56 @@ function ConsoleView({
             )}
           </div>
         </section>
+        </>
+        )}
+
+        {currentTab === "Inbox sync" && (
+          <section className="section">
+            <div className="section-head">
+              <h2>Inbox sync</h2>
+              <button className="btn btn-sm btn-primary" onClick={onSyncInbox} disabled={syncingInbox}>
+                <IconRefresh size={14} />
+                {syncingInbox ? "Syncing..." : "Sync Zelle inbox"}
+              </button>
+            </div>
+            <div className="section-desc">
+              Sync only reads Zelle payment notifications with subject line "You received money
+              with Zelle", keeps incremental sync history, and routes every candidate through the
+              matching and duplicate-protection layer before review.
+            </div>
+            <div className="sync-workspace">
+              <div className="detail-card sync-workspace-card">
+                <div className="detail-label">Connection</div>
+                <div className="detail-title">
+                  {gmailConfigured
+                    ? gmailAuthorized
+                      ? "Gmail connected"
+                      : "Gmail needs reauthorization"
+                    : "Gmail not configured"}
+                </div>
+                <div className="sub">{inboxSyncCopy}</div>
+              </div>
+              <div className="detail-card sync-workspace-card">
+                <div className="detail-label">Schedule</div>
+                <div className="detail-title">{gmailAutoSyncLabel}</div>
+                <div className="sub">
+                  {gmailAutoSyncActive && gmailNextSyncAt
+                    ? `Next run: ${new Date(gmailNextSyncAt).toLocaleString()}`
+                    : "Admins can adjust sync cadence in Settings."}
+                </div>
+              </div>
+              <div className="detail-card sync-workspace-card">
+                <div className="detail-label">Last sync</div>
+                <div className="detail-title">
+                  {gmailSyncAt ? new Date(gmailSyncAt).toLocaleString() : "Not run yet"}
+                </div>
+                <div className="sub">
+                  New email candidates land in Payments to confirm or Exceptions depending on match confidence.
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
       </div>
     </div>
   );

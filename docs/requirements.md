@@ -84,7 +84,8 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Customer search must support first name, last name, email, phone, customer ID, and aliases.
 - Customer status must be clear and finance-readable, such as active, draft queued, awaiting payment, payment ready, overdue, duplicate review, mismatch, or needs follow-up.
 - Clicking a customer must open a full page customer 360 view, not a transient popover.
-- Browser back and forward navigation must work across dashboard, onboarding, billing, customer search, customer 360, referral program, and settings pages.
+- Browser back and forward navigation must work across the v2 finance sections and legacy routes: Executive/dashboard, Clients/onboarding/customer register/customer 360, Receivables/billing, Referrals/referral program, Payables, People, Settings, and Audit.
+- The Receivables workspace must separate the finance queues into clear tabs for overview, invoices, payments to confirm, exceptions, receipts, and inbox sync without removing the existing invoice, payment, exception, manual payment, sync, or receipt actions.
 
 ### 4.4 Services And Enrollment History
 
@@ -178,10 +179,16 @@ Setu Finance is an internal finance operations portal that starts from signed cl
   - qualification: `$3,000` paid or 6 months, whichever comes first
 - Referral relationships must store:
   - referrer
+  - normalized referrer party
   - referred customer
+  - unique referral code
   - relationship label
   - referral date
   - rule snapshot at referral creation
+  - legitimacy status and review notes
+- The referral data model must support customer/client referrers now and remain extensible for employees, sales partners, and external partners later.
+- Existing customer-referral links must remain intact through `referrer_customer_id` while the newer party linkage is added beside it.
+- Referral lifecycle actions must be auditable through referral events.
 - Referral bonuses must be applied as future invoice discounts.
 - No direct cash or credit payout should be made outside invoice discounting.
 - Qualified referral rewards should appear clearly in green/reviewable sections.
@@ -190,7 +197,7 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 
 ### 4.10 Dashboard And Reporting
 
-- Dashboard must default as the home page.
+- The v2 `Executive` dashboard must default as the signed-in home page while the legacy `/dashboard` route remains valid.
 - Dashboard should summarize:
   - collected amount
   - outstanding amount
