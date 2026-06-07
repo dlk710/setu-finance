@@ -15,6 +15,7 @@ import {
   IconSearch,
   IconSettings,
   IconTable,
+  IconTrash,
   IconTrendingDown,
   IconTrendingUp,
   IconUsers,
@@ -879,6 +880,8 @@ function formatExceptionResolutionAction(action) {
     apply_credit: "Marked for future credit",
     mark_duplicate: "Archived duplicate",
     accept_transaction: "Accepted transaction",
+    reject_archive: "Rejected and archived",
+    deleted_after_archive: "Deleted after archive",
   };
 
   return labels[action] ?? action?.replaceAll("_", " ") ?? "Resolved";
@@ -1672,6 +1675,63 @@ function App() {
       setState(data.state);
       closeModal();
       pushToast(toastLabel || data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    }
+  }
+
+  async function acceptExceptionTransaction(exceptionId, candidate = null) {
+    try {
+      const data = await apiRequest(`/api/exceptions/${exceptionId}/resolve`, {
+        method: "POST",
+        body: {
+          actionType: "accept_transaction",
+          candidateCustomerId: candidate?.customerId ?? candidate?.id ?? null,
+          saveAlias,
+        },
+      });
+      setState(data.state);
+      closeModal();
+      pushToast(data.message || "Transaction approved and applied.");
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    }
+  }
+
+  async function rejectArchiveException(exceptionId) {
+    try {
+      const data = await apiRequest(`/api/exceptions/${exceptionId}/resolve`, {
+        method: "POST",
+        body: {
+          actionType: "reject_archive",
+        },
+      });
+      setState(data.state);
+      closeModal();
+      pushToast(data.message || "Exception rejected and archived.");
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    }
+  }
+
+  async function deleteArchivedException(exceptionId, form) {
+    try {
+      const data = await apiRequest(`/api/exceptions/${exceptionId}/delete-archived`, {
+        method: "POST",
+        body: form,
+      });
+      setState(data.state);
+      closeModal();
+      pushToast(data.message);
     } catch (error) {
       if (handleUnauthorized(error)) {
         return;
@@ -2622,6 +2682,7 @@ function updateOnboardingForm(field, value) {
             pendingPayments={state.pendingPayments}
             payments={state.payments}
             exceptions={state.exceptions}
+            archivedExceptions={state.archivedExceptions ?? []}
             exceptionHistory={state.exceptionHistory ?? []}
             onOpenNewInvoice={openNewInvoice}
             onOpenManualPayment={() => {
@@ -2638,6 +2699,7 @@ function updateOnboardingForm(field, value) {
             onOpenPayment={(payment) => setModal({ type: "payment-review", payload: payment })}
             onOpenMismatch={(exception) => setModal({ type: "mismatch", payload: exception })}
             onOpenExceptionReview={(exception) => setModal({ type: "exception-review", payload: exception })}
+            onOpenArchivedDelete={(exception) => setModal({ type: "delete-archived-exception", payload: exception })}
             sendingReceiptId={sendingReceiptId}
             syncingInbox={syncingInbox}
           />
@@ -2652,6 +2714,7 @@ function updateOnboardingForm(field, value) {
             pendingPayments={state.pendingPayments}
             payments={state.payments}
             exceptions={state.exceptions}
+            archivedExceptions={state.archivedExceptions ?? []}
             exceptionHistory={state.exceptionHistory ?? []}
             onOpenNewInvoice={openNewInvoice}
             onOpenManualPayment={() => {
@@ -2668,6 +2731,7 @@ function updateOnboardingForm(field, value) {
             onOpenPayment={(payment) => setModal({ type: "payment-review", payload: payment })}
             onOpenMismatch={(exception) => setModal({ type: "mismatch", payload: exception })}
             onOpenExceptionReview={(exception) => setModal({ type: "exception-review", payload: exception })}
+            onOpenArchivedDelete={(exception) => setModal({ type: "delete-archived-exception", payload: exception })}
             sendingReceiptId={sendingReceiptId}
             syncingInbox={syncingInbox}
           />
@@ -2831,6 +2895,7 @@ function updateOnboardingForm(field, value) {
               "Overpayment marked for future credit review.",
             )
           }
+          onReject={() => rejectArchiveException(modal.payload?.id)}
           onClose={closeModal}
         />
       </ModalShell>
@@ -2842,21 +2907,18 @@ function updateOnboardingForm(field, value) {
           saveAlias={saveAlias}
           onChangeSaveAlias={setSaveAlias}
           onClose={closeModal}
+          onAcceptCandidate={(candidate) => acceptExceptionTransaction(modal.payload?.id, candidate)}
           onResolveCustomer={(candidate) => resolveExceptionCustomer(modal.payload?.id, candidate)}
-          onArchiveDuplicate={() =>
-            resolveMismatch(
-              modal.payload?.id,
-              "mark_duplicate",
-              "Potential duplicate archived. It will not be counted or applied again.",
-            )
-          }
-          onAcceptTransaction={() =>
-            resolveMismatch(
-              modal.payload?.id,
-              "accept_transaction",
-              "Transaction accepted and applied. Receipt can be sent separately.",
-            )
-          }
+          onRejectArchive={() => rejectArchiveException(modal.payload?.id)}
+          onAcceptTransaction={() => acceptExceptionTransaction(modal.payload?.id)}
+        />
+      </ModalShell>
+
+      <ModalShell show={modal.type === "delete-archived-exception"} onClose={closeModal}>
+        <DeleteArchivedExceptionModal
+          exception={modal.payload}
+          onClose={closeModal}
+          onDelete={(form) => deleteArchivedException(modal.payload?.id, form)}
         />
       </ModalShell>
 
@@ -4566,8 +4628,6 @@ function DashboardView({
         </div>
       </div>
       <div className="content">
-        <WorkflowStrip activeStep="invoice" />
-
         <div className="metrics c5">
           <MetricCard
             accent
@@ -5107,6 +5167,7 @@ function ConsoleView({
   pendingPayments,
   payments,
   exceptions,
+  archivedExceptions = [],
   exceptionHistory,
   onOpenPayment,
   onOpenNewInvoice,
@@ -5119,6 +5180,7 @@ function ConsoleView({
   onSyncInbox,
   onOpenMismatch,
   onOpenExceptionReview,
+  onOpenArchivedDelete,
   sendingReceiptId,
   syncingInbox,
 }) {
@@ -5218,8 +5280,6 @@ function ConsoleView({
 
         {currentTab === "Overview" && (
           <>
-            <WorkflowStrip activeStep="invoice" />
-
             <div className="metrics c3">
               <MetricCard accent label="Invoices due to send" value={counts.due} />
               <MetricCard label="Payments to confirm" value={counts.confirm} />
@@ -5499,7 +5559,8 @@ function ConsoleView({
             <h2>Exceptions</h2>
           </div>
           <div className="section-desc">
-            The system could not safely auto-match these. A human decision is required.
+            The system could not safely auto-match these. Approve applies or advances the
+            transaction; reject archives it into the preserved review bucket.
           </div>
           <div className="tcard">
             <div className="trow head exception-grid">
@@ -5546,7 +5607,7 @@ function ConsoleView({
                     ? formatTransactionDate(exception.transactionDate)
                     : exception.dateLabel}
                 </div>
-                <div>
+                <div className="exception-actions">
                   <button
                     className="btn btn-sm"
                     onClick={() =>
@@ -5557,6 +5618,21 @@ function ConsoleView({
                   >
                     Review
                   </button>
+                  {exception.kind !== "duplicate" ? (
+                    <button
+                      className="btn btn-sm btn-primary"
+                      onClick={() =>
+                        exception.kind === "mismatch"
+                          ? onOpenMismatch(exception)
+                          : onOpenExceptionReview(exception)
+                      }
+                    >
+                      Approve
+                    </button>
+                  ) : null}
+                  <button className="btn btn-sm btn-danger" onClick={() => onOpenExceptionReview(exception)}>
+                    Reject
+                  </button>
                 </div>
               </div>
             ))}
@@ -5564,6 +5640,55 @@ function ConsoleView({
               <div className="empty">
                 <IconCheck size={14} />
                 No exceptions
+              </div>
+            )}
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Rejected / archived bucket</h2>
+          </div>
+          <div className="section-desc">
+            Rejected records stay here so finance does not lose data. Deleting from this bucket is
+            soft-delete only and requires a typed confirmation plus reason.
+          </div>
+          <div className="tcard">
+            <div className="trow head archived-exception-grid">
+              <div>Archived</div>
+              <div>Sender / transaction</div>
+              <div>Reason</div>
+              <div>Archived by</div>
+              <div />
+            </div>
+            {archivedExceptions.map((exception) => (
+              <div className="trow archived-exception-grid" key={exception.id}>
+                <div className="mono">
+                  {formatDateTimeValue(exception.archivedAt ?? exception.resolvedAt)}
+                </div>
+                <div>
+                  <div className="cust">{exception.senderName}</div>
+                  <div className="sub mono">
+                    {formatCurrency(exception.amount ?? 0)} · {exception.transactionReference ?? "No ref"}
+                  </div>
+                </div>
+                <div>
+                  <div className="cust">{formatExceptionResolutionAction(exception.resolutionAction)}</div>
+                  <div className="sub">{exception.summary}</div>
+                </div>
+                <div className="sub">{exception.archivedByUsername ?? "Unknown admin"}</div>
+                <div className="exception-actions">
+                  <button className="btn btn-sm btn-danger" onClick={() => onOpenArchivedDelete(exception)}>
+                    <IconTrash size={13} />
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!archivedExceptions.length && (
+              <div className="empty">
+                <IconCheck size={14} />
+                No rejected or archived exceptions yet
               </div>
             )}
           </div>
@@ -7941,7 +8066,7 @@ function ManualPaymentModal({
   );
 }
 
-function MismatchModal({ exception, onAccept, onCredit, onClose }) {
+function MismatchModal({ exception, onAccept, onCredit, onClose, onReject }) {
   if (!exception) {
     return null;
   }
@@ -8034,10 +8159,13 @@ function MismatchModal({ exception, onAccept, onCredit, onClose }) {
       </div>
       <div className="modal-foot">
         <button className="btn btn-primary" onClick={onAccept}>
-          Prepare full-payment apply
+          Approve full amount
         </button>
         <button className="btn" onClick={onCredit}>
           Apply {formatCurrency(difference)} as credit
+        </button>
+        <button className="btn btn-danger" onClick={onReject}>
+          Reject / archive
         </button>
         <button className="btn" onClick={onClose}>
           Cancel
@@ -8053,8 +8181,9 @@ function ExceptionReviewModal({
   saveAlias,
   onChangeSaveAlias,
   onClose,
+  onAcceptCandidate,
   onResolveCustomer,
-  onArchiveDuplicate,
+  onRejectArchive,
   onAcceptTransaction,
 }) {
   const [customerQuery, setCustomerQuery] = useState("");
@@ -8129,9 +8258,15 @@ function ExceptionReviewModal({
                 <div className="meta">{candidate.note}</div>
                 <button
                   className={`btn btn-sm ${candidate.primary ? "btn-primary" : ""}`}
+                  onClick={() => onAcceptCandidate(candidate)}
+                >
+                  Approve &amp; apply
+                </button>
+                <button
+                  className="btn btn-sm"
                   onClick={() => onResolveCustomer(candidate)}
                 >
-                  Match this
+                  Match only
                 </button>
               </div>
             ))}
@@ -8193,9 +8328,15 @@ function ExceptionReviewModal({
                       </div>
                       <button
                         className="btn btn-sm btn-primary"
+                        onClick={() => onAcceptCandidate(customer)}
+                      >
+                        Approve &amp; apply
+                      </button>
+                      <button
+                        className="btn btn-sm"
                         onClick={() => onResolveCustomer(customer)}
                       >
-                        Assign &amp; move forward
+                        Assign only
                       </button>
                     </div>
                   ))
@@ -8218,16 +8359,97 @@ function ExceptionReviewModal({
       <div className="modal-foot">
         {canAcceptTransaction ? (
           <button className="btn btn-primary" onClick={onAcceptTransaction}>
-            Accept transaction
+            Approve &amp; apply
           </button>
         ) : null}
-        {isDuplicate && (
-          <button className="btn" onClick={onArchiveDuplicate}>
-            Archive duplicate
-          </button>
-        )}
+        <button className="btn btn-danger" onClick={onRejectArchive}>
+          {isDuplicate ? "Reject / archive duplicate" : "Reject / archive"}
+        </button>
         <button className="btn" onClick={onClose}>
           {isDuplicate ? "Close" : "Close for later"}
+        </button>
+      </div>
+    </>
+  );
+}
+
+function DeleteArchivedExceptionModal({ exception, onClose, onDelete }) {
+  const [confirmationText, setConfirmationText] = useState("");
+  const [understood, setUnderstood] = useState(false);
+  const [reason, setReason] = useState("");
+
+  if (!exception) {
+    return null;
+  }
+
+  const canDelete = understood && confirmationText.trim().toUpperCase() === "DELETE" && reason.trim().length >= 8;
+
+  return (
+    <>
+      <div className="modal-head">
+        <h3>Delete archived exception</h3>
+        <button className="x" onClick={onClose}>
+          <IconX size={18} />
+        </button>
+      </div>
+      <div className="modal-body">
+        <div className="note warn">
+          <IconAlertTriangle size={16} />
+          <div>
+            This removes the record from the rejected / archived bucket, but keeps a soft-delete
+            audit trail. It cannot be applied or counted after deletion.
+          </div>
+        </div>
+        <div className="detail-card">
+          <div className="detail-label">Archived record</div>
+          <div className="detail-title">{exception.senderName}</div>
+          <div className="sub mono">
+            {formatCurrency(exception.amount ?? 0)} · {exception.transactionReference ?? "No transaction ref"}
+          </div>
+          <div className="sub">{exception.summary}</div>
+        </div>
+        <div className="field">
+          <label>Delete reason</label>
+          <textarea
+            rows={3}
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="Example: Confirmed rejected duplicate after bank review."
+          />
+        </div>
+        <label className="check-row">
+          <input
+            type="checkbox"
+            checked={understood}
+            onChange={(event) => setUnderstood(event.target.checked)}
+          />
+          I understand this removes the record from the archived review bucket.
+        </label>
+        <div className="field">
+          <label>Type DELETE to confirm</label>
+          <input
+            value={confirmationText}
+            onChange={(event) => setConfirmationText(event.target.value)}
+            placeholder="DELETE"
+          />
+        </div>
+      </div>
+      <div className="modal-foot">
+        <button
+          className="btn btn-danger"
+          disabled={!canDelete}
+          onClick={() =>
+            onDelete({
+              confirmationText,
+              understood,
+              reason,
+            })
+          }
+        >
+          Delete archived record
+        </button>
+        <button className="btn" onClick={onClose}>
+          Cancel
         </button>
       </div>
     </>

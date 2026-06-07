@@ -159,6 +159,7 @@ Use this to pull Zelle confirmation emails into the portal.
    - `Payments to confirm`
    - `Exceptions`
 5. If no new payments appear, check sync settings and Gmail authorization in `Settings`.
+6. If sync reports `Gmail authorization expired or was revoked`, run `npm run gmail:authorize` locally and retry sync.
 
 What the sync captures:
 
@@ -203,16 +204,19 @@ Use this when the system cannot safely auto-match or apply a payment.
 2. Go to `Exceptions`.
 3. Click `Review`.
 4. Read the transaction details and reason.
-5. If the customer is unclear, search for and assign the correct existing customer.
-6. If this is a valid non-duplicate payment already linked to a customer, click `Accept transaction`.
-7. If it is a duplicate, click `Archive duplicate`.
-8. If the same Zelle transaction number already exists, treat it as possible abuse/replay risk.
-9. After resolution, confirm the action is visible in exception history.
+5. Click `Approve & apply` only when the funds and customer are correct.
+6. If the customer is unclear, search for the existing customer and either `Approve & apply` or `Assign only`.
+7. Click `Reject / archive` when the record should not be applied.
+8. Review rejected records in `Rejected / archived bucket`.
+9. Delete from the archived bucket only after checking the confirmation box, typing `DELETE`, and entering a reason.
+10. If the same Zelle transaction number already exists, treat it as possible abuse/replay risk.
+11. After resolution, confirm the action is visible in exception history.
 
 Important rules:
 
 - Duplicate exceptions cannot be accepted/applied.
 - Same Zelle transaction number must never be applied twice.
+- Rejected and archived records are retained in the bucket; delete is a soft-delete with audit history, not silent data loss.
 - Every exception action is saved with the user and timestamp.
 
 ## 11. Record Manual Secured Payment

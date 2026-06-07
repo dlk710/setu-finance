@@ -899,6 +899,20 @@ export function normalizeSeedIdentifiers(state) {
       note: replaceIdentifierText(candidate.note, textReplacements),
     })),
   }));
+  state.archivedExceptions = (state.archivedExceptions ?? []).map((exception) => ({
+    ...exception,
+    customerCode: normalizeCustomerCode(exception.customerCode) ?? exception.customerCode ?? null,
+    matchedInvoiceCode:
+      invoiceCodeMap.get(exception.matchedInvoiceCode) ??
+      normalizeInvoiceCode(exception.matchedInvoiceCode) ??
+      exception.matchedInvoiceCode ??
+      null,
+    summary: replaceIdentifierText(exception.summary, textReplacements),
+    candidates: (exception.candidates ?? []).map((candidate) => ({
+      ...candidate,
+      note: replaceIdentifierText(candidate.note, textReplacements),
+    })),
+  }));
 
   state.admin = {
     ...(state.admin ?? {}),
@@ -946,6 +960,7 @@ export function createInitialState() {
       dueInvoices: seedDueInvoices,
       pendingPayments: seedPendingPayments,
       exceptions: seedExceptions,
+      archivedExceptions: [],
       invoices: seedInvoices,
       payments: seedAllPayments,
       processedMessageIds: [],

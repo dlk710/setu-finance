@@ -145,6 +145,10 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Finance must be able to match an exception to an existing customer.
 - Matching an exception to a customer must attach the transaction to the customer history and move it forward for application.
 - Finance may use `Accept transaction` only for linked non-duplicate exceptions where the transaction is valid.
+- Finance must have an explicit reject/archive action for every exception review.
+- Rejected exceptions must move into a visible archived bucket instead of disappearing.
+- Archived exceptions may be removed from the bucket only with double verification: confirmation checkbox, typed confirmation, and delete reason.
+- Archived deletion must be a soft-delete with audit history retained.
 - Duplicate exceptions must not expose an accept/apply action.
 - Reused Zelle transaction numbers must be flagged as possible abuse/replay risk.
 - Same Zelle transaction number must never be applied twice, including across Gmail sync and manually verified Zelle entry.
@@ -298,6 +302,7 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Login success/failure, logout, and provider API-key success/failure appear in Audit without any stored password or API-key value.
 - An ambiguous or mismatched payment appears in `Exceptions`.
 - A reused Zelle transaction number appears as possible abuse/replay risk and cannot be accepted/applied.
+- Rejected exceptions remain visible in the archived bucket until an admin performs the guarded delete workflow.
 - Finance can record a manually secured payment and later send a PDF receipt.
 - Finance can send or re-send PDF receipts from completed transactions.
 - Referral rules can be changed by admins, and qualified rewards apply as invoice discounts.

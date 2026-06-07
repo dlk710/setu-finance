@@ -332,6 +332,7 @@ Sync behavior:
 - set `GMAIL_AUTO_SYNC_INTERVAL_MINUTES=5` to run the scheduled sync every 5 minutes
 - set `GMAIL_AUTO_SYNC_ENABLED=false` if you need to pause scheduled sync without removing credentials
 - admins can change the enabled state and interval from `Settings > Gmail sync automation`; those choices are saved in Postgres and take effect without a server restart
+- if Google returns `invalid_grant`, the saved Gmail OAuth token expired or was revoked; run `npm run gmail:authorize` and retry `Sync Zelle inbox`
 
 ## Notes
 

@@ -61,6 +61,29 @@ export function getGmailIntegrationStatus() {
   };
 }
 
+export function isGmailInvalidGrantError(error) {
+  const parts = [
+    error?.message,
+    error?.code,
+    error?.response?.data?.error,
+    error?.response?.data?.error_description,
+  ]
+    .filter(Boolean)
+    .map((part) => String(part).toLowerCase());
+
+  return parts.some((part) => part.includes("invalid_grant"));
+}
+
+export function createGmailReauthorizationError() {
+  const { tokenPath } = getGmailPaths();
+  const error = new Error(
+    `Gmail authorization expired or was revoked. Reauthorize the Zelle inbox by running \`npm run gmail:authorize\`. This will replace the local token at ${tokenPath}.`,
+  );
+  error.statusCode = 428;
+  error.code = "GMAIL_REAUTH_REQUIRED";
+  return error;
+}
+
 export async function authorizeGmail({ interactive = false } = {}) {
   const existingClient = await loadSavedCredentialsIfExist();
   if (existingClient) {

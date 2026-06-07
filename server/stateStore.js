@@ -279,6 +279,55 @@ function mapExceptionHistoryRow(row) {
   };
 }
 
+function mapExceptionRow(row, exceptionCandidates = new Map()) {
+  return {
+    id: row.id,
+    kind: row.kind,
+    senderName: row.sender_name,
+    amount: Number(row.amount || 0),
+    expectedAmount:
+      row.expected_amount === null || row.expected_amount === undefined
+        ? null
+        : Number(row.expected_amount),
+    dateLabel: row.date_label,
+    senderEmail: row.sender_email,
+    senderPhoneLast4: row.sender_phone_last4,
+    service: row.service_name,
+    milestone: row.milestone,
+    invoiceId: row.invoice_id,
+    summary: row.summary,
+    aliasName: row.alias_name,
+    sourceMessageId: row.source_message_id,
+    status: row.status,
+    resolutionAction: row.resolution_action ?? null,
+    resolvedAt: formatTimestamp(row.resolved_at),
+    archivedAt: formatTimestamp(row.archived_at),
+    archivedByUsername: row.archived_by_username ?? null,
+    deletedAt: formatTimestamp(row.deleted_at),
+    deletedByUsername: row.deleted_by_username ?? null,
+    deleteReason: row.delete_reason ?? null,
+    customerId: row.payment_customer_id ?? null,
+    customerName: row.payment_customer_name ?? null,
+    customerCode: row.payment_customer_code ?? null,
+    matchedSignals: row.payment_matched_signals ?? [],
+    score: Number(row.payment_score || 0),
+    subject: row.payment_subject ?? null,
+    rawText: row.payment_raw_text ?? null,
+    receivedAt: formatTimestamp(row.payment_received_at),
+    transactionReference: row.payment_transaction_reference ?? null,
+    memo: row.payment_memo ?? null,
+    sourceProvider: row.payment_source_provider ?? "gmail",
+    sourceThreadId: row.payment_source_thread_id ?? null,
+    messageFromEmail: row.payment_message_from_email ?? null,
+    messageToEmail: row.payment_message_to_email ?? null,
+    messageDateHeader: row.payment_message_date_header ?? null,
+    transactionDate: row.payment_transaction_date ?? null,
+    parsedPayload: row.payment_parsed_payload ?? {},
+    duplicateOfPaymentId: row.payment_duplicate_of_payment_id ?? null,
+    candidates: exceptionCandidates.get(row.id) ?? [],
+  };
+}
+
 function mapReferralPartyRow(row, customerMap = new Map()) {
   const linkedCustomer = customerMap.get(row.customer_id);
 
@@ -2048,8 +2097,37 @@ async function hydratePortalState(client) {
       ON payments.source_message_id = exceptions.source_message_id
     LEFT JOIN customers AS payment_customers
       ON payment_customers.id = payments.customer_id
-    WHERE status = 'open'
-    ORDER BY created_at DESC, id DESC
+    WHERE exceptions.status = 'open'
+    ORDER BY exceptions.created_at DESC, exceptions.id DESC
+  `);
+  const archivedExceptionsResult = await client.query(`
+    SELECT
+      exceptions.*,
+      payments.customer_id AS payment_customer_id,
+      payments.customer_name AS payment_customer_name,
+      payments.matched_signals AS payment_matched_signals,
+      payments.score AS payment_score,
+      payments.subject AS payment_subject,
+      payments.raw_text AS payment_raw_text,
+      payments.received_at AS payment_received_at,
+      payments.transaction_reference AS payment_transaction_reference,
+      payments.memo AS payment_memo,
+      payments.source_provider AS payment_source_provider,
+      payments.source_thread_id AS payment_source_thread_id,
+      payments.message_from_email AS payment_message_from_email,
+      payments.message_to_email AS payment_message_to_email,
+      payments.message_date_header AS payment_message_date_header,
+      payments.transaction_date AS payment_transaction_date,
+      payments.parsed_payload AS payment_parsed_payload,
+      payments.duplicate_of_payment_id AS payment_duplicate_of_payment_id,
+      payment_customers.customer_code AS payment_customer_code
+    FROM exceptions
+    LEFT JOIN payments
+      ON payments.source_message_id = exceptions.source_message_id
+    LEFT JOIN customers AS payment_customers
+      ON payment_customers.id = payments.customer_id
+    WHERE exceptions.status = 'archived'
+    ORDER BY COALESCE(exceptions.archived_at, exceptions.resolved_at, exceptions.created_at) DESC, exceptions.id DESC
   `);
   const exceptionCandidatesResult = await client.query(`
     SELECT *
@@ -2272,44 +2350,10 @@ async function hydratePortalState(client) {
     exceptionCandidates.set(row.exception_id, current);
   }
 
-  const exceptions = exceptionsResult.rows.map((row) => ({
-    id: row.id,
-    kind: row.kind,
-    senderName: row.sender_name,
-    amount: Number(row.amount || 0),
-    expectedAmount:
-      row.expected_amount === null || row.expected_amount === undefined
-        ? null
-        : Number(row.expected_amount),
-    dateLabel: row.date_label,
-    senderEmail: row.sender_email,
-    senderPhoneLast4: row.sender_phone_last4,
-    service: row.service_name,
-    milestone: row.milestone,
-    invoiceId: row.invoice_id,
-    summary: row.summary,
-    aliasName: row.alias_name,
-    sourceMessageId: row.source_message_id,
-    customerId: row.payment_customer_id ?? null,
-    customerName: row.payment_customer_name ?? null,
-    customerCode: row.payment_customer_code ?? null,
-    matchedSignals: row.payment_matched_signals ?? [],
-    score: Number(row.payment_score || 0),
-    subject: row.payment_subject ?? null,
-    rawText: row.payment_raw_text ?? null,
-    receivedAt: formatTimestamp(row.payment_received_at),
-    transactionReference: row.payment_transaction_reference ?? null,
-    memo: row.payment_memo ?? null,
-    sourceProvider: row.payment_source_provider ?? "gmail",
-    sourceThreadId: row.payment_source_thread_id ?? null,
-    messageFromEmail: row.payment_message_from_email ?? null,
-    messageToEmail: row.payment_message_to_email ?? null,
-    messageDateHeader: row.payment_message_date_header ?? null,
-    transactionDate: row.payment_transaction_date ?? null,
-    parsedPayload: row.payment_parsed_payload ?? {},
-    duplicateOfPaymentId: row.payment_duplicate_of_payment_id ?? null,
-    candidates: exceptionCandidates.get(row.id) ?? [],
-  }));
+  const exceptions = exceptionsResult.rows.map((row) => mapExceptionRow(row, exceptionCandidates));
+  const archivedExceptions = archivedExceptionsResult.rows.map((row) =>
+    mapExceptionRow(row, exceptionCandidates),
+  );
   const exceptionHistory = exceptionHistoryResult.rows.map(mapExceptionHistoryRow);
 
   const currentDashboard = dashboardResult.rows[0];
@@ -2461,6 +2505,7 @@ async function hydratePortalState(client) {
       })),
     pendingPayments,
     exceptions,
+    archivedExceptions,
     exceptionHistory,
     invoices,
     payments,
@@ -2859,6 +2904,21 @@ async function fetchExceptionForUpdate(client, exceptionId) {
       FROM exceptions
       WHERE id = $1
         AND status = 'open'
+      FOR UPDATE
+    `,
+    [exceptionId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
+async function fetchArchivedExceptionForUpdate(client, exceptionId) {
+  const result = await client.query(
+    `
+      SELECT *
+      FROM exceptions
+      WHERE id = $1
+        AND status = 'archived'
       FOR UPDATE
     `,
     [exceptionId],
@@ -4479,10 +4539,10 @@ export async function resolveExceptionRecord({
     }
 
     const allowedActionsByKind = {
-      ambiguous: new Set(["matched_customer", "accept_transaction"]),
-      unmatched: new Set(["matched_customer", "accept_transaction"]),
-      mismatch: new Set(["accept_full", "apply_credit", "accept_transaction"]),
-      duplicate: new Set(["mark_duplicate"]),
+      ambiguous: new Set(["matched_customer", "accept_transaction", "reject_archive"]),
+      unmatched: new Set(["matched_customer", "accept_transaction", "reject_archive"]),
+      mismatch: new Set(["accept_full", "apply_credit", "accept_transaction", "reject_archive"]),
+      duplicate: new Set(["mark_duplicate", "reject_archive"]),
     };
 
     if (!allowedActionsByKind[exception.kind]?.has(actionType)) {
@@ -4492,6 +4552,50 @@ export async function resolveExceptionRecord({
     let resolutionMessage = "Exception resolved.";
     let resolvedCustomerId = null;
     let resolvedPaymentRow = null;
+
+    if (actionType === "reject_archive") {
+      if (exception.source_message_id) {
+        await client.query(
+          `
+            UPDATE payments
+            SET review_status = 'history',
+                match_status = 'unmatched',
+                review_notes = COALESCE(review_notes, 'Rejected and archived by finance ops.'),
+                updated_at = NOW()
+            WHERE source_message_id = $1
+          `,
+          [exception.source_message_id],
+        );
+        resolvedPaymentRow = await fetchPaymentBySourceMessage(client, exception.source_message_id);
+      }
+
+      await client.query(
+        `
+          UPDATE exceptions
+          SET status = 'archived',
+              resolution_action = $2,
+              resolved_at = COALESCE(resolved_at, NOW()),
+              archived_at = NOW(),
+              archived_by_username = $3
+          WHERE id = $1
+        `,
+        [exceptionId, actionType, actingUsername],
+      );
+
+      await insertExceptionResolutionHistory(client, {
+        exception,
+        paymentRow: resolvedPaymentRow,
+        resolutionAction: actionType,
+        resolutionMessage: "Rejected and archived for audit. It will not be counted or applied.",
+        resolvedByUsername: actingUsername,
+      });
+      await insertActivity(client, `${exception.sender_name} rejected and archived`, actingUsername);
+
+      return {
+        state: await hydratePortalState(client),
+        message: "Exception rejected and archived. It will not be counted or applied.",
+      };
+    }
 
     if (exception.kind === "duplicate" && actionType === "mark_duplicate") {
       if (exception.source_message_id) {
@@ -4512,12 +4616,14 @@ export async function resolveExceptionRecord({
       await client.query(
         `
           UPDATE exceptions
-          SET status = 'resolved',
+          SET status = 'archived',
               resolution_action = $2,
-              resolved_at = NOW()
+              resolved_at = COALESCE(resolved_at, NOW()),
+              archived_at = NOW(),
+              archived_by_username = $3
           WHERE id = $1
         `,
-        [exceptionId, actionType],
+        [exceptionId, actionType, actingUsername],
       );
 
       await insertExceptionResolutionHistory(client, {
@@ -4798,6 +4904,74 @@ export async function resolveExceptionRecord({
     return {
       state: await hydratePortalState(client),
       message: resolutionMessage,
+    };
+  });
+}
+
+export async function deleteArchivedExceptionRecord({
+  exceptionId,
+  confirmationText,
+  understood = false,
+  reason = "",
+  actingUsername = "unknown",
+}) {
+  return withTransaction(async (client) => {
+    if (!understood || String(confirmationText || "").trim().toUpperCase() !== "DELETE") {
+      throw new Error("Type DELETE and check the confirmation box before deleting an archived exception.");
+    }
+
+    const normalizedReason = String(reason || "").trim();
+    if (normalizedReason.length < 8) {
+      throw new Error("Add a short delete reason before removing this archived exception from the bucket.");
+    }
+
+    const exception = await fetchArchivedExceptionForUpdate(client, exceptionId);
+    if (!exception) {
+      throw new Error("Archived exception item not found.");
+    }
+
+    let resolvedPaymentRow = null;
+    if (exception.source_message_id) {
+      await client.query(
+        `
+          UPDATE payments
+          SET review_status = 'history',
+              match_status = 'unmatched',
+              review_notes = COALESCE(review_notes, 'Archived exception deleted from review bucket.'),
+              updated_at = NOW()
+          WHERE source_message_id = $1
+        `,
+        [exception.source_message_id],
+      );
+      resolvedPaymentRow = await fetchPaymentBySourceMessage(client, exception.source_message_id);
+    }
+
+    await client.query(
+      `
+        UPDATE exceptions
+        SET status = 'deleted',
+            deleted_at = NOW(),
+            deleted_by_username = $2,
+            delete_reason = $3,
+            resolution_action = 'deleted_after_archive',
+            resolved_at = COALESCE(resolved_at, NOW())
+        WHERE id = $1
+      `,
+      [exceptionId, actingUsername, normalizedReason],
+    );
+
+    await insertExceptionResolutionHistory(client, {
+      exception,
+      paymentRow: resolvedPaymentRow,
+      resolutionAction: "deleted_after_archive",
+      resolutionMessage: `Archived exception removed from review bucket: ${normalizedReason}`,
+      resolvedByUsername: actingUsername,
+    });
+    await insertActivity(client, `${exception.sender_name} archived exception deleted`, actingUsername);
+
+    return {
+      state: await hydratePortalState(client),
+      message: "Archived exception removed from the bucket. Audit history remains preserved.",
     };
   });
 }

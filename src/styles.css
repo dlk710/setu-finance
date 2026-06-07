@@ -1312,6 +1312,17 @@ button {
   color: var(--ink);
 }
 
+.btn-danger {
+  color: var(--danger-text);
+  border-color: color-mix(in srgb, var(--danger-text) 28%, var(--border-1));
+  background: color-mix(in srgb, var(--danger-text) 8%, var(--paper));
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger-text) 13%, var(--paper));
+  border-color: color-mix(in srgb, var(--danger-text) 45%, var(--border-1));
+}
+
 .btn:disabled {
   opacity: 0.45;
   cursor: default;
@@ -1464,6 +1475,18 @@ button {
 
 .exception-history-grid {
   grid-template-columns: 138px 1.15fr 1.45fr 1.1fr 104px;
+}
+
+.archived-exception-grid {
+  grid-template-columns: 138px 1.15fr 1.45fr 0.9fr 116px;
+}
+
+.exception-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .admin-grid {
@@ -3271,6 +3294,7 @@ button {
   .completed-grid,
   .exception-grid,
   .exception-history-grid,
+  .archived-exception-grid,
   .clients-hub-grid,
   .people-grid,
   .admin-grid,

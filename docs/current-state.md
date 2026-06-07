@@ -157,6 +157,14 @@ Gmail/Zelle sync:
 - Uses incremental sync with overlap.
 - Captures exact cents, transaction number, sent date, memo, sender name, message sender, message recipient, raw extracted text, and parsed payload.
 - Supports admin-configurable auto-sync interval, currently designed for every 5 minutes.
+- If Google returns `invalid_grant`, manual sync stays inside the portal session and shows a reauthorization instruction to run `npm run gmail:authorize`.
+
+Exception review:
+
+- Open exceptions show explicit `Approve`, `Review`, and `Reject` actions.
+- Approved valid exceptions can be applied directly or assigned to a customer first.
+- Rejected exceptions move to a visible archived bucket and are not counted or applied.
+- Archived bucket deletion requires a checkbox, typing `DELETE`, and a reason; the row is soft-deleted and audit history remains.
 
 Manual secured payment:
 

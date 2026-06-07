@@ -5,6 +5,7 @@ import {
   confirmPendingPaymentRecord,
   createCustomerOnboardingRecord,
   createInvoiceRecord,
+  deleteArchivedExceptionRecord,
   dismissReferralSubmission,
   listDueInvoiceIds,
   loadContractDownloadRecord,
@@ -579,6 +580,26 @@ app.post("/api/exceptions/:exceptionId/resolve", async (request, response, next)
       actionType,
       candidateCustomerId,
       saveAlias,
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
+
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/exceptions/:exceptionId/delete-archived", async (request, response, next) => {
+  try {
+    const { confirmationText, understood = false, reason = "" } = request.body ?? {};
+    const result = await deleteArchivedExceptionRecord({
+      exceptionId: request.params.exceptionId,
+      confirmationText,
+      understood,
+      reason,
       actingUsername: request.portalUser?.username ?? "unknown",
     });
 

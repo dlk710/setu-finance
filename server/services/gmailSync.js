@@ -1,5 +1,10 @@
 import { google } from "googleapis";
-import { authorizeGmail, getGmailIntegrationStatus } from "./gmailAuth.js";
+import {
+  authorizeGmail,
+  createGmailReauthorizationError,
+  getGmailIntegrationStatus,
+  isGmailInvalidGrantError,
+} from "./gmailAuth.js";
 import { matchPaymentToState } from "./matching.js";
 
 const DEFAULT_GMAIL_QUERY = '(zelle OR "sent you money" OR "payment from" OR "paid you")';
@@ -300,6 +305,17 @@ function buildSyncMessage(summary) {
   return pieces.join(" · ");
 }
 
+async function runGmailRequest(work) {
+  try {
+    return await work();
+  } catch (error) {
+    if (isGmailInvalidGrantError(error)) {
+      throw createGmailReauthorizationError();
+    }
+    throw error;
+  }
+}
+
 function parsePositiveInteger(value, fallback) {
   const numeric = Number.parseInt(String(value ?? ""), 10);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : fallback;
@@ -358,11 +374,13 @@ export async function syncGmailInbox(state) {
   const { query, window } = buildIncrementalQuery(state);
   const maxResults = Number(process.env.GMAIL_MAX_RESULTS || 20);
 
-  const listResponse = await gmail.users.messages.list({
-    userId: "me",
-    q: query,
-    maxResults,
-  });
+  const listResponse = await runGmailRequest(() =>
+    gmail.users.messages.list({
+      userId: "me",
+      q: query,
+      maxResults,
+    }),
+  );
 
   const messages = listResponse.data.messages ?? [];
   const newMessages = messages.filter(
@@ -379,11 +397,13 @@ export async function syncGmailInbox(state) {
   const exceptionsToInsert = [];
 
   for (const messageMeta of newMessages) {
-    const messageResponse = await gmail.users.messages.get({
-      userId: "me",
-      id: messageMeta.id,
-      format: "full",
-    });
+    const messageResponse = await runGmailRequest(() =>
+      gmail.users.messages.get({
+        userId: "me",
+        id: messageMeta.id,
+        format: "full",
+      }),
+    );
 
     const parsedPayment = parseZelleLikeMessage(messageResponse.data);
     processedMessageIds.push(messageMeta.id);
