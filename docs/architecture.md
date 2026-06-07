@@ -11,6 +11,9 @@ The current local and AWS dev deployments run the same application code. The loc
 ```mermaid
 flowchart TD
     UI["React / Vite frontend"] --> API["Express API routes"]
+    Discover["Discover app / provider consumer"] --> IntegrationAPI["Status-only integration API"]
+    IntegrationAPI --> DBView["customer_engagement_status view"]
+    DBView --> DB
     API --> Store["Transactional store layer"]
     Store --> Domain["Domain services"]
     Store --> DB["PostgreSQL"]
@@ -29,18 +32,20 @@ flowchart TD
 | --- | --- | --- |
 | Frontend | `src/App.jsx`, `src/lib/*`, `src/styles.css` | Operator UI, public referral and feedback forms, route-based navigation, modal workflows, dashboard/chart presentation, customer 360, billing console, referral admin, settings. |
 | API | `server/index.js` | Auth middleware, HTTP routes, request validation boundary, integration wiring for invoice/receipt email and Gmail sync. |
+| Provider integration API | `server/routes/integration.js`, `server/integration/engagementStore.js` | Machine-to-machine, API-key-protected, read-only engagement status endpoint for downstream apps. |
 | Store / application service | `server/stateStore.js` | Transactional business operations, read-model hydration, customer/invoice/payment/referral writes, exception history, manual payment application. |
-| Domain services | `server/services/*` | Gmail parsing, matching, email templates, receipt PDF, contract parsing, contract storage, auth helpers, sync settings. |
+| Domain services | `server/services/*` | Gmail parsing, matching, email templates, receipt PDF, contract parsing, contract storage, auth helpers, sync settings, auth audit logging. |
 | Database runtime | `server/db/*` | Connection pooling, migrations, seed/bootstrap, normalization helpers. |
 | Shared catalog | `shared/*` | Shared service catalog and numeric ID helpers used by frontend and backend. |
 | Documentation/artifacts | `docs/*`, `files/*` | Requirements, process flows, architecture, pitch artifacts, clickable wireframes. |
 
 ### V2 Shell Mapping
 
-The current local frontend uses the merged v2 finance information architecture while preserving the original operational routes and backend contracts.
+The current local frontend uses a Setu portal-family shell plus the merged v2 finance information architecture while preserving the original operational routes and backend contracts.
 
-| V2 section | Live implementation |
+| Surface | Live implementation |
 | --- | --- |
+| Portal landing | `/` is a public landing page with the shared bridge wordmark, one-bar portal switcher, and five portal cards. Finance and Referral are active; Discover, Customer, and Media are visible as future suite surfaces. |
 | Executive | Existing dashboard read model at `/dashboard`. |
 | Clients | New `/clients` hub plus existing `/onboarding`, `/customers`, and `/customers/:id`. |
 | Receivables | New `/receivables` alias around the existing billing console; `/billing` remains valid. The frontend presents the same APIs through tabs for overview, invoices, payment review, exceptions, receipts, and inbox sync. |
@@ -115,6 +120,8 @@ flowchart TD
 | Referrals | `referral_parties`, `customer_referrals`, `customer_reward_ledger`, `referral_submissions`, `referral_events`, `referral_payouts` | Party-normalized referrers, referral codes, legitimacy review status, public referral intake, reward qualification, invoice discount application, future payout seam. |
 | Feedback | `feedback_submissions` | Public feedback intake, optional attachment metadata, admin review/archive state. |
 | Integrations/settings | `integration_states`, `system_settings` | Gmail sync state, auto-sync settings, referral program rules. |
+| Provider status view | `customer_engagement_status` | Status-only derived view for downstream apps; selects customer ID, primary email, engagement status, and timestamp only. |
+| Auth audit | `auth_audit_events` | Low-cost login/logout/API-key audit trail with safe metadata, hashed IP, and hashed user-agent. |
 | Dashboard | `dashboard_snapshots`, `dashboard_aging_buckets`, `dashboard_collection_series` | Current projection storage and future analytics seam. |
 | System | `app_sequences`, `activity_events`, `schema_migrations` | Numeric ID sequencing, audit timeline, migration tracking. |
 
@@ -155,7 +162,10 @@ flowchart TD
 ## 9. Security And Compliance Posture
 
 - Admin portal requires authentication.
+- Provider integration endpoints require `X-Api-Key` and `INTEGRATION_API_KEY`; portal sessions do not grant access to integration data.
 - Runtime secrets must stay in `.env`, SSM Parameter Store, or Secrets Manager, never committed to Git.
+- Engagement status integration responses must not expose amounts, balances, invoice rows, payment rows, memos, or raw transaction content.
+- Auth audit logging must never store passwords, API-key values, session cookies, OAuth tokens, SMTP passwords, MFA codes, raw IP addresses, or raw user-agent strings.
 - Uploaded contracts should be private and encrypted.
 - Receipt email must go to the primary customer email from the database.
 - Exception and payment decisions preserve actor and timestamp.

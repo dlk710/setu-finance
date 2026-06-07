@@ -90,6 +90,8 @@ Change them in [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinancePr
 - service history appears only when an existing customer is selected for follow-up enrollment
 - the `Referral Program` workspace defines configurable rules, tracks relationship history, and applies earned bonuses as invoice discounts
 - public referral intake supports both `/refer` and personalized gateway links such as `/refer/100001`, `/referral-gateway/100001`, or `/r/100001`
+- provider integrations can read status-only engagement data from `/api/integration/engagement-status` with `X-Api-Key`; no amounts are exposed
+- authentication audit events are visible in `Audit` and store safe event metadata only; passwords, tokens, API keys, and raw IP/user-agent values are never stored
 
 ## Postgres backend
 
@@ -111,14 +113,25 @@ Default local database:
 - database: `setu_portal`
 - user: `setu`
 
-The local frontend now uses the merged v2 finance shell:
+The local frontend now uses the merged v2 finance shell with a Setu portal-family landing:
 
+- `/` is the public Setu portal landing with deep links into the live Finance and Referral surfaces
 - `Executive` is the default dashboard summary at `/dashboard`
 - `Clients` is the new entry point for onboarding, customer register, and customer 360 (`/clients`, plus existing `/onboarding` and `/customers`)
 - `Receivables` wraps the existing billing console at `/receivables` while `/billing` remains valid, now organized into `Overview`, `Invoices`, `Payments to confirm`, `Exceptions`, `Receipts`, and `Inbox sync` tabs
 - `Referrals` wraps the existing Referral Program at `/referrals` while `/admin` remains valid
 - `Payables`, `People`, and `Audit` are safe hub views for the next product-suite phases
 - Gmail/Zelle sync credentials, SMTP settings, and existing backend routes are preserved
+
+Setu portal-family identities:
+
+| Portal | Tagline | Current endpoint |
+| --- | --- | --- |
+| Finance | Contract-to-cash · billing & status | `/dashboard` |
+| Discover | Opportunity Studio · find & match | Coming soon |
+| Customer | Member portal · profiles & evidence | Coming soon |
+| Media | Press portal · articles & proofs | Coming soon |
+| Referral | Referral Engine · grow the book | `/refer` |
 
 The database connection is configured through [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/.env). The current seed source is:
 
@@ -156,6 +169,43 @@ Suite-readiness notes:
 - if email and sync volume grow, the next backend improvement should be an outbox/jobs layer so mail and inbox processing move off request threads
 
 More detail is in [docs/architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/architecture.md).
+
+## Provider engagement status integration
+
+Setu Finance exposes a read-only provider endpoint for downstream apps such as Discover:
+
+- endpoint: `GET /api/integration/engagement-status`
+- auth: `X-Api-Key` header using `INTEGRATION_API_KEY`
+- response fields: `customer_id`, `email`, `engagement_status`, and `as_of`
+- allowed statuses: `active`, `dormant`, `inactive`
+- privacy rule: the endpoint does not return invoice amounts, payment amounts, balances, memos, or raw transaction details
+
+The status is derived in Postgres by [server/db/migrations/020_engagement_status.sql](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/server/db/migrations/020_engagement_status.sql). Current default logic is:
+
+- `active`: no unpaid overdue invoices
+- `dormant`: unpaid overdue invoice exists, oldest overdue date is within 30 days
+- `inactive`: unpaid overdue invoice exists, oldest overdue date is older than 30 days
+
+Configure local/cloud environments with:
+
+- `INTEGRATION_API_KEY`
+
+## Authentication audit logging
+
+Setu Finance records low-cost authentication/security events in PostgreSQL through `auth_audit_events`.
+
+Currently logged:
+
+- login success
+- login failure
+- logout
+- provider integration API-key success/failure
+
+Stored fields include event type, outcome, username when available, request method/path, hashed IP, hashed user-agent, safe metadata, and timestamp. The app intentionally does not store passwords, API-key values, session cookies, OAuth tokens, SMTP passwords, MFA codes, or raw IP/user-agent strings.
+
+Configure an independent hashing salt with:
+
+- `AUTH_AUDIT_HASH_SALT`
 
 ## Product artifacts
 

@@ -105,6 +105,7 @@ const DEFAULT_AUTH_FORM = {
 };
 
 const PORTAL_VIEW_PATHS = {
+  portalHome: "/",
   publicReferral: "/refer",
   publicFeedback: "/feedback",
   clients: "/clients",
@@ -120,6 +121,64 @@ const PORTAL_VIEW_PATHS = {
   admin: "/admin",
   settings: "/settings",
 };
+
+const SETU_PORTALS = [
+  {
+    id: "finance",
+    setuLabel: "setu",
+    label: "Finance",
+    tagline: "Contract-to-cash · billing & status",
+    accent: "#5F7A6B",
+    tint: "#E6ECE8",
+    view: "dashboard",
+    status: "Live",
+    icon: IconTrendingUp,
+  },
+  {
+    id: "discover",
+    setuLabel: "setu",
+    label: "Discover",
+    tagline: "Opportunity Studio · find & match",
+    accent: "#C68A3E",
+    tint: "#F3E7D8",
+    status: "Coming soon",
+    icon: IconHelpCircle,
+  },
+  {
+    id: "customer",
+    setuLabel: "setu",
+    label: "Customer",
+    tagline: "Member portal · profiles & evidence",
+    accent: "#6E89A6",
+    tint: "#E6ECF2",
+    status: "Coming soon",
+    icon: IconUsers,
+  },
+  {
+    id: "media",
+    setuLabel: "setu",
+    label: "Media",
+    tagline: "Press portal · articles & proofs",
+    accent: "#A35E72",
+    tint: "#EFE3E7",
+    status: "Coming soon",
+    icon: IconFileInvoice,
+  },
+  {
+    id: "referral",
+    setuLabel: "setu",
+    label: "Referral",
+    tagline: "Referral Engine · grow the book",
+    accent: "#8A9A5B",
+    tint: "#ECF0E2",
+    view: "publicReferral",
+    status: "Live",
+    icon: IconTable,
+  },
+];
+
+const FINANCE_PORTAL = SETU_PORTALS[0];
+const REFERRAL_PORTAL = SETU_PORTALS.find((portal) => portal.id === "referral");
 
 const FINANCE_NAV_SECTIONS = [
   {
@@ -216,7 +275,7 @@ function getFinanceSection(view) {
 function getFinanceShellCopy({ view, customer }) {
   const section = getFinanceSection(view);
   const defaults = {
-    executive: ["Executive", "Company P&L, collections, referrals, and operational attention"],
+    executive: ["Executive", FINANCE_PORTAL.tagline],
     clients: ["Clients", "Contract-first onboarding, searchable register, and 360 views"],
     receivables: ["Receivables", "Invoices, Zelle/Gmail sync, payment confirmation, exceptions, and receipts"],
     payables: ["Payables", "Referral bonuses and future money-out queues"],
@@ -279,12 +338,67 @@ function parsePortalRoute(pathname = "/") {
   return createPortalRoute("dashboard");
 }
 
+function getBrowserTitle(route, customer = null) {
+  if (route?.view === "portalHome") {
+    return "setu - Portals";
+  }
+  if (route?.view === "publicReferral") {
+    return route.referrerCode ? `setu - Referral ${route.referrerCode}` : "setu - Referral";
+  }
+  if (route?.view === "publicFeedback") {
+    return "setu - Feedback";
+  }
+  if (route?.view === "customer360" && customer?.name) {
+    return `setu - Finance - ${customer.name}`;
+  }
+  return "setu - Finance";
+}
+
 function createAskSetuMessage(role, text) {
   return {
     id: crypto.randomUUID(),
     role,
     text,
   };
+}
+
+function SetuBridgeMark() {
+  return (
+    <svg className="setu-bridge-mark" viewBox="0 0 64 30" aria-hidden="true">
+      <path d="M7 22H57" />
+      <path d="M16 22C21 10 42 10 48 22" />
+      <path d="M18 22V15" />
+      <path d="M32 22V10" />
+      <path d="M46 22V15" />
+      <path d="M8 22L14 16" />
+      <path d="M56 22L50 16" />
+    </svg>
+  );
+}
+
+function SetuFinanceLogo({ className = "", home = false, onClick = null, portalName = "", tagline = "" }) {
+  const logoContent = (
+    <>
+      <span className="brand-stack">
+        <span className="brand-row">
+          <SetuBridgeMark />
+          <span className="letters">setu</span>
+        </span>
+        {portalName ? <span className="brand-subtitle">{portalName}</span> : null}
+        {tagline ? <span className="brand-tagline">{tagline}</span> : null}
+      </span>
+    </>
+  );
+
+  if (home) {
+    return (
+      <button className={`wordmark setu-finance-logo logo-home ${className}`} onClick={onClick} type="button">
+        {logoContent}
+      </button>
+    );
+  }
+
+  return <span className={`wordmark setu-finance-logo ${className}`}>{logoContent}</span>;
 }
 
 function createAskSetuWelcomeMessage() {
@@ -1011,9 +1125,10 @@ function App() {
     exceptions: state.exceptions.length,
   };
   const view = route.view;
+  const isPortalHomeRoute = view === "portalHome";
   const isPublicReferralRoute = view === "publicReferral";
   const isPublicFeedbackRoute = view === "publicFeedback";
-  const isPublicRoute = isPublicReferralRoute || isPublicFeedbackRoute;
+  const isPublicRoute = isPortalHomeRoute || isPublicReferralRoute || isPublicFeedbackRoute;
   const publicReferralGatewayCode =
     isPublicReferralRoute && route.referrerCode ? String(route.referrerCode).trim() : "";
 
@@ -1106,6 +1221,10 @@ function App() {
 
     navigateToView("search", { replace: true });
   }
+
+  useEffect(() => {
+    document.title = getBrowserTitle(route, selectedCustomer360);
+  }, [route.view, route.referrerCode, selectedCustomer360?.name]);
 
   useEffect(() => {
     setReferralProgramForm(createReferralProgramForm(state.admin?.referralProgram));
@@ -1414,6 +1533,7 @@ function App() {
         password: "",
       });
       setAuthError("");
+      navigateToRoute(createPortalRoute("portalHome"), { replace: true });
       pushToast("Signed out.");
     } catch (error) {
       pushToast(error.message);
@@ -2280,6 +2400,18 @@ function updateOnboardingForm(field, value) {
     setAskSetuOpen(true);
   }
 
+  if (isPortalHomeRoute) {
+    return (
+      <>
+        <SetuPortalLandingView
+          onOpenFinance={() => navigateToView("dashboard")}
+          onOpenReferral={() => navigateToRoute(createPortalRoute("publicReferral"))}
+        />
+        <ToastStack toasts={toasts} />
+      </>
+    );
+  }
+
   if (isPublicReferralRoute) {
     return (
       <>
@@ -2352,13 +2484,13 @@ function updateOnboardingForm(field, value) {
     <div className="app">
       <aside className="sidebar">
         <div className="logo-wrap">
-          <button className="wordmark logo-home" onClick={() => navigateToView("dashboard")} type="button">
-            <span className="brand-dot" />
-            <span className="letters">setu</span>
-            <span className="deck" />
-          </button>
+          <SetuFinanceLogo
+            home
+            portalName={FINANCE_PORTAL.label}
+            tagline={FINANCE_PORTAL.tagline}
+            onClick={() => navigateToRoute(createPortalRoute("portalHome"))}
+          />
         </div>
-        <div className="nav-label">Finance console</div>
         <nav className="section-nav" aria-label="Finance console sections">
           {FINANCE_NAV_SECTIONS.map((item) => {
             const Icon = item.icon;
@@ -2630,6 +2762,7 @@ function updateOnboardingForm(field, value) {
         {view === "audit" && (
           <AuditHubView
             activity={state.activity ?? []}
+            authAuditEvents={state.admin?.authAuditEvents ?? []}
             exceptionHistory={state.exceptionHistory ?? []}
             referralEvents={state.admin?.referralEvents ?? []}
             onOpenReceivables={() => navigateToView("receivables")}
@@ -2748,10 +2881,7 @@ function PortalLoadingView() {
   return (
     <div className="auth-shell auth-shell-loading">
       <div className="auth-loading-card">
-        <span className="wordmark auth-wordmark">
-          <span className="letters">setu</span>
-          <span className="deck" />
-        </span>
+        <SetuFinanceLogo className="auth-wordmark" portalName={FINANCE_PORTAL.label} tagline={FINANCE_PORTAL.tagline} />
         <div className="auth-loading-copy">Checking your local portal session…</div>
       </div>
     </div>
@@ -2771,10 +2901,7 @@ function PortalLoginView({
     <div className="auth-shell">
       <div className="auth-grid">
         <section className="auth-hero">
-          <span className="wordmark auth-wordmark">
-            <span className="letters">setu</span>
-            <span className="deck" />
-          </span>
+          <SetuFinanceLogo className="auth-wordmark" portalName={FINANCE_PORTAL.label} tagline={FINANCE_PORTAL.tagline} />
           <div className="auth-kicker">Finance portal</div>
           <h1>Local access is now protected.</h1>
           <p className="auth-copy">
@@ -2854,6 +2981,126 @@ function PortalLoginView({
   );
 }
 
+function SetuPortalLandingView({ onOpenFinance, onOpenReferral }) {
+  function handlePortalAction(portal) {
+    if (portal.id === "finance") {
+      onOpenFinance();
+      return;
+    }
+    if (portal.id === "referral") {
+      onOpenReferral();
+    }
+  }
+
+  return (
+    <main className="portal-landing">
+      <section className="portal-hero">
+        <div className="portal-hero-copy">
+          <SetuFinanceLogo className="portal-hero-logo" />
+          <div className="portal-kicker">One family · five portals</div>
+          <h1>One Setu identity, purpose-built portals.</h1>
+          <p>
+            Shared wordmark, shared geometry, differentiated by icon and accent. Finance is live
+            today; Referral has its own public gateway; the remaining portals are staged for the
+            product suite.
+          </p>
+        </div>
+        <div className="portal-hero-card">
+          <div className="portal-hero-card-label">Live now</div>
+          <div className="portal-hero-card-title">Finance + Referral</div>
+          <div className="portal-hero-card-copy">
+            Jump into the contract-to-cash workspace or share the referral intake link without
+            asking users to log into finance.
+          </div>
+          <div className="portal-hero-actions">
+            <button className="btn" type="button" onClick={onOpenFinance}>
+              Open Finance <IconArrowRight size={15} />
+            </button>
+            <button className="btn btn-ghost" type="button" onClick={onOpenReferral}>
+              Referral gateway
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="portal-switch-section">
+        <div className="portal-section-heading">
+          <div>
+            <div className="portal-section-number">05</div>
+            <h2>One bar, all portals</h2>
+          </div>
+          <p>
+            The Setu mark never changes. Each portal swaps only its accent and icon so five tools
+            still feel like one product.
+          </p>
+        </div>
+        <div className="portal-switchbar">
+          <SetuFinanceLogo className="portal-switch-logo" />
+          <div className="portal-switch-pills">
+            {SETU_PORTALS.map((portal) => (
+              <button
+                className={`portal-switch-pill ${portal.status === "Live" ? "is-live" : ""}`}
+                disabled={portal.status !== "Live"}
+                key={portal.id}
+                onClick={() => handlePortalAction(portal)}
+                style={{ "--portal-accent": portal.accent }}
+                type="button"
+              >
+                <span className="portal-pill-dot" />
+                {portal.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="portal-family-section">
+        <div className="portal-section-heading">
+          <div>
+            <div className="portal-section-number">04</div>
+            <h2>The five portals</h2>
+          </div>
+          <p>
+            Each card keeps the same structure: setu family name, portal name, exact tagline, and
+            accent color.
+          </p>
+        </div>
+        <div className="portal-card-grid">
+          {SETU_PORTALS.map((portal) => {
+            const Icon = portal.icon;
+            const isLive = portal.status === "Live";
+            return (
+              <article
+                className={`portal-card ${isLive ? "is-live" : "is-soon"}`}
+                key={portal.id}
+                style={{ "--portal-accent": portal.accent, "--portal-tint": portal.tint }}
+              >
+                <div className="portal-card-icon">
+                  <Icon size={24} />
+                </div>
+                <div className="portal-card-setu">{portal.setuLabel}</div>
+                <h3>{portal.label}</h3>
+                <p>{portal.tagline}</p>
+                <div className="portal-card-footer">
+                  <span>{portal.accent}</span>
+                  <button
+                    className="btn btn-sm"
+                    disabled={!isLive}
+                    onClick={() => handlePortalAction(portal)}
+                    type="button"
+                  >
+                    {isLive ? "Open" : "Coming soon"}
+                  </button>
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function PublicReferralView({
   error,
   form,
@@ -2877,10 +3124,11 @@ function PublicReferralView({
     <div className="auth-shell public-referral-shell">
       <div className="auth-grid public-referral-grid">
         <section className="auth-hero public-referral-hero">
-          <span className="wordmark auth-wordmark">
-            <span className="letters">setu</span>
-            <span className="deck" />
-          </span>
+          <SetuFinanceLogo
+            className="auth-wordmark"
+            portalName={REFERRAL_PORTAL?.label}
+            tagline={REFERRAL_PORTAL?.tagline}
+          />
           <div className="auth-kicker">{hasGatewayCode ? "Referral gateway" : "Referral intake"}</div>
           <h1>{hasGatewayCode ? "Share referrals from your gateway." : "Share a friend or family referral."}</h1>
           <p className="auth-copy">
@@ -3052,10 +3300,7 @@ function PublicFeedbackView({
     <div className="auth-shell public-referral-shell">
       <div className="auth-grid public-referral-grid">
         <section className="auth-hero public-referral-hero">
-          <span className="wordmark auth-wordmark">
-            <span className="letters">setu</span>
-            <span className="deck" />
-          </span>
+          <SetuFinanceLogo className="auth-wordmark" portalName="Feedback" tagline="User feedback · issues & ideas" />
           <div className="auth-kicker">Feedback</div>
           <h1>Share what should work better.</h1>
           <p className="auth-copy">
@@ -4714,8 +4959,27 @@ function PeopleHubView({ customers, referralParties, referrals, onOpenClients, o
   );
 }
 
-function AuditHubView({ activity, exceptionHistory, referralEvents, onOpenReceivables, onOpenReferrals }) {
+function formatAuthAuditEventLabel(eventType) {
+  return String(eventType || "auth_event")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function getAuthAuditOutcomeTone(outcome) {
+  if (outcome === "success") {
+    return "success";
+  }
+  if (outcome === "failure") {
+    return "danger";
+  }
+  return "neutral";
+}
+
+function AuditHubView({ activity, authAuditEvents, exceptionHistory, referralEvents, onOpenReceivables, onOpenReferrals }) {
   const latestActivity = [...activity].slice(0, 8);
+  const latestAuthAuditEvents = [...authAuditEvents].slice(0, 10);
   const latestReferralEvents = [...referralEvents].slice(0, 8);
   const latestExceptions = [...exceptionHistory].slice(0, 6);
 
@@ -4742,10 +5006,42 @@ function AuditHubView({ activity, exceptionHistory, referralEvents, onOpenReceiv
         </div>
 
         <div className="metrics c3">
-          <MetricCard accent label="Activity items" value={activity.length} delta="global feed" />
-          <MetricCard label="Referral events" value={referralEvents.length} delta="structured audit" />
+          <MetricCard accent label="Security events" value={authAuditEvents.length} delta="login + API-key checks" />
+          <MetricCard label="Activity items" value={activity.length} delta="global feed" />
           <MetricCard label="Resolved exceptions" value={exceptionHistory.length} delta="actor retained" />
         </div>
+
+        <section className="section">
+          <div className="section-head"><h2>Security auth events</h2></div>
+          <div className="section-desc">
+            Login, logout, and integration API-key checks are recorded here without passwords,
+            tokens, API-key values, or raw IP/user-agent strings.
+          </div>
+          <div className="tcard">
+            {latestAuthAuditEvents.map((event) => (
+              <div className="audit-row audit-row-wide" key={event.id}>
+                <span className="mono">{formatDateTimeValue(event.createdAt)}</span>
+                <div>
+                  <div className="detail-inline-head audit-inline-head">
+                    <div>
+                      <div className="cust">{formatAuthAuditEventLabel(event.eventType)}</div>
+                      <div className="sub">
+                        {event.username ?? event.actorUsername ?? "system"} · {event.requestMethod ?? "HTTP"} {event.requestPath ?? "unknown path"}
+                      </div>
+                    </div>
+                    <span className={`search-status-chip tone-${getAuthAuditOutcomeTone(event.outcome)}`}>
+                      {event.outcome}
+                    </span>
+                  </div>
+                  <div className="sub">
+                    IP hash {event.ipHashPreview ?? "not captured"} · User-agent hash {event.userAgentHashPreview ?? "not captured"}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {!latestAuthAuditEvents.length && <div className="empty">No auth audit events have been recorded yet.</div>}
+          </div>
+        </section>
 
         <div className="two-col">
           <section className="section no-gap">

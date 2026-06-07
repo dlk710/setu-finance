@@ -39,6 +39,8 @@ import {
 } from "./services/gmailAutoSync.js";
 import { buildGmailClientStatus } from "./services/gmailSync.js";
 import { getEmailIntegrationStatus, sendInvoiceEmail, sendReceiptEmail } from "./services/email.js";
+import integrationRouter from "./routes/integration.js";
+import { recordAuthAuditEvent } from "./services/authAudit.js";
 
 const app = express();
 const port = Number(process.env.PORT || 8787);
@@ -77,16 +79,32 @@ app.get("/api/auth/status", (request, response) => {
   });
 });
 
-app.post("/api/auth/login", (request, response, next) => {
+app.post("/api/auth/login", async (request, response, next) => {
   try {
     const { username, password } = request.body ?? {};
     const account = authenticatePortalUser(username, password);
 
     if (!account) {
+      await recordAuthAuditEvent({
+        request,
+        eventType: "login_failed",
+        outcome: "failure",
+        username,
+        metadata: {
+          reason: "invalid_credentials",
+        },
+      });
       throw createHttpError(401, "Incorrect username or password.");
     }
 
     setAuthCookie(response, account.username);
+    await recordAuthAuditEvent({
+      request,
+      eventType: "login_success",
+      outcome: "success",
+      username: account.username,
+      actorUsername: account.username,
+    });
     response.json({
       message: "Signed in.",
       authenticated: true,
@@ -98,15 +116,29 @@ app.post("/api/auth/login", (request, response, next) => {
   }
 });
 
-app.post("/api/auth/logout", (_request, response) => {
-  clearAuthCookie(response);
-  response.json({
-    message: "Signed out.",
-    authenticated: false,
-    username: null,
-    auth: getPortalAuthStatus(),
-  });
+app.post("/api/auth/logout", async (request, response, next) => {
+  try {
+    const session = readAuthenticatedSession(request);
+    clearAuthCookie(response);
+    await recordAuthAuditEvent({
+      request,
+      eventType: "logout",
+      outcome: "success",
+      username: session?.username ?? null,
+      actorUsername: session?.username ?? null,
+    });
+    response.json({
+      message: "Signed out.",
+      authenticated: false,
+      username: null,
+      auth: getPortalAuthStatus(),
+    });
+  } catch (error) {
+    next(error);
+  }
 });
+
+app.use("/api/integration", integrationRouter);
 
 app.use("/api", (request, _response, next) => {
   if (request.path.startsWith("/auth") || request.path.startsWith("/public")) {

@@ -20,6 +20,7 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - PDF receipt generation and outbound receipt email.
 - Configurable referral program with invoice-discount reward application.
 - Public referral and feedback intake forms.
+- Status-only provider engagement API for downstream applications.
 - Dashboard reporting for payments, exceptions, invoices, and referral performance.
 - PostgreSQL persistence with migration-managed schema.
 - AWS-ready deployment model using low-cost services and an upgrade path.
@@ -51,6 +52,8 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - The app must support configurable admin credentials through environment variables.
 - The app must preserve authenticated browser sessions for normal operator work.
 - Failed or unauthenticated API requests must return a safe error without leaking data.
+- Machine-to-machine integration endpoints must use a separate `X-Api-Key` header and `INTEGRATION_API_KEY`, not the human portal login.
+- The system must audit login/logout and integration API-key events without storing passwords, API-key values, tokens, session cookies, raw IP addresses, or raw user-agent strings.
 
 ### 4.2 Contract-First Onboarding
 
@@ -237,6 +240,25 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Settings must include referral-program rule maintenance.
 - Settings should be designed to grow into email provider, storage, and backup controls.
 
+### 4.13 Provider Engagement Status API
+
+- Finance must expose `GET /api/integration/engagement-status` for downstream provider apps.
+- The endpoint must require `X-Api-Key` and reject missing or incorrect keys with `401`.
+- The endpoint must return only `customer_id`, `email`, `engagement_status`, and `as_of`.
+- Engagement status must be one of `active`, `dormant`, or `inactive`.
+- The default derived rule is:
+  - `active`: no unpaid overdue invoices
+  - `dormant`: unpaid overdue invoice exists and the oldest overdue date is within 30 days
+  - `inactive`: unpaid overdue invoice exists and the oldest overdue date is older than 30 days
+- The endpoint must not return payment amounts, invoice amounts, balances, line items, memos, raw email text, or transaction details.
+
+### 4.14 Authentication Audit Logging
+
+- Finance must record low-cost audit events for login success, login failure, logout, provider API-key success, and provider API-key failure.
+- Audit rows must include event type, outcome, timestamp, username when available, request method/path, safe metadata, hashed IP, and hashed user-agent.
+- Audit logging must never store passwords, API-key values, OAuth tokens, SMTP passwords, MFA codes, session cookies, raw IP addresses, or raw user-agent strings.
+- Recent audit events must be visible in the Audit workspace for admin review.
+
 ## 5. Non-Functional Requirements
 
 | Area | Requirement |
@@ -246,6 +268,8 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 | Reliability | Gmail sync should be incremental, idempotent, and safe to rerun. |
 | Auditability | Payment application, exception resolution, referral reward application, and receipt sends must be traceable. |
 | Security | Secrets must stay outside Git; cloud secrets should use SSM Parameter Store or Secrets Manager. |
+| Integration privacy | Provider integrations must expose status-only data unless a future approved contract explicitly expands the payload. |
+| Audit cost | Authentication audit logging should use PostgreSQL for the current stage and short-retention CloudWatch logs in AWS. |
 | Data safety | Current low-cost deployment can tolerate some data loss, but backups should minimize loss windows. |
 | Backup | PostgreSQL backups should run at least every 2 hours and land in private S3 with lifecycle transition to low-cost storage. |
 | Extensibility | Schema should support future organizations, workspaces, bank integrations, and product modules. |
@@ -261,6 +285,8 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - `processed_messages` prevents the same Gmail message from being reprocessed as a new payment.
 - Duplicate/replay-risk payments should be saved for review but excluded from confirmed totals.
 - Referral rewards can be applied once and only to eligible draft invoices.
+- Provider engagement status is derived from invoice status and due dates without selecting or returning amount columns.
+- Auth audit metadata must be redacted before storage and must exclude sensitive auth material.
 
 ## 7. Acceptance Criteria
 
@@ -268,6 +294,8 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Finance can send an invoice by email.
 - Finance can sync Zelle emails and see parsed transactions with exact cents.
 - A clear match appears in `Payments to confirm`.
+- Provider engagement status returns `200` with a valid `X-Api-Key`, `401` without it, and no amount fields in the payload.
+- Login success/failure, logout, and provider API-key success/failure appear in Audit without any stored password or API-key value.
 - An ambiguous or mismatched payment appears in `Exceptions`.
 - A reused Zelle transaction number appears as possible abuse/replay risk and cannot be accepted/applied.
 - Finance can record a manually secured payment and later send a PDF receipt.

@@ -14,6 +14,7 @@ This document is the consolidated current-state handoff for the Setu Finance por
 | Public referral form | `/refer` | No-login referral intake. |
 | Public referral gateway | `/refer/:customerId`, `/referral-gateway/:customerId`, `/r/:customerId` | No-login referral intake with the referrer customer ID prefilled from the URL. |
 | Public feedback form | `/feedback` | No-login feedback intake with optional attachments. |
+| Provider engagement status API | `/api/integration/engagement-status` | Machine-to-machine read-only engagement status for downstream apps, protected by `X-Api-Key`. |
 
 Security note: real passwords, OAuth tokens, SMTP passwords, and customer-sensitive secrets are not stored in documentation. Portal credentials are configured through environment variables or cloud secret storage.
 
@@ -22,6 +23,10 @@ Security note: real passwords, OAuth tokens, SMTP passwords, and customer-sensit
 Setu Finance is an internal finance operations portal for contract-first client onboarding, invoice generation, payment capture, human payment review, receipt generation, customer 360 visibility, referral reward management, and feedback intake.
 
 The portal is intentionally designed as a product-suite foundation. Customer identity, contracts, services, invoices, payments, referrals, feedback, settings, and audit history are stored as durable records instead of temporary spreadsheet rows.
+
+Setu Finance also exposes a provider-side status-only integration for downstream applications. The integration returns engagement status derived from invoice regularity and deliberately excludes amounts, balances, invoice line items, payment memos, and raw transaction details.
+
+Authentication/security audit logging is stored in PostgreSQL for low-cost local and AWS operation. Login, logout, and provider API-key events are visible from the Audit workspace without storing passwords, API keys, tokens, raw IP addresses, or raw user-agent strings.
 
 ## 3. Primary Users
 
@@ -61,6 +66,7 @@ flowchart TD
 
 | Area | Current purpose |
 | --- | --- |
+| `/` | Public Setu portal landing with the bridge wordmark, one-bar portal switcher, and five portal cards. Finance and Referral are live links; Discover, Customer, and Media are marked as coming soon. |
 | Executive | Default summary landing page using the existing Dashboard route and read model. Legacy `/dashboard` still works. |
 | Clients | Merged v2 section for contract-first onboarding, customer register, and customer 360 entry points. Existing `/onboarding`, `/customers`, and `/customers/:id` routes still work. |
 | Receivables | Merged v2 section for the existing billing console. It now uses tabs for `Overview`, `Invoices`, `Payments to confirm`, `Exceptions`, `Receipts`, and `Inbox sync`, while preserving invoice sending, Zelle sync, payment review, exception resolution, manual payments, completed transactions, and receipt actions. Existing `/billing` still works. |
@@ -72,6 +78,16 @@ flowchart TD
 | `/refer` | Public no-login referral submission form. |
 | `/refer/:customerId` | Personalized referral gateway for a specific referrer. The customer ID is prefilled from the URL and the email is still verified before finance can convert the submission. |
 | `/feedback` | Public no-login feedback submission form with optional attachments. |
+
+Setu portal-family naming:
+
+| Portal | Tagline | Status |
+| --- | --- | --- |
+| Finance | Contract-to-cash · billing & status | Live |
+| Discover | Opportunity Studio · find & match | Coming soon |
+| Customer | Member portal · profiles & evidence | Coming soon |
+| Media | Press portal · articles & proofs | Coming soon |
+| Referral | Referral Engine · grow the book | Live |
 
 ## 6. Client Onboarding
 
@@ -258,9 +274,25 @@ Current integration points:
 
 - Gmail OAuth for Zelle email sync
 - SMTP/Gmail app password for invoice and receipt sending
+- status-only provider API at `/api/integration/engagement-status`
 - local filesystem contract storage in development
 - S3-ready contract storage adapter for AWS
 - PostgreSQL migrations for schema management
+
+Security/auth audit:
+
+- records login success, login failure, logout, and provider integration API-key success/failure
+- stores event type, outcome, username when available, request method/path, safe metadata, timestamp, hashed IP, and hashed user-agent
+- uses `AUTH_AUDIT_HASH_SALT` when configured, otherwise falls back to the session secret for local hashing
+- never stores passwords, API-key values, OAuth tokens, SMTP passwords, MFA codes, session cookies, raw IPs, or raw user-agent strings
+
+Provider engagement status:
+
+- authenticated by `X-Api-Key` and `INTEGRATION_API_KEY`
+- returns only `customer_id`, `email`, `engagement_status`, and `as_of`
+- derives status from the `customer_engagement_status` database view
+- default rule: no unpaid overdue invoices means `active`; overdue within 30 days means `dormant`; older overdue invoices mean `inactive`
+- no amount columns are selected by the view or returned by the endpoint
 
 ## 15. Current Architecture
 

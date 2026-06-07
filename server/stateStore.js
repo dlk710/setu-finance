@@ -2074,6 +2074,24 @@ async function hydratePortalState(client) {
     FROM activity_events
     ORDER BY created_at DESC, id DESC
   `);
+  const authAuditResult = await client.query(`
+    SELECT
+      id,
+      event_type,
+      outcome,
+      username,
+      user_id,
+      actor_username,
+      ip_hash,
+      user_agent_hash,
+      request_method,
+      request_path,
+      metadata,
+      created_at
+    FROM auth_audit_events
+    ORDER BY created_at DESC, id DESC
+    LIMIT 50
+  `);
   const processedMessagesResult = await client.query(`
     SELECT message_id
     FROM processed_messages
@@ -2461,6 +2479,20 @@ async function hydratePortalState(client) {
       },
     },
     admin: {
+      authAuditEvents: authAuditResult.rows.map((row) => ({
+        id: row.id,
+        eventType: row.event_type,
+        outcome: row.outcome,
+        username: row.username ?? null,
+        userId: row.user_id ?? null,
+        actorUsername: row.actor_username ?? null,
+        ipHashPreview: row.ip_hash ? `${String(row.ip_hash).slice(0, 12)}...` : null,
+        userAgentHashPreview: row.user_agent_hash ? `${String(row.user_agent_hash).slice(0, 12)}...` : null,
+        requestMethod: row.request_method ?? null,
+        requestPath: row.request_path ?? null,
+        metadata: row.metadata ?? {},
+        createdAt: formatTimestamp(row.created_at),
+      })),
       feedbackSubmissions,
       referralProgram,
       referralParties,
