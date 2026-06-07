@@ -35,7 +35,23 @@ What to watch:
 - `Exceptions` means the system needs a human decision.
 - Duplicate or replay-risk transactions are not counted in totals.
 
-## 3. Client Onboarding
+## 3. Global Search
+
+Use this when you know what you are looking for but do not want to click through the side navigation.
+
+1. Click the search bar in the top header.
+2. Type a page, task, customer, employee, invoice, transaction, referral, or feedback keyword.
+3. Review the grouped suggestions.
+4. Press `Enter` to open the top suggestion, or click the exact result.
+5. Use customer ID, employee ID, email, phone, invoice number, transaction number, or the first few letters of a task for faster lookup.
+
+Important rules:
+
+- Search results navigate you to the right page, tab, or 360 view.
+- Search does not automatically sync Gmail, apply payments, create invoices, or send receipts.
+- If no result appears, check spelling or try a more exact ID/email/phone.
+
+## 4. Client Onboarding
 
 Use this when a new client signs up or when an existing client adds services.
 
@@ -70,7 +86,7 @@ Important rules:
 - Service history is append-only; later services should be added with their own enrollment date.
 - Uploaded contracts remain linked to the customer 360 page.
 
-## 4. Customer Search
+## 5. Customer Search
 
 Use this to find customers quickly.
 
@@ -96,7 +112,7 @@ Useful statuses:
 - `Mismatch`: payment amount does not match expected amount.
 - `Needs follow-up`: onboarding or billing details are incomplete.
 
-## 5. Customer 360 View
+## 6. Customer 360 View
 
 Use this to see the full customer history.
 
@@ -112,7 +128,7 @@ Use this to see the full customer history.
 10. Review referral relationships and reward status.
 11. Use browser back/forward to move between customer pages and portal sections.
 
-## 6. Create And Send Invoice
+## 7. Create And Send Invoice
 
 Use this when you need to invoice a customer.
 
@@ -137,7 +153,7 @@ Important rules:
 - Referral bonuses reduce invoice amount through invoice discounting.
 - Invoice email uses the configured outbound email account.
 
-## 7. Send Due Invoices
+## 8. Send Due Invoices
 
 Use this during daily billing review.
 
@@ -148,7 +164,7 @@ Use this during daily billing review.
 5. Or click `Send all` if every due invoice is ready.
 6. Confirm the queue updates after sending.
 
-## 8. Sync Zelle Inbox
+## 9. Sync Zelle Inbox
 
 Use this to pull Zelle confirmation emails into the portal.
 
@@ -177,7 +193,7 @@ Important rules:
 - Previously processed Gmail messages are skipped.
 - Same Zelle transaction number cannot be applied twice.
 
-## 9. Review And Apply Payments
+## 10. Review And Apply Payments
 
 Use this when a payment is matched and ready for finance approval.
 
@@ -196,7 +212,7 @@ Important rules:
 - Applying payment and sending receipt are separate actions.
 - Do not apply if the customer, amount, or transaction details look wrong.
 
-## 10. Resolve Exceptions
+## 11. Resolve Exceptions
 
 Use this when the system cannot safely auto-match or apply a payment.
 
@@ -219,7 +235,7 @@ Important rules:
 - Rejected and archived records are retained in the bucket; delete is a soft-delete with audit history, not silent data loss.
 - Every exception action is saved with the user and timestamp.
 
-## 11. Record Manual Secured Payment
+## 12. Record Manual Secured Payment
 
 Use this when funds are confirmed outside Gmail/Zelle email sync.
 
@@ -248,7 +264,7 @@ Important rules:
 - If a Zelle transaction number already exists, the portal blocks it as possible abuse/replay risk.
 - Manual payments are auditable and labeled by payment route.
 
-## 12. Send Or Re-Send Receipt
+## 13. Send Or Re-Send Receipt
 
 Use this after a payment has been applied.
 
@@ -273,37 +289,131 @@ Receipt includes:
 - receipt timestamp
 - PDF attachment
 
-## 13. Referral Program
+## 14. Referral Program
 
-Use this to manage referral relationships and bonuses.
+Use this to review Referral Engine intake, manage referral relationships, and apply rewards.
 
 1. Open `Referral Program`.
-2. Review referral rules at the top.
-3. Review who referred whom.
-4. Check relationship label and referral date.
-5. Review qualification status.
-6. For qualified rewards, review the green available bonus section.
-7. Click `Apply referral bonus` to apply the bonus to the next eligible draft invoice.
-8. Confirm the invoice shows a lower payable amount.
+2. Review `Referral engine intake`.
+3. For `Pending identity`, choose the correct employee or customer and click `Resolve identity`.
+4. For `Pending finance review`, review client, referrer, services, relationship, and reward estimate.
+5. Click `Approve` only when the referral is legitimate.
+6. Click `Reject` when the referral is duplicate, self-referral, invalid, or not eligible.
+7. After approval, click `Mark qualified` only when the referred client has qualified for reward routing.
+8. For customer referrers, review available invoice discounts and click `Apply referral bonus` to discount the next eligible draft invoice.
+9. For employee referrers, review the scheduled payout in `Payables`.
+10. Review reporting for relationships, qualified rewards, and bonus spend.
 
 Important rules:
 
-- Referral bonus is not paid directly to customers.
-- Referral bonus is applied as a discount on an invoice.
+- Every new referral must be approved by finance before relationship or reward routing.
+- Customer referral bonus is not paid directly to customers.
+- Customer referral bonus is applied as a discount on an invoice.
+- Employee referral bonus is routed to Payables as an employee referral payout.
 - Rules are configurable in `Settings`.
 - Historical referrals preserve the rule snapshot active when created.
 
-## 14. Public Referral Form
+## 15. Public Referral Engine
 
-Use this when customers submit referrals without logging in.
+Use this when customers, employees, sales team members, or other referrers submit referrals without logging in.
 
-1. Share `/refer` with customers when needed.
-2. Customer enters referrer and referred-person details.
-3. Portal blocks duplicate submissions by referred email or phone.
-4. Finance reviews submissions in the referral/admin workflow.
-5. Convert valid submissions when the referred person becomes a customer.
+1. Share `/refer` with the referrer.
+2. Referrer chooses email, phone, or employee ID.
+3. Email and phone can match customer or employee records.
+4. Employee ID matches employee records only.
+5. Referrer confirms the identity belongs to them before details are shown.
+6. If the referrer is not found, they can submit their own details for manual finance review.
+7. Referrer selects likely services.
+8. Referrer enters referred client name and at least one client contact: email or phone.
+9. Referrer selects how they know the client.
+10. Referrer reviews terms and submits.
+11. Finance sees the entry in `Referral Program` before any reward is created.
 
-## 15. Public Feedback Form
+Important rules:
+
+- Duplicate referred client email or phone is blocked.
+- Self-referrals are blocked.
+- Reward estimates are recomputed by the server.
+- Public submission alone does not create a payable or invoice discount.
+
+## 16. People
+
+Use this to onboard employees, maintain HR/finance fields, and review employee payment history.
+
+1. Open `People`.
+2. Review employee counts and payment totals.
+3. Use the `Onboard Employee` form at the top of the page to add:
+   - name
+   - official and personal email
+   - official and personal mobile
+   - title, department, region, and manager
+   - employment status
+   - joining and exit dates
+   - monthly salary, joining bonus, and annual bonus
+   - HR comments and critical information
+4. Click `Create employee`.
+5. Use `Employee Directory` search to find an existing employee by name, employee ID, email, phone, department, title, or region.
+6. Review the top 10 relevant matches.
+7. Click `Employee 360` for the correct employee.
+8. Review status, role, contact details, HR comments, compensation, referrals, payment history, contracts, and payslips.
+9. Use `Record employee payment` to capture salary, joining bonus, annual bonus, referral bonus, reimbursement, or other payments.
+10. Use `Employee contracts` to upload signed offer letters, NDAs, employment agreements, policy acknowledgements, or other HR files.
+11. Use `Generate payslip` for a calendar month or custom pay cycle.
+12. Click `Download PDF` beside a generated payslip to share it with the employee.
+
+Important rules:
+
+- Employee records are separate from customer records.
+- The directory does not show all employees by default.
+- Search results are capped at 10; narrow the search if the right person does not appear.
+- Employee ID search in the public Referral Engine searches employee records only.
+- Employee payment amounts preserve exact cents.
+- Uploaded employee contracts appear in both Employee 360 and the central `Contracts` workspace.
+
+## 17. Contracts
+
+Use this to find client, employee, NDA, stakeholder, and other agreement files that were uploaded from customer onboarding or People.
+
+1. Open `Contracts`.
+2. Review contract counts by total, client, employee, and stakeholder/other.
+3. Search by signed-with name, customer ID, employee ID, contract type, file name, summary, or notes.
+4. Filter by category such as client or employee.
+5. Filter by contract type such as NDA, offer letter, client contract, employee contract, or policy acknowledgement.
+6. Click `Quick peek` to preview supported PDFs, images, or text files inside the portal.
+7. Click `Download` only when you intentionally want the raw contract file.
+
+Important rules:
+
+- Contracts space is search-only; do not upload files here.
+- Contract rows show the signed-with party, short summary, and signed date.
+- Client contracts show the client name, such as Lohith Deshpande, in `Signed with`.
+- Employee contracts show the employee name in `Signed with`.
+- Upload client contracts from client onboarding or customer 360.
+- Upload employee contracts from employee 360 in People.
+- Quick peek and downloads require an authenticated admin session.
+- Quick peek streams through the Setu backend even when files are stored in a private AWS S3 bucket.
+- In AWS, the same metadata maps to private S3 keys grouped by owner category, owner ID, and date.
+
+## 18. Payables
+
+Use this to track money-out and other finance entries.
+
+1. Open `Payables`.
+2. Review employee paid total, referral payouts due, other paid total, and other received total.
+3. Review expense distribution by region.
+4. Use `Record other expense or income` for laptop purchases, rent/lease, software, legal/compliance, travel, marketing, professional services, training, refunds, income, or other categories.
+5. Choose direction: `Paid` or `Received`.
+6. Enter vendor/source, amount, date, region, department, payment method, memo, and reference.
+7. Click `Record other entry`.
+8. Review employee payment ledger and employee referral payout ledger.
+
+Important rules:
+
+- Customer referral rewards remain invoice discounts in Receivables.
+- Employee referral rewards appear in Payables as scheduled referral payouts.
+- Other `Received` entries are tracked separately from money-out.
+
+## 19. Public Feedback Form
 
 Use this when customers, prospects, or test users need a simple place to share feedback.
 
@@ -322,7 +432,7 @@ Important rules:
 - Use GitHub Issues for internal engineering follow-up, not as the primary public feedback intake.
 - Attachments should be used only when helpful and should not include unnecessary sensitive data.
 
-## 16. Settings
+## 20. Settings
 
 Use this for admin-controlled configuration.
 
@@ -341,7 +451,7 @@ Admin notes:
 - Changes are stored in the backend database.
 - Production secrets should be managed outside Git.
 
-## 17. Daily Operating Checklist
+## 21. Daily Operating Checklist
 
 Use this each business day.
 
@@ -357,7 +467,7 @@ Use this each business day.
 10. Check customer records that need follow-up.
 11. Review new user feedback.
 
-## 18. Safety Checklist
+## 22. Safety Checklist
 
 Before applying money:
 

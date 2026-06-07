@@ -45,6 +45,8 @@ import {
   loadApiState,
   loadAuthStatus,
   loadPublicReferralProgram,
+  resolveReferralReferrer,
+  submitReferralEngine,
   submitPublicFeedback,
   submitPublicReferral,
 } from "./lib/api";
@@ -114,6 +116,7 @@ const PORTAL_VIEW_PATHS = {
   referrals: "/referrals",
   payables: "/payables",
   people: "/people",
+  contracts: "/contracts",
   audit: "/audit",
   onboarding: "/onboarding",
   dashboard: "/dashboard",
@@ -231,6 +234,14 @@ const FINANCE_NAV_SECTIONS = [
     helper: "Org directory",
   },
   {
+    section: "contracts",
+    label: "Contracts",
+    view: "contracts",
+    icon: IconFileInvoice,
+    marker: "new",
+    helper: "Files + archive",
+  },
+  {
     section: "settings",
     label: "Settings",
     view: "settings",
@@ -261,8 +272,11 @@ function getFinanceSection(view) {
   if (view === "payables") {
     return "payables";
   }
-  if (view === "people") {
+  if (view === "people" || view === "employee360") {
     return "people";
+  }
+  if (view === "contracts") {
+    return "contracts";
   }
   if (view === "settings") {
     return "settings";
@@ -273,7 +287,7 @@ function getFinanceSection(view) {
   return "executive";
 }
 
-function getFinanceShellCopy({ view, customer }) {
+function getFinanceShellCopy({ view, customer, employee }) {
   const section = getFinanceSection(view);
   const defaults = {
     executive: ["Executive", FINANCE_PORTAL.tagline],
@@ -281,13 +295,17 @@ function getFinanceShellCopy({ view, customer }) {
     receivables: ["Receivables", "Invoices, Zelle/Gmail sync, payment confirmation, exceptions, and receipts"],
     payables: ["Payables", "Referral bonuses and future money-out queues"],
     referrals: ["Referrals", "Referral intake, relationships, rewards, and feedback"],
-    people: ["People", "Future employee and sales referrer directory"],
+    people: ["People", "Employee directory, onboarding, payslips, and HR finance ledger"],
+    contracts: ["Contracts", "Search client, employee, NDA, stakeholder, and HR agreement archive"],
     settings: ["Settings", "Access, Gmail sync, outbound email, and referral rules"],
     audit: ["Audit", "Referral events, finance activity, and resolved exception history"],
   };
 
   if (view === "customer360" && customer) {
     return ["Customer 360", `${customer.name} · ${customer.customerCode ?? customer.id}`];
+  }
+  if (view === "employee360" && employee) {
+    return ["Employee 360", `${employee.fullName} · ${employee.employeeCode}`];
   }
   if (view === "onboarding") {
     return ["Client onboarding", "Upload contracts first, then confirm services, fees, and billing schedule"];
@@ -299,17 +317,22 @@ function getFinanceShellCopy({ view, customer }) {
   return defaults[section] ?? defaults.executive;
 }
 
-function createPortalRoute(view = "dashboard", customerId = "", referrerCode = "") {
+function createPortalRoute(view = "dashboard", customerId = "", referrerCode = "", employeeId = "") {
   return {
     view,
     customerId,
     referrerCode,
+    employeeId,
   };
 }
 
 function buildPortalPath(route) {
   if (route?.view === "customer360" && route.customerId) {
     return `/customers/${encodeURIComponent(route.customerId)}`;
+  }
+
+  if (route?.view === "employee360" && route.employeeId) {
+    return `/people/${encodeURIComponent(route.employeeId)}`;
   }
 
   if (route?.view === "publicReferral" && route.referrerCode) {
@@ -331,6 +354,11 @@ function parsePortalRoute(pathname = "/") {
     return createPortalRoute("customer360", decodeURIComponent(customerMatch[1]));
   }
 
+  const employeeMatch = normalizedPath.match(/^\/people\/([^/]+)$/);
+  if (employeeMatch) {
+    return createPortalRoute("employee360", "", "", decodeURIComponent(employeeMatch[1]));
+  }
+
   const entry = Object.entries(PORTAL_VIEW_PATHS).find(([, path]) => path === normalizedPath);
   if (entry) {
     return createPortalRoute(entry[0]);
@@ -339,7 +367,7 @@ function parsePortalRoute(pathname = "/") {
   return createPortalRoute("dashboard");
 }
 
-function getBrowserTitle(route, customer = null) {
+function getBrowserTitle(route, customer = null, employee = null) {
   if (route?.view === "portalHome") {
     return "setu - Portals";
   }
@@ -351,6 +379,9 @@ function getBrowserTitle(route, customer = null) {
   }
   if (route?.view === "customer360" && customer?.name) {
     return `setu - Finance - ${customer.name}`;
+  }
+  if (route?.view === "employee360" && employee?.fullName) {
+    return `setu - Finance - ${employee.fullName}`;
   }
   return "setu - Finance";
 }
@@ -494,14 +525,173 @@ const DEFAULT_ONBOARDING_FORM = {
 };
 
 const DEFAULT_PUBLIC_REFERRAL_FORM = {
-  referrerCustomerCode: "",
-  referrerEmail: "",
-  referredFullName: "",
-  referredEmail: "",
-  referredPhone: "",
-  relationshipLabel: "",
-  notes: "",
+  method: "email",
+  entered: "",
+  consentIdentity: false,
+  referrerResolution: "auto",
+  selfName: "",
+  selfEmail: "",
+  selfPhone: "",
+  selfDeclaredType: "",
+  selectedServices: [],
+  clientName: "",
+  clientEmail: "",
+  clientPhoneCountryCode: "+1",
+  clientPhone: "",
+  relationship: "",
+  agreementTerms: false,
 };
+
+const REFERRAL_PHONE_COUNTRY_OPTIONS = [
+  { value: "+1", label: "+1 US/CA" },
+  { value: "+91", label: "+91 IN" },
+  { value: "+234", label: "+234 NG" },
+  { value: "+44", label: "+44 UK" },
+  { value: "+61", label: "+61 AU" },
+  { value: "+971", label: "+971 AE" },
+  { value: "+65", label: "+65 SG" },
+  { value: "+27", label: "+27 ZA" },
+];
+
+const EMPLOYEE_STATUS_OPTIONS = [
+  { value: "current", label: "Current" },
+  { value: "on_leave", label: "On leave" },
+  { value: "contractor", label: "Contractor" },
+  { value: "left_company", label: "Left company" },
+  { value: "terminated", label: "Terminated" },
+];
+
+const EMPLOYEE_DEPARTMENT_OPTIONS = [
+  "Profile Build",
+  "Attorney",
+  "Sales",
+  "Media",
+  "Finance",
+  "Administration",
+  "IT Support",
+  "Other",
+];
+
+const EMPLOYEE_TITLE_OPTIONS = [
+  "CSM",
+  "Team Lead",
+  "Finance Lead",
+  "Paralegal",
+  "Attorney",
+  "Sr Attorney",
+  "Executive",
+  "Media Assistant",
+  "Consultant",
+];
+
+const EMPLOYEE_REGION_OPTIONS = [
+  { value: "US", label: "US", currency: "USD" },
+  { value: "India", label: "India", currency: "INR" },
+  { value: "Nigeria", label: "Nigeria", currency: "NGN" },
+];
+
+const EMPLOYEE_PAYMENT_TYPE_OPTIONS = [
+  { value: "monthly_salary", label: "Monthly salary" },
+  { value: "joining_bonus", label: "Joining bonus" },
+  { value: "annual_bonus", label: "Annual bonus" },
+  { value: "referral_bonus", label: "Referral bonus" },
+  { value: "reimbursement", label: "Reimbursement" },
+  { value: "other", label: "Other" },
+];
+
+const BUSINESS_CONTRACT_TYPE_OPTIONS = [
+  { value: "nda", label: "NDA" },
+  { value: "employee_contract", label: "Employee contract" },
+  { value: "offer_letter", label: "Signed offer letter" },
+  { value: "client_contract", label: "Client contract" },
+  { value: "stakeholder_contract", label: "Stakeholder contract" },
+  { value: "vendor_contract", label: "Vendor contract" },
+  { value: "policy_acknowledgement", label: "Policy acknowledgement" },
+  { value: "other", label: "Other" },
+];
+
+const OTHER_EXPENSE_CATEGORY_OPTIONS = [
+  "Laptop / equipment",
+  "Facility rent / lease",
+  "Software subscription",
+  "Legal / compliance",
+  "Travel",
+  "Marketing",
+  "Professional services",
+  "Training",
+  "Refund / income",
+  "Other",
+];
+
+function createDefaultEmployeeForm() {
+  return {
+    firstName: "",
+    middleName: "",
+    lastName: "",
+    preferredName: "",
+    personalEmail: "",
+    officialEmail: "",
+    personalMobile: "",
+    officialMobile: "",
+    title: "CSM",
+    department: "Profile Build",
+    region: "US",
+    currency: "USD",
+    managerName: "",
+    status: "current",
+    dateOfJoining: new Date().toISOString().slice(0, 10),
+    dateOfExit: "",
+    oneTimeJoiningBonus: "",
+    annualBonus: "",
+    monthlySalary: "",
+    hrComments: "",
+    criticalInfo: "",
+  };
+}
+
+function createDefaultEmployeePaymentForm(employeeId = "") {
+  return {
+    employeeId,
+    paymentType: "monthly_salary",
+    amount: "",
+    currency: "USD",
+    paymentDate: new Date().toISOString().slice(0, 10),
+    status: "paid",
+    region: "",
+    memo: "",
+    reference: "",
+  };
+}
+
+function createDefaultEmployeeContractForm() {
+  return {
+    contractType: "offer_letter",
+    contractDate: new Date().toISOString().slice(0, 10),
+    effectiveDate: new Date().toISOString().slice(0, 10),
+    expirationDate: "",
+    summary: "",
+    notes: "",
+    fileName: "",
+    mimeType: "",
+    contentBase64: "",
+  };
+}
+
+function createDefaultOtherExpenseForm() {
+  return {
+    direction: "paid",
+    category: "Laptop / equipment",
+    vendorOrSource: "",
+    amount: "",
+    expenseDate: new Date().toISOString().slice(0, 10),
+    status: "paid",
+    region: "US",
+    department: "Operations",
+    paymentMethod: "card",
+    memo: "",
+    receiptReference: "",
+  };
+}
 
 const DEFAULT_PUBLIC_FEEDBACK_FORM = {
   customerCode: "",
@@ -795,11 +985,15 @@ const DASHBOARD_TRANSACTION_FILTERS = [
 
 const REFERRAL_RELATIONSHIP_OPTIONS = [
   { value: "", label: "Select relationship" },
-  { value: "friend", label: "Friend" },
-  { value: "family", label: "Family" },
+  { value: "friend_family", label: "Friend or family" },
   { value: "colleague", label: "Colleague" },
-  { value: "community", label: "Community" },
-  { value: "former client", label: "Former client" },
+  { value: "professional_network", label: "Professional network / LinkedIn" },
+  { value: "social_media", label: "Social media" },
+  { value: "online_community", label: "Online community or forum" },
+  { value: "alumni_network", label: "Alumni / university network" },
+  { value: "event_webinar", label: "Event or webinar" },
+  { value: "community_group", label: "Community or cultural group" },
+  { value: "existing_client", label: "Existing Setu client" },
   { value: "other", label: "Other" },
 ];
 
@@ -871,6 +1065,133 @@ function formatFileSize(bytes) {
     return `${Math.round(size / 1024)} KB`;
   }
   return `${size} B`;
+}
+
+function isContractPreviewable(contract) {
+  const mimeType = String(contract?.mimeType || "").toLowerCase();
+  const fileName = String(contract?.fileName || "").toLowerCase();
+  return (
+    mimeType === "application/pdf" ||
+    mimeType.startsWith("image/") ||
+    mimeType.startsWith("text/") ||
+    mimeType === "application/json" ||
+    fileName.endsWith(".pdf") ||
+    fileName.endsWith(".png") ||
+    fileName.endsWith(".jpg") ||
+    fileName.endsWith(".jpeg") ||
+    fileName.endsWith(".gif") ||
+    fileName.endsWith(".webp") ||
+    fileName.endsWith(".txt")
+  );
+}
+
+function formatTitleCase(value) {
+  return String(value || "")
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatReferralRelationshipCode(value) {
+  return (
+    REFERRAL_RELATIONSHIP_OPTIONS.find((option) => option.value === value)?.label ??
+    formatTitleCase(value)
+  );
+}
+
+function formatReferralEngineStatusLabel(status) {
+  const labels = {
+    pending_identity: "Pending identity",
+    pending_review: "Pending finance review",
+    verified: "Approved / verified",
+    qualified: "Qualified",
+    rewarded: "Rewarded",
+    rejected: "Rejected",
+    duplicate: "Duplicate",
+  };
+
+  return labels[status] ?? formatTitleCase(status);
+}
+
+function formatReferralEngineStatusTone(status) {
+  if (status === "verified" || status === "qualified" || status === "rewarded") {
+    return "success";
+  }
+  if (status === "rejected" || status === "duplicate") {
+    return "danger";
+  }
+  if (status === "pending_identity") {
+    return "warn";
+  }
+  return "neutral";
+}
+
+function formatReferralEngineReward(intake) {
+  if (!intake || intake.rewardType === "tbd" || intake.rewardEstimate === null || intake.rewardEstimate === undefined) {
+    return "To be confirmed";
+  }
+  if (intake.rewardType === "cash_bonus") {
+    return `${formatCurrency(intake.rewardEstimate)} cash bonus`;
+  }
+  if (intake.rewardType === "invoice_discount") {
+    return `${Number(intake.rewardEstimate || 0)}% invoice discount`;
+  }
+  return formatTitleCase(intake.rewardType);
+}
+
+function formatEmployeeStatusLabel(status) {
+  return EMPLOYEE_STATUS_OPTIONS.find((option) => option.value === status)?.label ?? formatTitleCase(status);
+}
+
+function formatEmployeePaymentType(type) {
+  return EMPLOYEE_PAYMENT_TYPE_OPTIONS.find((option) => option.value === type)?.label ?? formatTitleCase(type);
+}
+
+function getEmployeeRegionCurrency(region = "US") {
+  return EMPLOYEE_REGION_OPTIONS.find((option) => option.value === region)?.currency ?? "USD";
+}
+
+function formatCurrencyForRegion(amount, region = "US", currency = "") {
+  return formatMoney(amount, currency || getEmployeeRegionCurrency(region));
+}
+
+function formatMoney(amount, currency = "USD") {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: currency || "USD",
+    maximumFractionDigits: 2,
+  }).format(Number(amount || 0));
+}
+
+function sumAmounts(rows = [], filter = () => true) {
+  return rows.filter(filter).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+}
+
+function summarizeCurrencyTotals(rows = [], amountKey = "amount") {
+  const grouped = new Map();
+  for (const row of rows) {
+    const currency = row.currency || getEmployeeRegionCurrency(row.region) || "USD";
+    grouped.set(currency, (grouped.get(currency) ?? 0) + Number(row[amountKey] || 0));
+  }
+  const values = Array.from(grouped.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([currency, amount]) => formatMoney(amount, currency));
+  if (!values.length) {
+    return "No payments";
+  }
+  return values.join(" · ");
+}
+
+function groupAmountBy(rows = [], keyGetter, filter = () => true) {
+  const grouped = new Map();
+  for (const row of rows.filter(filter)) {
+    const key = keyGetter(row) || "Unassigned";
+    grouped.set(key, (grouped.get(key) ?? 0) + Number(row.amount || 0));
+  }
+  return Array.from(grouped.entries())
+    .map(([label, amount]) => ({ label, amount }))
+    .sort((a, b) => b.amount - a.amount);
 }
 
 function formatExceptionResolutionAction(action) {
@@ -1057,10 +1378,533 @@ function buildCustomerLedgerStatus(customer, { dueInvoices = [], invoices = [], 
   };
 }
 
+function normalizeGlobalSearchText(value = "") {
+  return String(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9@.+#\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function createGlobalSearchItem({
+  id,
+  category = "Pages",
+  title,
+  subtitle = "",
+  keywords = [],
+  view = "",
+  customerId = "",
+  employeeId = "",
+  tab = "",
+  action = "",
+  badge = "",
+  priority = 0,
+}) {
+  const searchText = normalizeGlobalSearchText([title, subtitle, category, badge, ...keywords].join(" "));
+  return {
+    id,
+    category,
+    title,
+    subtitle,
+    keywords,
+    view,
+    customerId,
+    employeeId,
+    tab,
+    action,
+    badge,
+    priority,
+    searchText,
+  };
+}
+
+function getGlobalSearchItemPath(item) {
+  if (item.view === "customer360" && item.customerId) {
+    return `/customers/${item.customerId}`;
+  }
+  if (item.view === "employee360" && item.employeeId) {
+    return `/people/${item.employeeId}`;
+  }
+  if (item.view === "publicReferral") {
+    return "/refer";
+  }
+  return PORTAL_VIEW_PATHS[item.view] ?? "";
+}
+
+function buildGlobalSearchIndex({ state, counts = {} }) {
+  const customers = state.customers ?? [];
+  const invoices = state.invoices ?? [];
+  const payments = state.payments ?? [];
+  const employees = state.admin?.employees ?? [];
+  const contractLibrary = state.admin?.contractLibrary ?? [];
+  const referralIntake = state.admin?.referralIntake ?? [];
+  const feedbackSubmissions = state.admin?.feedbackSubmissions ?? [];
+  const items = [
+    createGlobalSearchItem({
+      id: "page-executive",
+      category: "Pages",
+      title: "Executive dashboard",
+      subtitle: "Company summary, collections, referrals, and employee paid metrics",
+      keywords: ["home", "dashboard", "leadership", "reporting", "summary"],
+      view: "dashboard",
+      priority: 95,
+    }),
+    createGlobalSearchItem({
+      id: "page-clients",
+      category: "Pages",
+      title: "Clients",
+      subtitle: "Client onboarding, customer register, and customer 360",
+      keywords: ["customers", "members", "client list", "customer search"],
+      view: "clients",
+      priority: 92,
+    }),
+    createGlobalSearchItem({
+      id: "task-onboard-client",
+      category: "Tasks",
+      title: "Onboard client",
+      subtitle: "Upload contracts and create a client profile",
+      keywords: ["contract upload", "new client", "new customer", "intake"],
+      view: "onboarding",
+      priority: 90,
+    }),
+    createGlobalSearchItem({
+      id: "task-new-invoice",
+      category: "Tasks",
+      title: "Create invoice",
+      subtitle: "Open the new invoice workflow",
+      keywords: ["new invoice", "bill customer", "send invoice", "invoice"],
+      view: "receivables",
+      tab: "Invoices",
+      action: "new_invoice",
+      priority: 88,
+    }),
+    createGlobalSearchItem({
+      id: "task-sync-zelle",
+      category: "Tasks",
+      title: "Sync Zelle inbox",
+      subtitle: "Pull Gmail Zelle confirmations into review queues",
+      keywords: ["gmail", "zelle", "payment sync", "inbox", "confirmations"],
+      view: "receivables",
+      tab: "Inbox sync",
+      action: "sync_zelle",
+      badge: `${counts.exceptions ?? 0} exceptions`,
+      priority: 86,
+    }),
+    createGlobalSearchItem({
+      id: "task-record-payment",
+      category: "Tasks",
+      title: "Record manual payment",
+      subtitle: "Record funds verified outside Gmail sync",
+      keywords: ["manual payment", "bank transfer", "cash", "check", "card"],
+      view: "receivables",
+      tab: "Payments to confirm",
+      action: "manual_payment",
+      priority: 84,
+    }),
+    createGlobalSearchItem({
+      id: "page-receivables",
+      category: "Pages",
+      title: "Receivables",
+      subtitle: "Invoices, Zelle sync, exceptions, receipts, and payment review",
+      keywords: ["billing", "payments", "receipts", "exceptions"],
+      view: "receivables",
+      priority: 82,
+    }),
+    createGlobalSearchItem({
+      id: "page-payables",
+      category: "Pages",
+      title: "Payables",
+      subtitle: "Employee payments, referral payouts, and other expenses",
+      keywords: ["money out", "expenses", "employee paid", "vendor", "other"],
+      view: "payables",
+      priority: 80,
+    }),
+    createGlobalSearchItem({
+      id: "page-referrals",
+      category: "Pages",
+      title: "Referral Program",
+      subtitle: "Referral intake, approval, qualification, and rewards",
+      keywords: ["referral engine", "refer", "bonus", "reward", "approve referral"],
+      view: "referrals",
+      badge: `${referralIntake.filter((item) => item.status === "pending_review" || item.status === "pending_identity").length} needs review`,
+      priority: 78,
+    }),
+    createGlobalSearchItem({
+      id: "page-people",
+      category: "Pages",
+      title: "Employee Directory",
+      subtitle: "Search employees, onboard employees, and open employee 360",
+      keywords: ["people", "employee", "hr", "payslip", "payroll"],
+      view: "people",
+      priority: 76,
+    }),
+    createGlobalSearchItem({
+      id: "page-contracts",
+      category: "Pages",
+      title: "Contracts",
+      subtitle: "Search client, employee, NDA, stakeholder, and HR agreement files",
+      keywords: ["contract library", "nda", "offer letter", "employee contract", "client contract", "documents"],
+      view: "contracts",
+      priority: 74,
+    }),
+    createGlobalSearchItem({
+      id: "task-onboard-employee",
+      category: "Tasks",
+      title: "Onboard employee",
+      subtitle: "Create an employee profile with HR and compensation fields",
+      keywords: ["new employee", "hire", "people", "hr"],
+      view: "people",
+      priority: 75,
+    }),
+    createGlobalSearchItem({
+      id: "page-settings",
+      category: "Pages",
+      title: "Settings",
+      subtitle: "Gmail sync, outbound email, referral rules, and access settings",
+      keywords: ["gmail settings", "email settings", "sync interval", "admin settings"],
+      view: "settings",
+      priority: 70,
+    }),
+    createGlobalSearchItem({
+      id: "page-audit",
+      category: "Pages",
+      title: "Audit",
+      subtitle: "Activity, auth events, referral events, and exception history",
+      keywords: ["history", "security", "events", "logs"],
+      view: "audit",
+      priority: 68,
+    }),
+    createGlobalSearchItem({
+      id: "public-referral",
+      category: "Pages",
+      title: "Public referral form",
+      subtitle: "No-login referral page for employees and clients",
+      keywords: ["refer a client", "referral portal", "public referral"],
+      view: "publicReferral",
+      priority: 60,
+    }),
+    createGlobalSearchItem({
+      id: "public-feedback",
+      category: "Pages",
+      title: "Feedback form",
+      subtitle: "No-login feedback form with optional attachments",
+      keywords: ["feedback", "issue", "support", "suggestion"],
+      view: "publicFeedback",
+      priority: 58,
+    }),
+  ];
+
+  for (const customer of customers) {
+    const status = buildCustomerLedgerStatus(customer, {
+      dueInvoices: state.dueInvoices ?? [],
+      invoices,
+      pendingPayments: state.pendingPayments ?? [],
+      exceptions: state.exceptions ?? [],
+    });
+    const emails = (customer.emails ?? []).map((email) => email.value).filter(Boolean);
+    const phones = (customer.phones ?? []).map((phone) => phone.value).filter(Boolean);
+    items.push(
+      createGlobalSearchItem({
+        id: `customer-${customer.id}`,
+        category: "Customers",
+        title: customer.name,
+        subtitle: `${customer.customerCode ?? customer.id} · ${status.label}`,
+        keywords: [
+          customer.customerCode,
+          customer.id,
+          customer.initials,
+          ...emails,
+          ...phones,
+          ...(customer.services ?? []),
+          ...(customer.aliases ?? []).map((alias) => alias.value),
+        ],
+        view: "customer360",
+        customerId: customer.customerCode ?? customer.id,
+        badge: "Customer 360",
+        priority: 50,
+      }),
+    );
+  }
+
+  for (const employee of employees) {
+    items.push(
+      createGlobalSearchItem({
+        id: `employee-${employee.id}`,
+        category: "People",
+        title: employee.fullName,
+        subtitle: `${employee.employeeCode} · ${employee.title} · ${employee.department}`,
+        keywords: [
+          employee.employeeCode,
+          employee.firstName,
+          employee.middleName,
+          employee.lastName,
+          employee.officialEmail,
+          employee.personalEmail,
+          employee.officialMobile,
+          employee.personalMobile,
+          employee.department,
+          employee.title,
+          employee.region,
+          employee.status,
+        ],
+        view: "employee360",
+        employeeId: employee.employeeCode ?? employee.id,
+        badge: employee.status === "current" ? "Current" : formatEmployeeStatusLabel(employee.status),
+        priority: 48,
+      }),
+    );
+  }
+
+  for (const contract of contractLibrary.slice(0, 120)) {
+    items.push(
+      createGlobalSearchItem({
+        id: `contract-${contract.source}-${contract.id}`,
+        category: "Contracts",
+        title: contract.fileName,
+        subtitle: `${contract.ownerName} · ${contract.contractTypeLabel}`,
+        keywords: [
+          contract.ownerCategory,
+          contract.ownerCode,
+          contract.ownerName,
+          contract.contractType,
+          contract.contractTypeLabel,
+          contract.summary,
+          contract.notes,
+        ],
+        view: "contracts",
+        badge: contract.ownerCategory,
+        priority: 34,
+      }),
+    );
+  }
+
+  for (const invoice of invoices.slice(0, 80)) {
+    items.push(
+      createGlobalSearchItem({
+        id: `invoice-${invoice.id}`,
+        category: "Finance Records",
+        title: invoice.invoiceCode ?? invoice.id,
+        subtitle: `${invoice.customerName} · ${invoice.service} · ${formatCurrency(invoice.zelleAmount ?? invoice.amount ?? 0)}`,
+        keywords: [invoice.customerName, invoice.email, invoice.service, invoice.milestone, invoice.status],
+        view: "receivables",
+        tab: "Invoices",
+        badge: invoice.status,
+        priority: 32,
+      }),
+    );
+  }
+
+  for (const payment of payments.slice(0, 80)) {
+    items.push(
+      createGlobalSearchItem({
+        id: `payment-${payment.id}`,
+        category: "Finance Records",
+        title: payment.transactionNumber ?? payment.reference ?? payment.id,
+        subtitle: `${payment.customerName ?? "Payment"} · ${formatCurrency(payment.amount ?? payment.amountReceived ?? 0)}`,
+        keywords: [payment.customerName, payment.memo, payment.senderName, payment.paymentRoute, payment.status],
+        view: "receivables",
+        tab: "Receipts",
+        badge: "Payment",
+        priority: 30,
+      }),
+    );
+  }
+
+  for (const intake of referralIntake.slice(0, 80)) {
+    items.push(
+      createGlobalSearchItem({
+        id: `referral-intake-${intake.id}`,
+        category: "Referrals",
+        title: intake.refCode,
+        subtitle: `${intake.clientName} · ${formatReferralEngineStatusLabel(intake.status)}`,
+        keywords: [
+          intake.clientName,
+          intake.clientEmail,
+          intake.clientPhone,
+          intake.referrerName,
+          intake.referrerEmail,
+          intake.referrerPhone,
+          intake.referrerEmployeeId,
+          ...(intake.services ?? []).map((service) => service.serviceLabel),
+        ],
+        view: "referrals",
+        badge: formatReferralEngineStatusLabel(intake.status),
+        priority: 28,
+      }),
+    );
+  }
+
+  for (const feedback of feedbackSubmissions.slice(0, 30)) {
+    items.push(
+      createGlobalSearchItem({
+        id: `feedback-${feedback.id}`,
+        category: "Feedback",
+        title: feedback.name,
+        subtitle: `${feedback.category} · ${feedback.reviewStatus}`,
+        keywords: [feedback.email, feedback.customerCode, feedback.message],
+        view: "referrals",
+        badge: "Feedback",
+        priority: 18,
+      }),
+    );
+  }
+
+  return items;
+}
+
+function scoreGlobalSearchItem(query, item) {
+  const normalizedQuery = normalizeGlobalSearchText(query);
+  if (!normalizedQuery) {
+    return item.priority || 0;
+  }
+  const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+  const title = normalizeGlobalSearchText(item.title);
+  const subtitle = normalizeGlobalSearchText(item.subtitle);
+  const itemTokens = item.searchText.split(" ").filter(Boolean);
+  const allTokensMatch = queryTokens.every((queryToken) =>
+    itemTokens.some((itemToken) =>
+      itemToken.includes(queryToken) ||
+      (queryToken.length >= 3 && itemToken.startsWith(queryToken)) ||
+      itemToken.slice(0, 3) === queryToken.slice(0, 3),
+    ),
+  );
+  if (!allTokensMatch && !item.searchText.includes(normalizedQuery)) {
+    return -1;
+  }
+
+  let score = item.priority || 0;
+  if (title === normalizedQuery) score += 120;
+  if (title.startsWith(normalizedQuery)) score += 90;
+  if (title.includes(normalizedQuery)) score += 70;
+  if (subtitle.includes(normalizedQuery)) score += 28;
+  if (item.searchText.includes(normalizedQuery)) score += 22;
+  score += queryTokens.length * 4;
+  return score;
+}
+
+function searchGlobalSearchItems(query, items, limit = 9) {
+  const normalizedQuery = normalizeGlobalSearchText(query);
+  if (!normalizedQuery) {
+    return items
+      .filter((item) => item.priority >= 70)
+      .sort((a, b) => b.priority - a.priority)
+      .slice(0, limit);
+  }
+  return items
+    .map((item) => ({ item, score: scoreGlobalSearchItem(normalizedQuery, item) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => b.score - a.score || b.item.priority - a.item.priority)
+    .slice(0, limit)
+    .map((entry) => entry.item);
+}
+
+function GlobalSearchBox({
+  query,
+  open,
+  results,
+  onOpenChange,
+  onQueryChange,
+  onSelect,
+}) {
+  const searchId = useId();
+  const groupedResults = results.reduce((groups, item) => {
+    const category = item.category || "Results";
+    if (!groups.has(category)) {
+      groups.set(category, []);
+    }
+    groups.get(category).push(item);
+    return groups;
+  }, new Map());
+  const hasQuery = Boolean(query.trim());
+
+  function selectItem(item) {
+    onSelect(item);
+  }
+
+  return (
+    <div className="global-search-shell">
+      <label className="sr-only" htmlFor={searchId}>
+        Search Setu Finance
+      </label>
+      <div className={`global-search-input-wrap ${open ? "active" : ""}`}>
+        <IconSearch size={17} />
+        <input
+          autoComplete="off"
+          id={searchId}
+          onBlur={() => window.setTimeout(() => onOpenChange(false), 120)}
+          onChange={(event) => {
+            onQueryChange(event.target.value);
+            onOpenChange(true);
+          }}
+          onFocus={() => onOpenChange(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && results[0]) {
+              event.preventDefault();
+              selectItem(results[0]);
+            }
+            if (event.key === "Escape") {
+              onOpenChange(false);
+            }
+          }}
+          placeholder="Search pages, tasks, customers, employees, invoices..."
+          type="search"
+          value={query}
+        />
+        <span className="global-search-shortcut">Enter</span>
+      </div>
+      {open && (
+        <div className="global-search-panel" role="listbox" aria-label="Setu Finance search results">
+          <div className="global-search-head">
+            <div>
+              <strong>{hasQuery ? "Search results" : "Suggested deeplinks"}</strong>
+              <span>
+                {hasQuery
+                  ? "Use names, IDs, email, phone, invoice, task, or first 3 letters."
+                  : "Fast jumps across finance tasks and records."}
+              </span>
+            </div>
+          </div>
+          {results.length ? (
+            Array.from(groupedResults.entries()).map(([category, items]) => (
+              <div className="global-search-group" key={category}>
+                <div className="global-search-category">{category}</div>
+                {items.map((item) => (
+                  <button
+                    className="global-search-result"
+                    key={item.id}
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => selectItem(item)}
+                    type="button"
+                  >
+                    <span className="global-search-result-main">
+                      <span className="global-search-result-title">{item.title}</span>
+                      <span className="global-search-result-sub">{item.subtitle}</span>
+                      <span className="global-search-result-path">{getGlobalSearchItemPath(item)}</span>
+                    </span>
+                    {item.badge && <span className="global-search-badge">{item.badge}</span>}
+                    <IconArrowRight size={15} />
+                  </button>
+                ))}
+              </div>
+            ))
+          ) : (
+            <div className="global-search-empty">
+              No exact match yet. Check spelling or try customer ID, employee ID, phone, email,
+              invoice number, or a task keyword.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [route, setRoute] = useState(() => parsePortalRoute(window.location.pathname));
   const [state, setState] = useState(createInitialState);
   const [searchQuery, setSearchQuery] = useState("");
+  const [globalSearchQuery, setGlobalSearchQuery] = useState("");
+  const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [toasts, setToasts] = useState([]);
   const [modal, setModal] = useState({ type: null, payload: null });
   const [invoiceForm, setInvoiceForm] = useState(DEFAULT_FORM);
@@ -1076,6 +1920,9 @@ function App() {
   const [savingReferralProgram, setSavingReferralProgram] = useState(false);
   const [applyingReferralRewardId, setApplyingReferralRewardId] = useState("");
   const [reviewingReferralSubmissionId, setReviewingReferralSubmissionId] = useState("");
+  const [reviewingReferralIntakeId, setReviewingReferralIntakeId] = useState("");
+  const [savingPeopleAction, setSavingPeopleAction] = useState(false);
+  const [savingPayablesAction, setSavingPayablesAction] = useState(false);
   const [reviewingFeedbackId, setReviewingFeedbackId] = useState("");
   const [saveAlias, setSaveAlias] = useState(true);
   const [syncingInbox, setSyncingInbox] = useState(false);
@@ -1107,6 +1954,10 @@ function App() {
     bonusAmount: 500,
     qualifyingPaidAmount: 3000,
     qualificationMonths: 6,
+    referralEngine: {
+      services: [],
+      relationships: REFERRAL_RELATIONSHIP_OPTIONS.map((option) => option.value),
+    },
   });
   const [publicReferralForm, setPublicReferralForm] = useState(DEFAULT_PUBLIC_REFERRAL_FORM);
   const [publicReferralLoading, setPublicReferralLoading] = useState(false);
@@ -1159,10 +2010,18 @@ function App() {
             customer.id === route.customerId || customer.customerCode === route.customerId,
         ) ?? null
       : null;
+  const selectedEmployee360 =
+    route.view === "employee360"
+      ? (state.admin?.employees ?? []).find(
+          (employee) =>
+            employee.id === route.employeeId || employee.employeeCode === route.employeeId,
+        ) ?? null
+      : null;
   const activeFinanceSection = getFinanceSection(view);
   const [shellTitle, shellSubtitle] = getFinanceShellCopy({
     view,
     customer: selectedCustomer360,
+    employee: selectedEmployee360,
   });
   const onboardingCustomerResults = onboardingCustomerQuery.trim()
     ? searchCustomersByIdentity(state.customers, onboardingCustomerQuery)
@@ -1192,6 +2051,8 @@ function App() {
   const referralSubmissions = state.admin?.referralSubmissions ?? [];
   const feedbackSubmissions = state.admin?.feedbackSubmissions ?? [];
   const gmailSyncStatus = state.integrationStatus?.gmail ?? {};
+  const globalSearchItems = buildGlobalSearchIndex({ state, counts });
+  const globalSearchResults = searchGlobalSearchItems(globalSearchQuery, globalSearchItems);
 
   function navigateToRoute(nextRoute, { replace = false } = {}) {
     const targetPath = buildPortalPath(nextRoute);
@@ -1216,6 +2077,38 @@ function App() {
     navigateToRoute(createPortalRoute("customer360", customerRouteKey));
   }
 
+  function openEmployee360(employee) {
+    const employeeRouteKey = employee?.employeeCode ?? employee?.id ?? "";
+    if (!employeeRouteKey) {
+      return;
+    }
+
+    navigateToRoute(createPortalRoute("employee360", "", "", employeeRouteKey));
+  }
+
+  function handleGlobalSearchSelect(item) {
+    setGlobalSearchQuery("");
+    setGlobalSearchOpen(false);
+
+    if (item.tab) {
+      setReceivablesTab(item.tab);
+    }
+
+    if (item.view === "customer360") {
+      navigateToRoute(createPortalRoute("customer360", item.customerId));
+      return;
+    }
+
+    if (item.view === "employee360") {
+      navigateToRoute(createPortalRoute("employee360", "", "", item.employeeId));
+      return;
+    }
+
+    if (item.view) {
+      navigateToView(item.view);
+    }
+  }
+
   function closeCustomer360() {
     if (window.history.length > 1) {
       window.history.back();
@@ -1225,9 +2118,18 @@ function App() {
     navigateToView("search", { replace: true });
   }
 
+  function closeEmployee360() {
+    if (window.history.length > 1) {
+      window.history.back();
+      return;
+    }
+
+    navigateToView("people", { replace: true });
+  }
+
   useEffect(() => {
-    document.title = getBrowserTitle(route, selectedCustomer360);
-  }, [route.view, route.referrerCode, selectedCustomer360?.name]);
+    document.title = getBrowserTitle(route, selectedCustomer360, selectedEmployee360);
+  }, [route.view, route.referrerCode, selectedCustomer360?.name, selectedEmployee360?.fullName]);
 
   useEffect(() => {
     setReferralProgramForm(createReferralProgramForm(state.admin?.referralProgram));
@@ -1273,6 +2175,8 @@ function App() {
     setRoute(createPortalRoute("dashboard"));
     setState(createInitialState());
     setSearchQuery("");
+    setGlobalSearchQuery("");
+    setGlobalSearchOpen(false);
     setModal({ type: null, payload: null });
     setInvoiceForm({ ...DEFAULT_FORM });
     setInvoiceCustomerQuery("");
@@ -1287,6 +2191,9 @@ function App() {
     setSavingReferralProgram(false);
     setApplyingReferralRewardId("");
     setReviewingReferralSubmissionId("");
+    setReviewingReferralIntakeId("");
+    setSavingPeopleAction(false);
+    setSavingPayablesAction(false);
     setReviewingFeedbackId("");
     setSaveAlias(true);
     setSyncingInbox(false);
@@ -1397,17 +2304,6 @@ function App() {
       return;
     }
 
-    if (publicReferralGatewayCode) {
-      setPublicReferralForm((current) =>
-        current.referrerCustomerCode === publicReferralGatewayCode
-          ? current
-          : {
-              ...current,
-              referrerCustomerCode: publicReferralGatewayCode,
-            },
-      );
-    }
-
     let cancelled = false;
     setPublicReferralLoading(true);
     setPublicReferralError("");
@@ -1419,7 +2315,7 @@ function App() {
           return;
         }
 
-        setPublicReferralProgram(
+        const nextProgram =
           data.referralProgram ?? {
             enabled: true,
             programName: "Standard referral program",
@@ -1428,8 +2324,14 @@ function App() {
             bonusAmount: 500,
             qualifyingPaidAmount: 3000,
             qualificationMonths: 6,
+          };
+        setPublicReferralProgram({
+          ...nextProgram,
+          referralEngine: data.referralEngine ?? {
+            services: [],
+            relationships: REFERRAL_RELATIONSHIP_OPTIONS.map((option) => option.value),
           },
-        );
+        });
       } catch (error) {
         if (!cancelled) {
           setPublicReferralError(error.message || "Could not load the referral form right now.");
@@ -1892,6 +2794,187 @@ function App() {
       pushToast(error.message);
     } finally {
       setReviewingReferralSubmissionId("");
+    }
+  }
+
+  async function resolveReferralIntakeIdentityAction(intakeId, partyType, partyId) {
+    if (!partyType || !partyId) {
+      pushToast("Choose an employee or customer identity before resolving.");
+      return;
+    }
+    setReviewingReferralIntakeId(intakeId);
+    try {
+      const data = await apiRequest(`/api/admin/referral-intake/${intakeId}/resolve-identity`, {
+        method: "POST",
+        body: {
+          partyType,
+          partyId,
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setReviewingReferralIntakeId("");
+    }
+  }
+
+  async function reviewReferralIntakeAction(intakeId, action, notes = "") {
+    setReviewingReferralIntakeId(intakeId);
+    try {
+      const data = await apiRequest(`/api/admin/referral-intake/${intakeId}/review`, {
+        method: "POST",
+        body: {
+          action,
+          notes,
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setReviewingReferralIntakeId("");
+    }
+  }
+
+  async function qualifyReferralIntakeAction(intakeId) {
+    setReviewingReferralIntakeId(intakeId);
+    try {
+      const data = await apiRequest(`/api/admin/referral-intake/${intakeId}/qualify`, {
+        method: "POST",
+      });
+      setState(data.state);
+      pushToast(data.message);
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return;
+      }
+      pushToast(error.message);
+    } finally {
+      setReviewingReferralIntakeId("");
+    }
+  }
+
+  async function saveEmployeeRecord(form) {
+    setSavingPeopleAction(true);
+    try {
+      const data = await apiRequest("/api/admin/employees", {
+        method: "POST",
+        body: {
+          form,
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+      return true;
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return false;
+      }
+      pushToast(error.message);
+      return false;
+    } finally {
+      setSavingPeopleAction(false);
+    }
+  }
+
+  async function saveEmployeePaymentRecord(form) {
+    setSavingPeopleAction(true);
+    try {
+      const data = await apiRequest("/api/admin/employee-payments", {
+        method: "POST",
+        body: {
+          form,
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+      return true;
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return false;
+      }
+      pushToast(error.message);
+      return false;
+    } finally {
+      setSavingPeopleAction(false);
+    }
+  }
+
+  async function generateEmployeePayslipRecord(form) {
+    setSavingPeopleAction(true);
+    try {
+      const data = await apiRequest("/api/admin/employee-payslips", {
+        method: "POST",
+        body: {
+          form,
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+      return true;
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return false;
+      }
+      pushToast(error.message);
+      return false;
+    } finally {
+      setSavingPeopleAction(false);
+    }
+  }
+
+  async function saveEmployeeContractRecord(employeeId, form) {
+    setSavingPeopleAction(true);
+    try {
+      const data = await apiRequest(`/api/admin/employees/${employeeId}/contracts`, {
+        method: "POST",
+        body: {
+          form,
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+      return true;
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return false;
+      }
+      pushToast(error.message);
+      return false;
+    } finally {
+      setSavingPeopleAction(false);
+    }
+  }
+
+  async function saveOtherExpenseRecord(form) {
+    setSavingPayablesAction(true);
+    try {
+      const data = await apiRequest("/api/admin/other-expenses", {
+        method: "POST",
+        body: {
+          form,
+        },
+      });
+      setState(data.state);
+      pushToast(data.message);
+      return true;
+    } catch (error) {
+      if (handleUnauthorized(error)) {
+        return false;
+      }
+      pushToast(error.message);
+      return false;
+    } finally {
+      setSavingPayablesAction(false);
     }
   }
 
@@ -2484,7 +3567,6 @@ function updateOnboardingForm(field, value) {
           program={publicReferralProgram}
           submitting={submittingPublicReferral}
           onFieldChange={updatePublicReferralForm}
-          onOpenPortal={() => window.location.assign(buildPortalPath(createPortalRoute("dashboard")))}
           onSubmit={submitPublicReferralForm}
         />
         <ToastStack toasts={toasts} />
@@ -2600,6 +3682,14 @@ function updateOnboardingForm(field, value) {
             <h1>{shellTitle}</h1>
             <div className="sub">{shellSubtitle}</div>
           </div>
+          <GlobalSearchBox
+            open={globalSearchOpen}
+            query={globalSearchQuery}
+            results={globalSearchResults}
+            onOpenChange={setGlobalSearchOpen}
+            onQueryChange={setGlobalSearchQuery}
+            onSelect={handleGlobalSearchSelect}
+          />
           <div className="topbar-right">
             <span className={`chip ${state.integrationStatus?.email?.configured ? "chip-ok" : "chip-warn"}`}>
               <IconMail size={14} />
@@ -2664,6 +3754,7 @@ function updateOnboardingForm(field, value) {
           <DashboardView
             dashboard={state.dashboard}
             payments={state.payments}
+            employeePayments={state.admin?.employeePayments ?? []}
             referrals={state.admin?.referrals ?? []}
             rewards={state.admin?.rewards ?? []}
             referralTrend={referralTrend}
@@ -2741,6 +3832,12 @@ function updateOnboardingForm(field, value) {
             invoices={state.invoices}
             referrals={state.admin?.referrals ?? []}
             rewards={state.admin?.rewards ?? []}
+            referralPayouts={state.admin?.referralPayouts ?? []}
+            employees={state.admin?.employees ?? []}
+            employeePayments={state.admin?.employeePayments ?? []}
+            otherExpenses={state.admin?.otherExpenses ?? []}
+            saving={savingPayablesAction}
+            onSaveOtherExpense={saveOtherExpenseRecord}
             onOpenReferrals={() => navigateToView("referrals")}
             onOpenReceivables={() => navigateToView("receivables")}
           />
@@ -2776,6 +3873,10 @@ function updateOnboardingForm(field, value) {
           <AdminView
             referralProgram={referralProgram}
             feedbackSubmissions={feedbackSubmissions}
+            customers={state.customers}
+            employees={state.admin?.employees ?? []}
+            referralIntake={state.admin?.referralIntake ?? []}
+            referralIntakeEvents={state.admin?.referralIntakeEvents ?? []}
             invoices={state.invoices}
             referralSubmissions={referralSubmissions}
             referrals={state.admin?.referrals ?? []}
@@ -2783,20 +3884,46 @@ function updateOnboardingForm(field, value) {
             insights={referralInsights}
             applyingRewardId={applyingReferralRewardId}
             reviewingFeedbackId={reviewingFeedbackId}
+            reviewingIntakeId={reviewingReferralIntakeId}
             reviewingSubmissionId={reviewingReferralSubmissionId}
             onApplyReward={applyReferralReward}
             onConvertSubmission={convertReferralSubmission}
             onDismissSubmission={dismissReferralSubmissionEntry}
+            onQualifyIntake={qualifyReferralIntakeAction}
+            onResolveIntake={resolveReferralIntakeIdentityAction}
+            onReviewIntake={reviewReferralIntakeAction}
             onUpdateFeedbackStatus={updateFeedbackStatus}
           />
         )}
         {view === "people" && (
           <PeopleHubView
+            employees={state.admin?.employees ?? []}
+            employeePayments={state.admin?.employeePayments ?? []}
+            formerEmployees={state.admin?.formerEmployees ?? []}
+            saving={savingPeopleAction}
+            onSaveEmployee={saveEmployeeRecord}
+            onOpenEmployee={openEmployee360}
+          />
+        )}
+        {view === "contracts" && (
+          <ContractsLibraryView
+            contracts={state.admin?.contractLibrary ?? []}
+            employees={state.admin?.employees ?? []}
             customers={state.customers}
-            referralParties={state.admin?.referralParties ?? []}
-            referrals={state.admin?.referrals ?? []}
-            onOpenClients={() => navigateToView("clients")}
-            onOpenReferrals={() => navigateToView("referrals")}
+          />
+        )}
+        {view === "employee360" && (
+          <Employee360Page
+            employee={selectedEmployee360}
+            employeePayments={state.admin?.employeePayments ?? []}
+            employeePayslips={state.admin?.employeePayslips ?? []}
+            contractLibrary={state.admin?.contractLibrary ?? []}
+            referralIntake={state.admin?.referralIntake ?? []}
+            saving={savingPeopleAction}
+            onBack={closeEmployee360}
+            onGeneratePayslip={generateEmployeePayslipRecord}
+            onSaveEmployeeContract={saveEmployeeContractRecord}
+            onSaveEmployeePayment={saveEmployeePaymentRecord}
           />
         )}
         {view === "settings" && (
@@ -3163,76 +4290,261 @@ function SetuPortalLandingView({ onOpenFinance, onOpenReferral }) {
   );
 }
 
-function PublicReferralView({
-  error,
-  form,
-  gatewayCode = "",
-  loading,
-  message,
-  program,
-  submitting,
-  onFieldChange,
-  onOpenPortal,
-  onSubmit,
-}) {
-  const rulesSummary = program.enabled
-    ? `${formatCurrency(program.bonusAmount)} bonus after ${formatCurrency(
-        program.qualifyingPaidAmount,
-      )} paid or ${program.qualificationMonths} months, whichever comes first.`
-    : "Referral intake is currently paused for new submissions.";
-  const hasGatewayCode = Boolean(gatewayCode);
+function PublicReferralView({ gatewayCode = "", loading, program }) {
+  const defaultServices = [
+    { key: "pb_full", label: "Profile Build - Full", employeeBonus: 500 },
+    { key: "attorney", label: "EB1A Attorney Service", employeeBonus: 400 },
+    { key: "media", label: "Media Service", employeeBonus: 250 },
+    { key: "pb_judging", label: "Profile Build - Judging", employeeBonus: 150 },
+    { key: "pb_authorship", label: "Profile Build - Authorship", employeeBonus: 150 },
+    { key: "pb_speaking", label: "Profile Build - Speaking", employeeBonus: 150 },
+    { key: "idk", label: "I don't know", employeeBonus: 0, scopeUnknown: true },
+  ];
+  const engine = program.referralEngine ?? {};
+  const services = engine.services?.length ? engine.services : defaultServices;
+  const [step, setStep] = useState("id");
+  const [form, setForm] = useState(() => ({
+    ...DEFAULT_PUBLIC_REFERRAL_FORM,
+    method: gatewayCode?.startsWith("EMP-") ? "employee_id" : "email",
+    entered: gatewayCode?.startsWith("EMP-") ? gatewayCode : "",
+  }));
+  const [resolvedReferrer, setResolvedReferrer] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!gatewayCode?.startsWith("EMP-")) {
+      return;
+    }
+    setForm((current) => ({
+      ...current,
+      method: "employee_id",
+      entered: gatewayCode,
+    }));
+  }, [gatewayCode]);
+
+  function updateField(field, value) {
+    setForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+    setError("");
+    setMessage("");
+  }
+
+  function toggleService(key) {
+    setForm((current) => {
+      const exists = current.selectedServices.includes(key);
+      let nextServices = exists
+        ? current.selectedServices.filter((serviceKey) => serviceKey !== key)
+        : [...current.selectedServices, key];
+      if (key === "idk" && !exists) {
+        nextServices = ["idk"];
+      }
+      if (key !== "idk" && !exists) {
+        nextServices = nextServices.filter((serviceKey) => serviceKey !== "idk");
+      }
+      return {
+        ...current,
+        selectedServices: nextServices,
+      };
+    });
+    setError("");
+  }
+
+  const selectedServices = services.filter((service) => form.selectedServices.includes(service.key));
+  const potentialReward = (() => {
+    if (!resolvedReferrer || !selectedServices.length || selectedServices.some((service) => service.scopeUnknown)) {
+      return {
+        label: resolvedReferrer?.selfDeclared ? "To be confirmed" : "To be assessed",
+        note: "The final reward is confirmed after review, onboarding, and payment qualification.",
+      };
+    }
+    if (resolvedReferrer.kind === "employee") {
+      const estimate = Math.min(
+        selectedServices.reduce((sum, service) => sum + Number(service.employeeBonus || 0), 0),
+        Number(engine.employeeCashCap ?? 1000),
+      );
+      return {
+        label: formatCurrency(estimate),
+        note: "Estimated team reward after review, onboarding, and payment qualification.",
+      };
+    }
+    const percent = Math.min(
+      selectedServices.length * Number(engine.customerDiscountPercentPerService ?? 5),
+      Number(engine.customerDiscountPercentCap ?? 20),
+    );
+    return {
+      label: `${percent}%`,
+      note: `Estimated invoice discount, capped at ${formatCurrency(engine.customerDiscountDollarCap ?? 1000)}.`,
+    };
+  })();
+
+  function startVerification() {
+    if (!form.entered.trim()) {
+      setError("Enter your email, phone, or employee ID first.");
+      return;
+    }
+    setStep("verify");
+  }
+
+  async function verifyReferrer() {
+    if (!form.consentIdentity) {
+      setError("Confirm the entered identity belongs to you before continuing.");
+      return;
+    }
+    setResolving(true);
+    setError("");
+    try {
+      const data = await resolveReferralReferrer({
+        method: form.method,
+        value: form.entered,
+        consent: true,
+      });
+      if (!data.matched) {
+        setError("We could not match that record. You can still submit for manual review.");
+        return;
+      }
+      setResolvedReferrer({
+        ...data,
+        selfDeclared: false,
+        role: data.kind === "employee" ? "Team member · cash bonus path" : "Existing client · invoice discount path",
+      });
+      setStep("services");
+    } catch (caughtError) {
+      setError(caughtError.message || "Could not verify that identity right now.");
+    } finally {
+      setResolving(false);
+    }
+  }
+
+  function continueSelfDeclared() {
+    const hasContact = form.selfEmail.trim() || form.selfPhone.trim();
+    if (!form.selfName.trim() || !hasContact || !form.selfDeclaredType.trim()) {
+      setError("Add your name, at least one contact method, and your relationship to Setu.");
+      return;
+    }
+    setResolvedReferrer({
+      matched: false,
+      selfDeclared: true,
+      kind: "unverified",
+      name: form.selfName.trim(),
+      role: `${form.selfDeclaredType} · manual review`,
+    });
+    setForm((current) => ({
+      ...current,
+      referrerResolution: "self_declared",
+      method: "self",
+    }));
+    setStep("services");
+  }
+
+  function validateClientStep() {
+    if (!form.clientName.trim()) {
+      setError("Enter the referred client's name or company.");
+      return false;
+    }
+    if (!form.clientEmail.trim() && !form.clientPhone.trim()) {
+      setError("Enter at least one client contact: email or phone.");
+      return false;
+    }
+    if (!form.relationship) {
+      setError("Choose how the referrer knows the client.");
+      return false;
+    }
+    return true;
+  }
+
+  async function submitEngineReferral() {
+    if (!form.agreementTerms) {
+      setError("Accept the referral program terms before submission.");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    setMessage("");
+    try {
+      const isSelfDeclared = resolvedReferrer?.selfDeclared;
+      const payload = {
+        referrer_resolution: isSelfDeclared ? "self_declared" : "auto",
+        referrer: isSelfDeclared
+          ? {
+              method: "self",
+              self: {
+                name: form.selfName,
+                email: form.selfEmail,
+                phone: form.selfPhone,
+                declared_type: form.selfDeclaredType,
+              },
+            }
+          : {
+              method: form.method,
+              value: form.entered,
+              consent_identity: form.consentIdentity,
+            },
+        client: {
+          name: form.clientName,
+          email: form.clientEmail,
+          phone_cc: form.clientPhoneCountryCode,
+          phone: form.clientPhone,
+        },
+        services: form.selectedServices,
+        relationship: form.relationship,
+        agreement_terms: form.agreementTerms,
+      };
+      const data = await submitReferralEngine(payload);
+      if (data.duplicate) {
+        setMessage(`${data.message} Reference ${data.ref_code}; original ${data.duplicate_ref_code}.`);
+        setStep("duplicate");
+        return;
+      }
+      setMessage(`${data.message} Reference ${data.ref_code}.`);
+      setStep("done");
+      setForm({
+        ...DEFAULT_PUBLIC_REFERRAL_FORM,
+        method: gatewayCode?.startsWith("EMP-") ? "employee_id" : "email",
+        entered: gatewayCode?.startsWith("EMP-") ? gatewayCode : "",
+      });
+      setResolvedReferrer(null);
+    } catch (caughtError) {
+      setError(caughtError.message || "Could not submit the referral right now.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const stepIndex = ["id", "verify", "self", "services", "client", "review"].includes(step)
+    ? Math.max(["id", "verify", "services", "client", "review"].indexOf(step === "self" ? "verify" : step), 0)
+    : 4;
 
   return (
-    <div className="auth-shell public-referral-shell">
-      <div className="auth-grid public-referral-grid">
-        <section className="auth-hero public-referral-hero">
+    <div className="auth-shell public-referral-shell referral-only-shell">
+      <div className="public-referral-panel">
+        <header className="public-referral-header">
           <SetuFinanceLogo
-            className="auth-wordmark"
+            className="auth-wordmark public-referral-wordmark"
             portalName={REFERRAL_PORTAL?.label}
             tagline={REFERRAL_PORTAL?.tagline}
           />
-          <div className="auth-kicker">{hasGatewayCode ? "Referral gateway" : "Referral intake"}</div>
-          <h1>{hasGatewayCode ? "Share referrals from your gateway." : "Share a friend or family referral."}</h1>
+          <div className="auth-kicker">Referral engine</div>
+          <h1>Refer a client, earn the right reward.</h1>
           <p className="auth-copy">
-            {hasGatewayCode
-              ? "This personal referral link pre-fills your customer ID. Finance still verifies your email before converting an entry into the referral program."
-              : "This public form does not require a login. Finance will review each entry before it becomes a tracked referral relationship in Setu Finance."}
+            Existing clients and team members can refer prospects without logging in. Finance approves each referral before rewards are created.
           </p>
-          <div className="auth-points">
-            <div className="auth-point">
-              <IconCheck size={15} />
-              One active entry per referred email or phone
-            </div>
-            <div className="auth-point">
-              <IconUsers size={15} />
-              Your customer ID and email verify the referrer
-            </div>
-            <div className="auth-point">
-              <IconTable size={15} />
-              Finance converts qualified entries into the referral dashboard
-            </div>
+          <div className="public-referral-mini-points">
+            <span>No login required</span>
+            <span>Reviewed before rewards</span>
+            <span>One clean referral trail</span>
           </div>
-          <div className="chart-card public-referral-summary">
-            <div className="detail-label">{program.programName || "Referral program"}</div>
-            <div className="cust">{rulesSummary}</div>
-            <div className="sub">
-              {program.programDescription}
-              {hasGatewayCode ? ` Gateway customer ID: ${gatewayCode}.` : ""}
-            </div>
-          </div>
-          <button className="btn btn-sm public-referral-portal-link" type="button" onClick={onOpenPortal}>
-            Open finance portal
-          </button>
-        </section>
-
+        </header>
         <section className="auth-card public-referral-card">
           <div className="auth-card-head">
-            <div className="auth-card-label">{hasGatewayCode ? "Personalized gateway" : "No login required"}</div>
-            <h2>Submit a referral</h2>
+            <div className="auth-card-label">No login required</div>
+            <h2>Referral details</h2>
             <p className="auth-card-copy">
-              {hasGatewayCode
-                ? "Your customer ID is locked from this link. Use the same email Setu already has on file for you."
-                : "Use the same customer ID and email that Setu already has on file for you."}
+              Start with your identity, then select the likely services and referred client details.
             </p>
           </div>
 
@@ -3241,104 +4553,282 @@ function PublicReferralView({
           {message && <div className="note info auth-note">{message}</div>}
           {error && <div className="note warn auth-note">{error}</div>}
 
-          <form onSubmit={onSubmit}>
-            <div className="field-row">
+          <div className="referral-engine-steps" aria-label="Referral progress">
+            {["You", "Verify", "Services", "Client", "Review"].map((label, index) => (
+              <span className={index <= stepIndex ? "active" : ""} key={label}>{label}</span>
+            ))}
+          </div>
+
+          {step === "id" && (
+            <div className="referral-engine-pane">
+              <div className="segmented-control">
+                {[
+                  ["email", "Email"],
+                  ["phone", "Phone"],
+                  ["employee_id", "Employee ID"],
+                ].map(([value, label]) => (
+                  <button
+                    className={form.method === value ? "active" : ""}
+                    key={value}
+                    onClick={() => updateField("method", value)}
+                    type="button"
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
               <div className="field">
-                <label htmlFor="refer-referrer-code">
-                  {hasGatewayCode ? "Gateway customer ID" : "Your customer ID"}
+                <label>
+                  {form.method === "employee_id"
+                    ? "Employee ID"
+                    : form.method === "phone"
+                      ? "Phone on file"
+                      : "Email on file"}
                 </label>
                 <input
-                  id="refer-referrer-code"
-                  value={form.referrerCustomerCode}
-                  onChange={(event) => onFieldChange("referrerCustomerCode", event.target.value)}
-                  readOnly={hasGatewayCode}
-                  placeholder="100001"
+                  value={form.entered}
+                  onChange={(event) => updateField("entered", event.target.value)}
+                  placeholder={form.method === "employee_id" ? "EMP-2026-000001" : form.method === "phone" ? "(555) 010-1" : "you@email.com"}
                 />
-                {hasGatewayCode && <div className="field-help">Loaded from this user's referral gateway link.</div>}
+                <div className="field-help">
+                  Email or phone can match customer and employee records. Employee ID only matches employee records.
+                </div>
+              </div>
+              <button className="btn btn-primary auth-submit" type="button" disabled={!program.enabled} onClick={startVerification}>
+                Continue
+              </button>
+              <button className="btn referral-inline-link" type="button" onClick={() => setStep("self")}>
+                Can't find yourself? Submit for manual review
+              </button>
+            </div>
+          )}
+
+          {step === "verify" && (
+            <div className="referral-engine-pane">
+              <div className="detail-card identity-consent-card">
+                <div className="detail-label">Privacy check</div>
+                <div className="cust">{form.entered || "Identity entered"}</div>
+                <div className="sub">We only reveal matched identity details after you confirm this belongs to you.</div>
+              </div>
+              <label className="check-row admin-check-row">
+                <input
+                  type="checkbox"
+                  checked={form.consentIdentity}
+                  onChange={(event) => updateField("consentIdentity", event.target.checked)}
+                />
+                I confirm this {form.method === "employee_id" ? "employee ID" : form.method} belongs to me.
+              </label>
+              <div className="btnrow public-referral-actions">
+                <button className="btn" type="button" onClick={() => setStep("id")}>Back</button>
+                <button className="btn btn-primary" type="button" disabled={resolving || !form.consentIdentity} onClick={verifyReferrer}>
+                  {resolving ? "Checking…" : "Confirm & continue"}
+                </button>
+              </div>
+              <button className="btn referral-inline-link" type="button" onClick={() => setStep("self")}>
+                Use manual review instead
+              </button>
+            </div>
+          )}
+
+          {step === "self" && (
+            <div className="referral-engine-pane">
+              <div className="field">
+                <label>Your full name</label>
+                <input value={form.selfName} onChange={(event) => updateField("selfName", event.target.value)} placeholder="Full name" />
+              </div>
+              <div className="field-row">
+                <div className="field">
+                  <label>Your email</label>
+                  <input value={form.selfEmail} onChange={(event) => updateField("selfEmail", event.target.value)} placeholder="you@email.com" />
+                </div>
+                <div className="field">
+                  <label>Your phone</label>
+                  <input value={form.selfPhone} onChange={(event) => updateField("selfPhone", event.target.value)} placeholder="(555) 010-1" />
+                </div>
               </div>
               <div className="field">
-                <label htmlFor="refer-referrer-email">Your email</label>
-                <input
-                  id="refer-referrer-email"
-                  type="email"
-                  autoComplete="email"
-                  value={form.referrerEmail}
-                  onChange={(event) => onFieldChange("referrerEmail", event.target.value)}
-                  placeholder="you@example.com"
-                />
+                <label>Relationship to Setu</label>
+                <select value={form.selfDeclaredType} onChange={(event) => updateField("selfDeclaredType", event.target.value)}>
+                  <option value="">Select one</option>
+                  <option value="Current or past client">Current or past client</option>
+                  <option value="Team member">Team member</option>
+                  <option value="Partner / affiliate">Partner / affiliate</option>
+                  <option value="Not sure">Not sure</option>
+                </select>
+              </div>
+              <div className="note info auth-note">Manual-review referrers never receive an automatic reward until identity is resolved.</div>
+              <div className="btnrow public-referral-actions">
+                <button className="btn" type="button" onClick={() => setStep("id")}>Back</button>
+                <button className="btn btn-primary" type="button" onClick={continueSelfDeclared}>Continue</button>
               </div>
             </div>
+          )}
 
-            <div className="field">
-              <label htmlFor="refer-name">Friend or family member name</label>
-              <input
-                id="refer-name"
-                value={form.referredFullName}
-                onChange={(event) => onFieldChange("referredFullName", event.target.value)}
-                placeholder="Full name"
-              />
+          {step === "services" && (
+            <div className="referral-engine-pane">
+              {resolvedReferrer && (
+                <div className={`detail-card referral-identity-card ${resolvedReferrer.kind}`}>
+                  <div>
+                    <div className="cust">{resolvedReferrer.name}</div>
+                    <div className="sub">{resolvedReferrer.role}</div>
+                  </div>
+                  <span className={`search-status-chip tone-${resolvedReferrer.selfDeclared ? "warn" : "success"}`}>
+                    {resolvedReferrer.selfDeclared ? "Manual review" : resolvedReferrer.kind}
+                  </span>
+                </div>
+              )}
+              <div className="referral-service-list">
+                {services.map((service) => {
+                  const selected = form.selectedServices.includes(service.key);
+                  return (
+                    <button
+                      className={`referral-service-option ${selected ? "active" : ""}`}
+                      key={service.key}
+                      onClick={() => toggleService(service.key)}
+                      type="button"
+                    >
+                      <span>{selected ? <IconCheck size={14} /> : null}</span>
+                      <strong>{service.label}</strong>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="referral-reward-preview">
+                <div className="detail-label">Potential reward</div>
+                <div className="value">{potentialReward.label}</div>
+                <div className="sub">{potentialReward.note}</div>
+              </div>
+              <div className="btnrow public-referral-actions">
+                <button className="btn" type="button" onClick={() => setStep("id")}>Not you?</button>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  disabled={!form.selectedServices.length}
+                  onClick={() => setStep("client")}
+                >
+                  Continue
+                </button>
+              </div>
             </div>
+          )}
 
-            <div className="field-row">
+          {step === "client" && (
+            <div className="referral-engine-pane">
               <div className="field">
-                <label htmlFor="refer-email">Their email</label>
-                <input
-                  id="refer-email"
-                  type="email"
-                  autoComplete="off"
-                  value={form.referredEmail}
-                  onChange={(event) => onFieldChange("referredEmail", event.target.value)}
-                  placeholder="friend@example.com"
-                />
+                <label>Client name or company</label>
+                <input value={form.clientName} onChange={(event) => updateField("clientName", event.target.value)} placeholder="Full name or company" />
               </div>
               <div className="field">
-                <label htmlFor="refer-phone">Their phone (optional)</label>
-                <input
-                  id="refer-phone"
-                  autoComplete="tel"
-                  value={form.referredPhone}
-                  onChange={(event) => onFieldChange("referredPhone", event.target.value)}
-                  placeholder="(555) 555-5555"
-                />
+                <label>Client email</label>
+                <input value={form.clientEmail} onChange={(event) => updateField("clientEmail", event.target.value)} placeholder="client@email.com" />
+              </div>
+              <div className="field-row phone-row">
+                <div className="field phone-code-field">
+                  <label>Country</label>
+                  <select value={form.clientPhoneCountryCode} onChange={(event) => updateField("clientPhoneCountryCode", event.target.value)}>
+                    {REFERRAL_PHONE_COUNTRY_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label>Client phone</label>
+                  <input value={form.clientPhone} onChange={(event) => updateField("clientPhone", event.target.value)} placeholder="Phone number" />
+                </div>
+              </div>
+              <div className="field">
+                <label>How do you know this person?</label>
+                <select value={form.relationship} onChange={(event) => updateField("relationship", event.target.value)}>
+                  <option value="">Select one</option>
+                  {REFERRAL_RELATIONSHIP_OPTIONS.filter((option) => option.value).map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="btnrow public-referral-actions">
+                <button className="btn" type="button" onClick={() => setStep("services")}>Back</button>
+                <button
+                  className="btn btn-primary"
+                  type="button"
+                  onClick={() => {
+                    if (validateClientStep()) {
+                      setStep("review");
+                    }
+                  }}
+                >
+                  Review
+                </button>
               </div>
             </div>
+          )}
 
-            <div className="field">
-              <label htmlFor="refer-relationship">Relationship</label>
-              <input
-                id="refer-relationship"
-                value={form.relationshipLabel}
-                onChange={(event) => onFieldChange("relationshipLabel", event.target.value)}
-                placeholder="Family, friend, colleague…"
-              />
+          {step === "review" && (
+            <div className="referral-engine-pane">
+              <div className="summary-list">
+                <div><span>You</span><strong>{resolvedReferrer?.name ?? "Manual review"}</strong></div>
+                <div><span>Referring</span><strong>{form.clientName}</strong></div>
+                <div><span>Client contact</span><strong>{[form.clientEmail, form.clientPhone ? `${form.clientPhoneCountryCode} ${form.clientPhone}` : ""].filter(Boolean).join(" · ")}</strong></div>
+                <div><span>Relationship</span><strong>{formatReferralRelationshipCode(form.relationship)}</strong></div>
+                <div><span>Services</span><strong>{selectedServices.map((service) => service.label).join(", ")}</strong></div>
+                <div><span>Potential reward</span><strong>{potentialReward.label}</strong></div>
+              </div>
+              <div className="note warn auth-note">
+                Reward is not guaranteed. Setu reviews legitimacy first, then rewards apply only after the referred client qualifies.
+              </div>
+              <label className="check-row admin-check-row">
+                <input
+                  type="checkbox"
+                  checked={form.agreementTerms}
+                  onChange={(event) => updateField("agreementTerms", event.target.checked)}
+                />
+                I agree to the referral program terms and confirm this is not a self-referral or duplicate.
+              </label>
+              <div className="btnrow public-referral-actions">
+                <button className="btn" type="button" onClick={() => setStep("client")}>Back</button>
+                <button className="btn btn-primary" type="button" disabled={submitting || !form.agreementTerms} onClick={submitEngineReferral}>
+                  {submitting ? "Submitting…" : "Submit referral"}
+                </button>
+              </div>
             </div>
+          )}
 
-            <div className="field">
-              <label htmlFor="refer-notes">Notes (optional)</label>
-              <textarea
-                id="refer-notes"
-                rows={3}
-                value={form.notes}
-                onChange={(event) => onFieldChange("notes", event.target.value)}
-                placeholder="Anything finance should know before they onboard this person."
-              />
+          {step === "duplicate" && (
+            <div className="referral-engine-pane">
+              <div className="success-panel warn">
+                <IconAlertTriangle size={34} />
+                <h3>This client is already in the referral pipeline</h3>
+                <p>{message}</p>
+              </div>
+              <button className="btn btn-primary auth-submit" type="button" onClick={() => setStep("client")}>
+                Refer a different client
+              </button>
             </div>
+          )}
 
-            <button
-              className="btn btn-primary auth-submit"
-              type="submit"
-              disabled={
-                !program.enabled ||
-                submitting ||
-                !form.referrerCustomerCode.trim() ||
-                !form.referrerEmail.trim() ||
-                !form.referredFullName.trim() ||
-                !form.referredEmail.trim()
-              }
-            >
-              {submitting ? "Submitting…" : "Submit referral"}
-            </button>
-          </form>
+          {step === "done" && (
+            <div className="referral-engine-pane">
+              <div className="success-panel">
+                <IconCheck size={34} />
+                <h3>Referral submitted</h3>
+                <p>{message}</p>
+              </div>
+              <div className="next-step-list">
+                <div><strong>1</strong><span>Setu reviews the referral for legitimacy.</span></div>
+                <div><strong>2</strong><span>The referred client is onboarded and payment is tracked.</span></div>
+                <div><strong>3</strong><span>Qualified rewards are confirmed after the client qualifies.</span></div>
+              </div>
+              <button
+                className="btn btn-primary auth-submit"
+                type="button"
+                onClick={() => {
+                  setStep("id");
+                  setMessage("");
+                }}
+              >
+                Submit another referral
+              </button>
+            </div>
+          )}
         </section>
       </div>
     </div>
@@ -4603,6 +6093,7 @@ function ReferralProgramTrendSection({ trend, referrals, rewards }) {
 function DashboardView({
   dashboard,
   payments,
+  employeePayments = [],
   referrals,
   rewards,
   referralTrend,
@@ -4610,6 +6101,7 @@ function DashboardView({
   onOpenConsole,
   onOpenOnboarding,
 }) {
+  const employeePaidSummary = summarizeCurrencyTotals(employeePayments.filter((payment) => payment.status !== "cancelled"));
   return (
     <div>
       <div className="topbar">
@@ -4655,6 +6147,11 @@ function DashboardView({
             deltaIcon={<IconTrendingUp size={13} />}
             delta="6 pts since launch"
             deltaTone="up"
+          />
+          <MetricCard
+            label="Employee paid"
+            value={employeePaidSummary}
+            delta={`${employeePayments.length} payment records`}
           />
         </div>
 
@@ -4881,13 +6378,52 @@ function ClientsHubView({
   );
 }
 
-function PayablesHubView({ invoices, referrals, rewards, onOpenReceivables, onOpenReferrals }) {
+function PayablesHubView({
+  invoices,
+  referrals,
+  rewards,
+  referralPayouts = [],
+  employees = [],
+  employeePayments = [],
+  otherExpenses = [],
+  saving = false,
+  onOpenReceivables,
+  onOpenReferrals,
+  onSaveOtherExpense,
+}) {
+  const [expenseForm, setExpenseForm] = useState(createDefaultOtherExpenseForm);
   const availableRewards = rewards.filter((reward) => reward.status === "available");
   const appliedRewards = rewards.filter((reward) => reward.status === "applied");
   const referralDiscountInvoices = invoices.filter((invoice) => Number(invoice.referralBonusAmount || 0) > 0);
   const availableRewardTotal = availableRewards.reduce((total, reward) => total + Number(reward.amount || 0), 0);
   const appliedRewardTotal = appliedRewards.reduce((total, reward) => total + Number(reward.amount || 0), 0);
   const verifiedReferrals = referrals.filter((referral) => referral.legitimacyStatus === "verified");
+  const employeePaidSummary = summarizeCurrencyTotals(employeePayments.filter((payment) => payment.status !== "cancelled"));
+  const otherPaidTotal = sumAmounts(otherExpenses, (expense) => expense.direction === "paid");
+  const otherReceivedTotal = sumAmounts(otherExpenses, (expense) => expense.direction === "received");
+  const scheduledReferralPayoutTotal = sumAmounts(referralPayouts, (payout) => payout.payoutStatus === "scheduled");
+  const employeeSpendByRegion = groupAmountBy(employeePayments, (payment) => payment.region, (payment) => payment.status !== "cancelled");
+  const otherSpendByRegion = groupAmountBy(otherExpenses, (expense) => expense.region, (expense) => expense.direction === "paid");
+
+  async function submitOtherExpense(event) {
+    event.preventDefault();
+    const saved = await onSaveOtherExpense?.(expenseForm);
+    if (saved) {
+      setExpenseForm(createDefaultOtherExpenseForm());
+    }
+  }
+
+  function updateExpenseForm(field, value) {
+    setExpenseForm((current) => ({
+      ...current,
+      [field]: value,
+      ...(field === "direction"
+        ? {
+            status: value === "received" ? "received" : "paid",
+          }
+        : {}),
+    }));
+  }
 
   return (
     <div>
@@ -4895,11 +6431,10 @@ function PayablesHubView({ invoices, referrals, rewards, onOpenReceivables, onOp
         <div className="ia-hero">
           <div>
             <div className="detail-label">Payables</div>
-            <h2>Money-out foundation, with client referral discounts kept on the existing invoice path.</h2>
+            <h2>Employee payables, referral payouts, and operating expenses in one money-out view.</h2>
             <p>
-              This section is the v2 home for future bonuses-to-pay, payroll, vendor bills,
-              reimbursements, and expenses. Today it reads the live referral reward ledger without
-              rerouting customer referral discounts.
+              Customer rewards continue as invoice discounts. Employee rewards and payroll-style
+              entries flow through payables, while other expenses can be recorded as paid or received.
             </p>
           </div>
           <div className="ia-hero-actions">
@@ -4913,39 +6448,174 @@ function PayablesHubView({ invoices, referrals, rewards, onOpenReceivables, onOp
         </div>
 
         <div className="metrics c4">
-          <MetricCard accent label="Available discounts" value={formatCurrency(availableRewardTotal)} delta={`${availableRewards.length} rewards`} />
-          <MetricCard label="Applied discounts" value={formatCurrency(appliedRewardTotal)} delta={`${appliedRewards.length} rewards`} />
-          <MetricCard label="Invoices discounted" value={referralDiscountInvoices.length} delta="via referral_bonus_amount" />
-          <MetricCard label="Verified referrals" value={verifiedReferrals.length} delta="eligible client path" />
+          <MetricCard accent label="Employee paid" value={employeePaidSummary} delta={`${employeePayments.length} employee payments`} />
+          <MetricCard label="Referral payouts due" value={formatCurrency(scheduledReferralPayoutTotal)} delta={`${referralPayouts.length} payout records`} />
+          <MetricCard label="Other paid" value={formatCurrency(otherPaidTotal)} delta={`${otherExpenses.filter((expense) => expense.direction === "paid").length} records`} />
+          <MetricCard label="Other received" value={formatCurrency(otherReceivedTotal)} delta="income or refund entries" />
         </div>
 
         <section className="section">
           <div className="section-head">
-            <h2>Current payable categories</h2>
+            <h2>Expense distribution by region</h2>
           </div>
           <div className="section-desc">
-            Phase-safe view of the v2 payables IA. Cash payouts, payroll, vendor bills, reimbursements,
-            and Excel expenses remain future additive phases.
+            Employee payments and other paid expenses are grouped separately so finance can see where
+            cash is going without mixing payroll with operating spend.
           </div>
-          <div className="ia-card-grid">
-            {[
-              ["Referral payouts", "Future cash payout queue for employee and partner referrers.", "Future"],
-              ["Client invoice discounts", "Live today through customer_reward_ledger and invoice_reward_applications.", "Live"],
-              ["Payroll", "Future employee payables source.", "Planned"],
-              ["Vendor bills", "Future AP ledger category.", "Planned"],
-              ["Reimbursements", "Future employee reimbursement queue.", "Planned"],
-              ["Expenses", "Future Excel import into payables.", "Planned"],
-            ].map(([title, copy, status]) => (
-              <div className="detail-card ia-mini-card" key={title}>
-                <div className="detail-inline-head">
-                  <div>
-                    <div className="detail-title">{title}</div>
-                    <div className="sub">{copy}</div>
-                  </div>
-                  <span className={`search-status-chip tone-${status === "Live" ? "success" : "neutral"}`}>{status}</span>
-                </div>
+          <div className="two-col">
+            <div className="tcard">
+              <div className="trow head region-expense-grid">
+                <div>Employee region</div>
+                <div>Paid</div>
               </div>
-            ))}
+              {employeeSpendByRegion.map((region) => (
+                <div className="trow region-expense-grid" key={region.label}>
+                  <div className="cust">{region.label}</div>
+                  <div className="mono">{formatCurrency(region.amount)}</div>
+                </div>
+              ))}
+              {!employeeSpendByRegion.length && <div className="empty">No employee payments recorded yet.</div>}
+            </div>
+            <div className="tcard">
+              <div className="trow head region-expense-grid">
+                <div>Other region</div>
+                <div>Paid</div>
+              </div>
+              {otherSpendByRegion.map((region) => (
+                <div className="trow region-expense-grid" key={region.label}>
+                  <div className="cust">{region.label}</div>
+                  <div className="mono">{formatCurrency(region.amount)}</div>
+                </div>
+              ))}
+              {!otherSpendByRegion.length && <div className="empty">No other paid expenses recorded yet.</div>}
+            </div>
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Record other expense or income</h2>
+          </div>
+          <form className="chart-card admin-form-card" onSubmit={submitOtherExpense}>
+            <div className="field-row">
+              <div className="field">
+                <label>Direction</label>
+                <select value={expenseForm.direction} onChange={(event) => updateExpenseForm("direction", event.target.value)}>
+                  <option value="paid">Paid</option>
+                  <option value="received">Received</option>
+                </select>
+              </div>
+              <div className="field">
+                <label>Category</label>
+                <select value={expenseForm.category} onChange={(event) => updateExpenseForm("category", event.target.value)}>
+                  {OTHER_EXPENSE_CATEGORY_OPTIONS.map((category) => (
+                    <option key={category} value={category}>{category}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>Vendor / source</label>
+                <input value={expenseForm.vendorOrSource} onChange={(event) => updateExpenseForm("vendorOrSource", event.target.value)} placeholder="Apple, landlord, refund source..." />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Amount</label>
+                <input type="number" min="0" step="0.01" value={expenseForm.amount} onChange={(event) => updateExpenseForm("amount", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Date</label>
+                <input type="date" value={expenseForm.expenseDate} onChange={(event) => updateExpenseForm("expenseDate", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Region</label>
+                <input value={expenseForm.region} onChange={(event) => updateExpenseForm("region", event.target.value)} placeholder="US, India, Nigeria..." />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Department</label>
+                <input value={expenseForm.department} onChange={(event) => updateExpenseForm("department", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Payment method</label>
+                <input value={expenseForm.paymentMethod} onChange={(event) => updateExpenseForm("paymentMethod", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Receipt / reference</label>
+                <input value={expenseForm.receiptReference} onChange={(event) => updateExpenseForm("receiptReference", event.target.value)} />
+              </div>
+            </div>
+            <div className="field">
+              <label>Memo</label>
+              <textarea rows={2} value={expenseForm.memo} onChange={(event) => updateExpenseForm("memo", event.target.value)} placeholder="CEO/finance note, approval context, lease period, laptop serials..." />
+            </div>
+            <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>
+              {saving ? "Recording..." : "Record other entry"}
+            </button>
+          </form>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Employee and referral payout ledger</h2>
+          </div>
+          <div className="two-col">
+            <div className="tcard">
+              <div className="trow head payable-ledger-grid">
+                <div>Employee</div>
+                <div>Type</div>
+                <div>Amount</div>
+                <div>Date</div>
+              </div>
+              {employeePayments.slice(0, 8).map((payment) => {
+                const employee = employees.find((item) => item.id === payment.employeeId);
+                return (
+                  <div className="trow payable-ledger-grid" key={payment.id}>
+                    <div>
+                      <div className="cust">{employee?.fullName ?? "Unknown employee"}</div>
+                      <div className="sub">{employee?.employeeCode ?? payment.employeeId}</div>
+                    </div>
+                    <div className="sub">{formatEmployeePaymentType(payment.paymentType)}</div>
+                    <div className="mono">{formatCurrency(payment.amount)}</div>
+                    <div className="sub">{formatShortDate(payment.paymentDate)}</div>
+                  </div>
+                );
+              })}
+              {!employeePayments.length && <div className="empty">No employee payments yet.</div>}
+            </div>
+            <div className="tcard">
+              <div className="trow head payable-ledger-grid">
+                <div>Referrer</div>
+                <div>Status</div>
+                <div>Amount</div>
+                <div>Scheduled</div>
+              </div>
+              {referralPayouts.slice(0, 8).map((payout) => (
+                <div className="trow payable-ledger-grid" key={payout.id}>
+                  <div>
+                    <div className="cust">{payout.partyName}</div>
+                    <div className="sub">{payout.payoutMethod}</div>
+                  </div>
+                  <div><span className="search-status-chip tone-neutral">{formatTitleCase(payout.payoutStatus)}</span></div>
+                  <div className="mono">{formatCurrency(payout.amount)}</div>
+                  <div className="sub">{formatDateTimeValue(payout.scheduledAt)}</div>
+                </div>
+              ))}
+              {!referralPayouts.length && <div className="empty">No employee referral payouts scheduled yet.</div>}
+            </div>
+          </div>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Customer referral discounts remain in receivables</h2>
+          </div>
+          <div className="metrics c4">
+            <MetricCard accent label="Available discounts" value={formatCurrency(availableRewardTotal)} delta={`${availableRewards.length} rewards`} />
+            <MetricCard label="Applied discounts" value={formatCurrency(appliedRewardTotal)} delta={`${appliedRewards.length} rewards`} />
+            <MetricCard label="Invoices discounted" value={referralDiscountInvoices.length} delta="via referral_bonus_amount" />
+            <MetricCard label="Verified referrals" value={verifiedReferrals.length} delta="eligible client path" />
           </div>
         </section>
       </div>
@@ -4953,9 +6623,67 @@ function PayablesHubView({ invoices, referrals, rewards, onOpenReceivables, onOp
   );
 }
 
-function PeopleHubView({ customers, referralParties, referrals, onOpenClients, onOpenReferrals }) {
+function LegacyPeopleHubView({
+  customers,
+  employees = [],
+  employeePayments = [],
+  referralParties,
+  referrals,
+  saving = false,
+  onSaveEmployee,
+  onSaveEmployeePayment,
+  onOpenClients,
+  onOpenReferrals,
+}) {
+  const [employeeForm, setEmployeeForm] = useState(createDefaultEmployeeForm);
+  const [paymentForm, setPaymentForm] = useState(() => createDefaultEmployeePaymentForm(employees[0]?.id ?? ""));
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState(employees[0]?.id ?? "");
   const clientParties = referralParties.filter((party) => party.partyType === "client");
   const customerReferrers = new Set(referrals.map((referral) => referral.referrerCustomerId).filter(Boolean));
+  const currentEmployees = employees.filter((employee) => employee.status === "current");
+  const selectedEmployee =
+    employees.find((employee) => employee.id === selectedEmployeeId) ?? employees[0] ?? null;
+  const selectedEmployeePayments = selectedEmployee
+    ? employeePayments.filter((payment) => payment.employeeId === selectedEmployee.id)
+    : [];
+  const totalPayroll = employeePayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+
+  useEffect(() => {
+    if (!selectedEmployeeId && employees[0]?.id) {
+      setSelectedEmployeeId(employees[0].id);
+      setPaymentForm((current) => ({ ...current, employeeId: employees[0].id }));
+    }
+  }, [employees, selectedEmployeeId]);
+
+  function updateEmployeeForm(field, value) {
+    setEmployeeForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  function updatePaymentForm(field, value) {
+    setPaymentForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function submitEmployee(event) {
+    event.preventDefault();
+    const saved = await onSaveEmployee?.(employeeForm);
+    if (saved) {
+      setEmployeeForm(createDefaultEmployeeForm());
+    }
+  }
+
+  async function submitEmployeePayment(event) {
+    event.preventDefault();
+    const saved = await onSaveEmployeePayment?.(paymentForm);
+    if (saved) {
+      setPaymentForm(createDefaultEmployeePaymentForm(paymentForm.employeeId));
+    }
+  }
 
   return (
     <div>
@@ -4963,10 +6691,10 @@ function PeopleHubView({ customers, referralParties, referrals, onOpenClients, o
         <div className="ia-hero">
           <div>
             <div className="detail-label">People</div>
-            <h2>Future employee and sales directory, connected to today&apos;s customer referrers.</h2>
+            <h2>Employee onboarding, HR status, payments, and referral identity in one people ledger.</h2>
             <p>
-              The v2 design expands referral parties beyond clients. This local build shows the
-              current normalized referral parties while preserving customer records as the source of truth.
+              Finance can onboard employees, maintain status/comments, record salary and bonus
+              payments, and use the employee database for referral-engine matching.
             </p>
           </div>
           <div className="ia-hero-actions">
@@ -4979,19 +6707,267 @@ function PeopleHubView({ customers, referralParties, referrals, onOpenClients, o
           </div>
         </div>
 
-        <div className="metrics c3">
-          <MetricCard accent label="Referral parties" value={referralParties.length} delta="normalized records" />
-          <MetricCard label="Client parties" value={clientParties.length} delta="invoice discount path" />
+        <div className="metrics c4">
+          <MetricCard accent label="Employees" value={employees.length} delta={`${currentEmployees.length} current`} />
+          <MetricCard label="Employee paid" value={formatCurrency(totalPayroll)} delta={`${employeePayments.length} payments`} />
+          <MetricCard label="Referral parties" value={referralParties.length} delta={`${clientParties.length} client parties`} />
           <MetricCard label="Customer referrers" value={customerReferrers.size} delta="legacy ID preserved" />
         </div>
 
         <section className="section">
           <div className="section-head">
-            <h2>Current referral parties</h2>
+            <h2>Onboard employee</h2>
+          </div>
+          <form className="chart-card admin-form-card" onSubmit={submitEmployee}>
+            <div className="field-row">
+              <div className="field">
+                <label>First name</label>
+                <input value={employeeForm.firstName} onChange={(event) => updateEmployeeForm("firstName", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Middle name</label>
+                <input value={employeeForm.middleName} onChange={(event) => updateEmployeeForm("middleName", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Last name</label>
+                <input value={employeeForm.lastName} onChange={(event) => updateEmployeeForm("lastName", event.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Official email</label>
+                <input value={employeeForm.officialEmail} onChange={(event) => updateEmployeeForm("officialEmail", event.target.value)} placeholder="name@setu..." />
+              </div>
+              <div className="field">
+                <label>Personal email</label>
+                <input value={employeeForm.personalEmail} onChange={(event) => updateEmployeeForm("personalEmail", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Preferred name</label>
+                <input value={employeeForm.preferredName} onChange={(event) => updateEmployeeForm("preferredName", event.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Official mobile</label>
+                <input value={employeeForm.officialMobile} onChange={(event) => updateEmployeeForm("officialMobile", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Personal mobile</label>
+                <input value={employeeForm.personalMobile} onChange={(event) => updateEmployeeForm("personalMobile", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Status</label>
+                <select value={employeeForm.status} onChange={(event) => updateEmployeeForm("status", event.target.value)}>
+                  {EMPLOYEE_STATUS_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Title</label>
+                <input value={employeeForm.title} onChange={(event) => updateEmployeeForm("title", event.target.value)} placeholder="Sales associate, attorney..." />
+              </div>
+              <div className="field">
+                <label>Department</label>
+                <input value={employeeForm.department} onChange={(event) => updateEmployeeForm("department", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Region</label>
+                <input value={employeeForm.region} onChange={(event) => updateEmployeeForm("region", event.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Manager</label>
+                <input value={employeeForm.managerName} onChange={(event) => updateEmployeeForm("managerName", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Date of joining</label>
+                <input type="date" value={employeeForm.dateOfJoining} onChange={(event) => updateEmployeeForm("dateOfJoining", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Date of exit</label>
+                <input type="date" value={employeeForm.dateOfExit} onChange={(event) => updateEmployeeForm("dateOfExit", event.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Monthly salary</label>
+                <input type="number" min="0" step="0.01" value={employeeForm.monthlySalary} onChange={(event) => updateEmployeeForm("monthlySalary", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Joining bonus</label>
+                <input type="number" min="0" step="0.01" value={employeeForm.oneTimeJoiningBonus} onChange={(event) => updateEmployeeForm("oneTimeJoiningBonus", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Annual bonus</label>
+                <input type="number" min="0" step="0.01" value={employeeForm.annualBonus} onChange={(event) => updateEmployeeForm("annualBonus", event.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>HR leader comments</label>
+                <textarea rows={3} value={employeeForm.hrComments} onChange={(event) => updateEmployeeForm("hrComments", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Critical information</label>
+                <textarea rows={3} value={employeeForm.criticalInfo} onChange={(event) => updateEmployeeForm("criticalInfo", event.target.value)} placeholder="Visa status, equipment issued, payroll notes, contract terms..." />
+              </div>
+            </div>
+            <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>
+              {saving ? "Saving..." : "Create employee"}
+            </button>
+          </form>
+        </section>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Employee directory</h2>
           </div>
           <div className="section-desc">
-            Employee, sales, and partner directories are planned as additive phases. Existing client
-            referrers are already normalized here.
+            Click a row to switch the 360 view below. Employee ID is numeric-looking in the official
+            code and is searched only against the employee database by the referral portal.
+          </div>
+          <div className="tcard">
+            <div className="trow head employee-grid">
+              <div>Employee</div>
+              <div>Status</div>
+              <div>Role</div>
+              <div>Compensation</div>
+              <div>Paid</div>
+            </div>
+            {employees.map((employee) => (
+              <button
+                className={`trow employee-grid trow-button ${selectedEmployee?.id === employee.id ? "selected-row" : ""}`}
+                key={employee.id}
+                onClick={() => {
+                  setSelectedEmployeeId(employee.id);
+                  setPaymentForm((current) => ({ ...current, employeeId: employee.id, region: employee.region || current.region }));
+                }}
+                type="button"
+              >
+                <div>
+                  <div className="cust">{employee.fullName}</div>
+                  <div className="sub mono">{employee.employeeCode}</div>
+                  <div className="sub">{employee.officialEmail ?? employee.personalEmail ?? "No email"}</div>
+                </div>
+                <div><span className={`search-status-chip tone-${employee.status === "current" ? "success" : "neutral"}`}>{formatEmployeeStatusLabel(employee.status)}</span></div>
+                <div className="sub">{employee.title}<br />{employee.department} · {employee.region}</div>
+                <div className="sub">{formatCurrency(employee.monthlySalary)} / mo<br />{formatCurrency(employee.annualBonus)} annual bonus</div>
+                <div className="mono">{formatCurrency(employee.totalPaid)}</div>
+              </button>
+            ))}
+            {!employees.length && <div className="empty">No employee records have been created yet.</div>}
+          </div>
+        </section>
+
+        {selectedEmployee && (
+          <section className="section">
+            <div className="section-head">
+              <h2>Employee 360</h2>
+            </div>
+            <div className="two-col">
+              <div className="chart-card admin-form-card">
+                <div className="detail-inline-head">
+                  <div>
+                    <div className="detail-label">{selectedEmployee.employeeCode}</div>
+                    <div className="cust">{selectedEmployee.fullName}</div>
+                    <div className="sub">{selectedEmployee.title} · {selectedEmployee.department} · {selectedEmployee.region}</div>
+                  </div>
+                  <span className={`search-status-chip tone-${selectedEmployee.status === "current" ? "success" : "neutral"}`}>
+                    {formatEmployeeStatusLabel(selectedEmployee.status)}
+                  </span>
+                </div>
+                <div className="summary-list compact">
+                  <div><span>Joined</span><strong>{formatShortDate(selectedEmployee.dateOfJoining)}</strong></div>
+                  <div><span>Manager</span><strong>{selectedEmployee.managerName ?? "Not captured"}</strong></div>
+                  <div><span>Official mobile</span><strong>{selectedEmployee.officialMobile ?? "Not captured"}</strong></div>
+                  <div><span>Personal mobile</span><strong>{selectedEmployee.personalMobile ?? "Not captured"}</strong></div>
+                  <div><span>HR comments</span><strong>{selectedEmployee.hrComments ?? "None"}</strong></div>
+                  <div><span>Critical info</span><strong>{selectedEmployee.criticalInfo?.notes ?? "None"}</strong></div>
+                </div>
+              </div>
+              <form className="chart-card admin-form-card" onSubmit={submitEmployeePayment}>
+                <div className="detail-title">Record employee payment</div>
+                <div className="field">
+                  <label>Employee</label>
+                  <select value={paymentForm.employeeId} onChange={(event) => updatePaymentForm("employeeId", event.target.value)}>
+                    {employees.map((employee) => (
+                      <option key={employee.id} value={employee.id}>{employee.employeeCode} · {employee.fullName}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field-row">
+                  <div className="field">
+                    <label>Payment type</label>
+                    <select value={paymentForm.paymentType} onChange={(event) => updatePaymentForm("paymentType", event.target.value)}>
+                      {EMPLOYEE_PAYMENT_TYPE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="field">
+                    <label>Amount</label>
+                    <input type="number" min="0" step="0.01" value={paymentForm.amount} onChange={(event) => updatePaymentForm("amount", event.target.value)} />
+                  </div>
+                </div>
+                <div className="field-row">
+                  <div className="field">
+                    <label>Date</label>
+                    <input type="date" value={paymentForm.paymentDate} onChange={(event) => updatePaymentForm("paymentDate", event.target.value)} />
+                  </div>
+                  <div className="field">
+                    <label>Region</label>
+                    <input value={paymentForm.region} onChange={(event) => updatePaymentForm("region", event.target.value)} placeholder={selectedEmployee.region} />
+                  </div>
+                </div>
+                <div className="field-row">
+                  <div className="field">
+                    <label>Memo</label>
+                    <input value={paymentForm.memo} onChange={(event) => updatePaymentForm("memo", event.target.value)} />
+                  </div>
+                  <div className="field">
+                    <label>Reference</label>
+                    <input value={paymentForm.reference} onChange={(event) => updatePaymentForm("reference", event.target.value)} />
+                  </div>
+                </div>
+                <button className="btn btn-primary btn-sm" type="submit" disabled={saving || !employees.length}>
+                  {saving ? "Recording..." : "Record payment"}
+                </button>
+              </form>
+            </div>
+            <div className="tcard">
+              <div className="trow head employee-payment-grid">
+                <div>Payment</div>
+                <div>Amount</div>
+                <div>Date</div>
+                <div>Recorded by</div>
+              </div>
+              {selectedEmployeePayments.map((payment) => (
+                <div className="trow employee-payment-grid" key={payment.id}>
+                  <div>
+                    <div className="cust">{formatEmployeePaymentType(payment.paymentType)}</div>
+                    <div className="sub">{payment.memo ?? payment.reference ?? "No memo"}</div>
+                  </div>
+                  <div className="mono">{formatCurrency(payment.amount)}</div>
+                  <div className="sub">{formatShortDate(payment.paymentDate)}</div>
+                  <div className="sub">{payment.recordedByUsername ?? "seed"}</div>
+                </div>
+              ))}
+              {!selectedEmployeePayments.length && <div className="empty">No payments for this employee yet.</div>}
+            </div>
+          </section>
+        )}
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Referral parties</h2>
+          </div>
+          <div className="section-desc">
+            Existing client referrers and employee referrers are normalized here for reward routing.
           </div>
           <div className="tcard">
             <div className="trow head people-grid">
@@ -5015,6 +6991,953 @@ function PeopleHubView({ customers, referralParties, referrals, onOpenClients, o
           </div>
         </section>
       </div>
+    </div>
+  );
+}
+
+function PeopleHubView({
+  employees = [],
+  employeePayments = [],
+  formerEmployees = [],
+  saving = false,
+  onSaveEmployee,
+  onOpenEmployee,
+}) {
+  const [employeeForm, setEmployeeForm] = useState(createDefaultEmployeeForm);
+  const [directoryQuery, setDirectoryQuery] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState("");
+  const currentEmployees = employees.filter((employee) => employee.status === "current");
+  const activeEmployees = employees.filter((employee) => !["terminated", "left_company"].includes(employee.status));
+  const formerDirectory = formerEmployees.length
+    ? formerEmployees
+    : employees.filter((employee) => ["terminated", "left_company"].includes(employee.status));
+  const localCurrency = getEmployeeRegionCurrency(employeeForm.region);
+  const totalEmployeePaidSummary = summarizeCurrencyTotals(employeePayments.filter((payment) => payment.status !== "cancelled"));
+  const trimmedDirectoryQuery = directoryQuery.trim().toLowerCase();
+
+  const matchedEmployees = activeEmployees.filter((employee) => {
+    const query = trimmedDirectoryQuery;
+    if (!query) {
+      return false;
+    }
+    const departmentMatch = !departmentFilter || employee.department === departmentFilter;
+    if (!departmentMatch) {
+      return false;
+    }
+    const haystack = [
+      employee.firstName,
+      employee.middleName,
+      employee.lastName,
+      employee.fullName,
+      employee.employeeCode,
+      employee.officialEmail,
+      employee.personalEmail,
+      employee.officialMobile,
+      employee.personalMobile,
+      employee.department,
+      employee.title,
+      employee.region,
+      formatEmployeeStatusLabel(employee.status),
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+  const filteredEmployees = matchedEmployees.slice(0, 10);
+  const directoryPrompt = !trimmedDirectoryQuery;
+  const hiddenMatchesCount = Math.max(0, matchedEmployees.length - filteredEmployees.length);
+
+  function updateEmployeeForm(field, value) {
+    setEmployeeForm((current) => {
+      const next = {
+        ...current,
+        [field]: value,
+      };
+      if (field === "region") {
+        next.currency = getEmployeeRegionCurrency(value);
+      }
+      return next;
+    });
+  }
+
+  async function submitEmployee(event) {
+    event.preventDefault();
+    const saved = await onSaveEmployee?.({
+      ...employeeForm,
+      currency: localCurrency,
+    });
+    if (saved) {
+      setEmployeeForm(createDefaultEmployeeForm());
+    }
+  }
+
+  return (
+    <div className="content people-workspace">
+      <div className="ia-hero people-landing-hero">
+        <div>
+          <div className="detail-label">People</div>
+          <h2>Employee Directory and Onboard Employee</h2>
+          <p>
+            Keep employee records, compensation context, status, payslips, and payment history
+            separate from client finance while still reporting employee payments into Payables and Executive.
+          </p>
+        </div>
+      </div>
+
+      <div className="metrics c4">
+        <MetricCard accent label="Employee count" value={employees.length} delta={`${currentEmployees.length} current`} />
+        <MetricCard label="Onboard Employee" value="Ready" delta="Controlled HR fields" />
+        <MetricCard label="Employee paid" value={totalEmployeePaidSummary} delta={`${employeePayments.length} transactions`} />
+        <MetricCard label="Former employees" value={formerDirectory.length} delta="Separate table" />
+      </div>
+
+      <section className="section">
+        <div className="section-head people-section-title">
+          <div>
+            <div className="detail-label">Onboard Employee</div>
+            <h2>Compact employee intake</h2>
+          </div>
+        </div>
+        <form className="chart-card admin-form-card people-compact-form" onSubmit={submitEmployee}>
+          <div className="field-row people-form-grid-4">
+            <div className="field">
+              <label>First name</label>
+              <input value={employeeForm.firstName} onChange={(event) => updateEmployeeForm("firstName", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Middle</label>
+              <input value={employeeForm.middleName} onChange={(event) => updateEmployeeForm("middleName", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Last name</label>
+              <input value={employeeForm.lastName} onChange={(event) => updateEmployeeForm("lastName", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Preferred</label>
+              <input value={employeeForm.preferredName} onChange={(event) => updateEmployeeForm("preferredName", event.target.value)} />
+            </div>
+          </div>
+          <div className="field-row people-form-grid-4">
+            <div className="field">
+              <label>Official email</label>
+              <input value={employeeForm.officialEmail} onChange={(event) => updateEmployeeForm("officialEmail", event.target.value)} placeholder="name@setu..." />
+            </div>
+            <div className="field">
+              <label>Personal email</label>
+              <input value={employeeForm.personalEmail} onChange={(event) => updateEmployeeForm("personalEmail", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Official mobile</label>
+              <input value={employeeForm.officialMobile} onChange={(event) => updateEmployeeForm("officialMobile", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Personal mobile</label>
+              <input value={employeeForm.personalMobile} onChange={(event) => updateEmployeeForm("personalMobile", event.target.value)} />
+            </div>
+          </div>
+          <div className="field-row people-form-grid-5">
+            <div className="field">
+              <label>Department</label>
+              <select value={employeeForm.department} onChange={(event) => updateEmployeeForm("department", event.target.value)}>
+                {EMPLOYEE_DEPARTMENT_OPTIONS.map((department) => (
+                  <option key={department} value={department}>{department}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Title</label>
+              <select value={employeeForm.title} onChange={(event) => updateEmployeeForm("title", event.target.value)}>
+                {EMPLOYEE_TITLE_OPTIONS.map((title) => (
+                  <option key={title} value={title}>{title}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Region</label>
+              <select value={employeeForm.region} onChange={(event) => updateEmployeeForm("region", event.target.value)}>
+                {EMPLOYEE_REGION_OPTIONS.map((region) => (
+                  <option key={region.value} value={region.value}>{region.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Status</label>
+              <select value={employeeForm.status} onChange={(event) => updateEmployeeForm("status", event.target.value)}>
+                {EMPLOYEE_STATUS_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <label>Local currency</label>
+              <input value={localCurrency} readOnly />
+            </div>
+          </div>
+          <div className="field-row people-form-grid-4">
+            <div className="field">
+              <label>Monthly salary ({localCurrency})</label>
+              <input type="number" min="0" step="0.01" value={employeeForm.monthlySalary} onChange={(event) => updateEmployeeForm("monthlySalary", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Joining bonus ({localCurrency})</label>
+              <input type="number" min="0" step="0.01" value={employeeForm.oneTimeJoiningBonus} onChange={(event) => updateEmployeeForm("oneTimeJoiningBonus", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Annual bonus ({localCurrency})</label>
+              <input type="number" min="0" step="0.01" value={employeeForm.annualBonus} onChange={(event) => updateEmployeeForm("annualBonus", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Date joined</label>
+              <input type="date" value={employeeForm.dateOfJoining} onChange={(event) => updateEmployeeForm("dateOfJoining", event.target.value)} />
+            </div>
+          </div>
+          <div className="field-row people-form-grid-3">
+            <div className="field">
+              <label>Manager</label>
+              <input value={employeeForm.managerName} onChange={(event) => updateEmployeeForm("managerName", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>Date of exit</label>
+              <input type="date" value={employeeForm.dateOfExit} onChange={(event) => updateEmployeeForm("dateOfExit", event.target.value)} />
+            </div>
+            <div className="field">
+              <label>HR comments</label>
+              <input value={employeeForm.hrComments} onChange={(event) => updateEmployeeForm("hrComments", event.target.value)} />
+            </div>
+          </div>
+          <div className="field">
+            <label>Critical information</label>
+            <textarea rows={2} value={employeeForm.criticalInfo} onChange={(event) => updateEmployeeForm("criticalInfo", event.target.value)} placeholder="Visa status, equipment issued, payroll notes, contract terms..." />
+          </div>
+          <button className="btn btn-primary btn-sm people-create-action" type="submit" disabled={saving}>
+            {saving ? "Saving..." : "Create employee"}
+          </button>
+        </form>
+      </section>
+
+      <section className="section">
+        <div className="section-head people-section-title">
+          <div>
+            <div className="detail-label">Employee Directory</div>
+            <h2>Search and open Employee 360</h2>
+            <div className="sub">No employees are listed until you search. Results are capped to the top 10 matches.</div>
+          </div>
+        </div>
+        <div className="chart-card people-directory-tools">
+          <div className="field people-search-field">
+            <label>Search employees</label>
+            <input
+              value={directoryQuery}
+              onChange={(event) => setDirectoryQuery(event.target.value)}
+              placeholder="Search first name, last name, employee ID, email, phone, department, title..."
+            />
+          </div>
+          <div className="field people-filter-field">
+            <label>Department</label>
+            <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)}>
+              <option value="">All departments</option>
+              {EMPLOYEE_DEPARTMENT_OPTIONS.map((department) => (
+                <option key={department} value={department}>{department}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="tcard">
+          {directoryPrompt ? (
+            <div className="empty">Search by name, email, phone, department, title, or employee ID to display matching employees.</div>
+          ) : (
+            <>
+              <div className="trow head employee-directory-grid">
+                <div>Employee</div>
+                <div>Status</div>
+                <div>Department / title</div>
+                <div>Region</div>
+                <div>Salary</div>
+                <div />
+              </div>
+              {filteredEmployees.map((employee) => (
+                <div className="trow employee-directory-grid" key={employee.id}>
+                  <div>
+                    <div className="cust">{employee.fullName}</div>
+                    <div className="sub mono">{employee.employeeCode}</div>
+                    <div className="sub">{employee.officialEmail ?? employee.personalEmail ?? "No email"} · {employee.officialMobile ?? employee.personalMobile ?? "No phone"}</div>
+                  </div>
+                  <div>
+                    <span className={`search-status-chip tone-${employee.status === "current" ? "success" : "neutral"}`}>
+                      {formatEmployeeStatusLabel(employee.status)}
+                    </span>
+                  </div>
+                  <div className="sub">{employee.department}<br />{employee.title}</div>
+                  <div className="sub">{employee.region}<br />{employee.currency}</div>
+                  <div className="sub">
+                    {formatMoney(employee.monthlySalary, employee.currency)} / mo
+                    <br />
+                    {formatMoney(employee.annualBonus, employee.currency)} annual bonus
+                  </div>
+                  <div>
+                    <button className="btn btn-sm btn-primary" type="button" onClick={() => onOpenEmployee?.(employee)}>
+                      Employee 360
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {!filteredEmployees.length && <div className="empty">No employees match the current search.</div>}
+              {hiddenMatchesCount > 0 ? (
+                <div className="empty subtle-empty">
+                  Showing top 10 matches. Narrow the search to reveal {hiddenMatchesCount} more.
+                </div>
+              ) : null}
+            </>
+          )}
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section-head people-section-title">
+          <div>
+            <div className="detail-label">Former Employees</div>
+            <h2>Separate former employee table</h2>
+          </div>
+        </div>
+        <div className="tcard">
+          <div className="trow head former-employee-grid">
+            <div>Employee</div>
+            <div>Status</div>
+            <div>Exit</div>
+            <div>Department</div>
+            <div />
+          </div>
+          {formerDirectory.map((employee) => (
+            <div className="trow former-employee-grid" key={employee.id}>
+              <div>
+                <div className="cust">{employee.fullName}</div>
+                <div className="sub mono">{employee.employeeCode}</div>
+              </div>
+              <div><span className="search-status-chip tone-neutral">{formatEmployeeStatusLabel(employee.status)}</span></div>
+              <div className="sub">{employee.dateOfExit ? formatShortDate(employee.dateOfExit) : "Not captured"}</div>
+              <div className="sub">{employee.department} · {employee.region}</div>
+              <div>
+                <button className="btn btn-sm" type="button" onClick={() => onOpenEmployee?.(employee)}>
+                  Employee 360
+                </button>
+              </div>
+            </div>
+          ))}
+          {!formerDirectory.length && <div className="empty">No former employees recorded yet.</div>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ContractsLibraryView({ contracts = [] }) {
+  const [query, setQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
+  const [peekContract, setPeekContract] = useState(null);
+  const normalizedQuery = query.trim().toLowerCase();
+  const categoryCounts = contracts.reduce((counts, contract) => {
+    const key = contract.ownerCategory || "other";
+    counts[key] = (counts[key] ?? 0) + 1;
+    return counts;
+  }, {});
+  const typeOptions = Array.from(
+    new Map(
+      contracts.map((contract) => [
+        contract.contractType || "other",
+        contract.contractTypeLabel || "Other",
+      ]),
+    ).entries(),
+  ).sort((left, right) => left[1].localeCompare(right[1]));
+  const filteredContracts = contracts
+    .filter((contract) => {
+      if (categoryFilter && contract.ownerCategory !== categoryFilter) {
+        return false;
+      }
+      if (typeFilter && contract.contractType !== typeFilter) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      const haystack = [
+        contract.ownerCategory,
+        contract.ownerCode,
+        contract.ownerName,
+        contract.contractType,
+        contract.contractTypeLabel,
+        contract.fileName,
+        contract.summary,
+        contract.notes,
+        contract.uploadedByUsername,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(normalizedQuery);
+    })
+    .slice(0, 100);
+
+  return (
+    <div className="content contracts-workspace">
+      <div className="ia-hero">
+        <div>
+          <div className="detail-label">Contracts</div>
+          <h2>Finance contract archive</h2>
+          <p>
+            Search-only library for client, employee, NDA, stakeholder, offer letter, and HR
+            agreement files uploaded from onboarding or People. Downloads remain authenticated.
+          </p>
+        </div>
+      </div>
+
+      <div className="metrics c4">
+        <MetricCard accent label="Total contracts" value={contracts.length} delta="Client + employee library" />
+        <MetricCard label="Client" value={categoryCounts.client ?? 0} delta="Onboarding uploads" />
+        <MetricCard label="Employee" value={categoryCounts.employee ?? 0} delta="People uploads" />
+        <MetricCard label="Stakeholder / other" value={(categoryCounts.stakeholder ?? 0) + (categoryCounts.other ?? 0)} delta="Future-ready category" />
+      </div>
+
+      <section className="section">
+        <div className="section-head">
+          <div>
+            <h2>Search contracts</h2>
+            <div className="sub">Filtered results show the first 100 records. Narrow by owner, type, file name, or summary.</div>
+          </div>
+        </div>
+        <div className="chart-card contracts-filter-grid">
+          <div className="field">
+            <label>Search</label>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search owner, employee ID, customer ID, NDA, offer letter, file name..."
+            />
+          </div>
+          <div className="field">
+            <label>Category</label>
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+              <option value="">All categories</option>
+              <option value="client">Client</option>
+              <option value="employee">Employee</option>
+              <option value="stakeholder">Stakeholder</option>
+              <option value="other">Other</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>Contract type</label>
+            <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+              <option value="">All types</option>
+              {typeOptions.map(([value, label]) => (
+                <option key={value} value={value}>{label}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="tcard">
+          <div className="trow head contracts-library-grid">
+            <div>Contract</div>
+            <div>Category</div>
+            <div>Signed with</div>
+            <div>Summary</div>
+            <div>Signed date</div>
+            <div />
+          </div>
+          {filteredContracts.map((contract) => (
+            <div className="trow contracts-library-grid" key={`${contract.source}-${contract.id}`}>
+              <div>
+                <div className="cust">{contract.fileName}</div>
+                <div className="contract-badge-row">
+                  <span className="contract-kind-badge">{contract.contractTypeLabel}</span>
+                  <span className="contract-kind-note">{formatFileSize(contract.fileSizeBytes)}</span>
+                </div>
+              </div>
+              <div><span className="search-status-chip tone-neutral">{formatTitleCase(contract.ownerCategory)}</span></div>
+              <div>
+                <div className="cust">{contract.signedWithName || contract.ownerName}</div>
+                <div className="sub mono">{contract.ownerCode || contract.ownerId || "No owner code"}</div>
+              </div>
+              <div className="sub contract-summary-cell">
+                {contract.summary || "Summary not captured"}
+              </div>
+              <div className="sub">
+                {contract.signedDate ? formatShortDate(contract.signedDate) : "Not captured"}
+              </div>
+              <div className="contract-record-actions">
+                <button className="btn btn-sm" type="button" onClick={() => setPeekContract(contract)}>
+                  Quick peek
+                </button>
+                <a className="btn btn-sm btn-primary" href={contract.downloadPath} rel="noreferrer" target="_blank" download>
+                  Download
+                </a>
+              </div>
+            </div>
+          ))}
+          {!filteredContracts.length && (
+            <div className="empty">No contracts match the current search or filters.</div>
+          )}
+        </div>
+      </section>
+      <ModalShell show={Boolean(peekContract)} onClose={() => setPeekContract(null)} size="wide">
+        <ContractQuickPeekModal contract={peekContract} onClose={() => setPeekContract(null)} />
+      </ModalShell>
+    </div>
+  );
+}
+
+function ContractQuickPeekModal({ contract, onClose }) {
+  if (!contract) {
+    return null;
+  }
+
+  const canPreview = isContractPreviewable(contract);
+  const previewUrl = contract.previewPath || contract.downloadPath;
+
+  return (
+    <>
+      <div className="modal-head">
+        <div>
+          <h3>Quick peek</h3>
+          <div className="sub modal-sub">
+            {contract.fileName} · {contract.contractTypeLabel} · {formatFileSize(contract.fileSizeBytes)}
+          </div>
+        </div>
+        <button className="x" type="button" onClick={onClose} aria-label="Close preview">×</button>
+      </div>
+      <div className="modal-body">
+        <div className="contract-preview-meta">
+          <span>{formatTitleCase(contract.ownerCategory)}</span>
+          <strong>Signed with {contract.signedWithName || contract.ownerName}</strong>
+          <span className="mono">{contract.ownerCode || contract.ownerId || "No owner code"}</span>
+          <span>Signed {contract.signedDate ? formatShortDate(contract.signedDate) : "date not captured"}</span>
+        </div>
+        {canPreview ? (
+          <iframe
+            className="contract-preview-frame"
+            src={previewUrl}
+            title={`Preview ${contract.fileName}`}
+          />
+        ) : (
+          <div className="contract-preview-fallback">
+            <div className="detail-label">Preview not available in browser</div>
+            <h4>{contract.fileName}</h4>
+            <p>
+              This file type cannot be previewed safely inline. The file is still stored and
+              protected; use Download when you intentionally want the raw contract file.
+            </p>
+          </div>
+        )}
+      </div>
+      <div className="modal-foot">
+        <a className="btn btn-primary" href={contract.downloadPath} rel="noreferrer" target="_blank" download>
+          Download raw file
+        </a>
+        <button className="btn" type="button" onClick={onClose}>Close</button>
+      </div>
+    </>
+  );
+}
+
+function Employee360Page({
+  employee,
+  employeePayments = [],
+  employeePayslips = [],
+  contractLibrary = [],
+  referralIntake = [],
+  saving = false,
+  onBack,
+  onGeneratePayslip,
+  onSaveEmployeeContract,
+  onSaveEmployeePayment,
+}) {
+  const [paymentForm, setPaymentForm] = useState(() => createDefaultEmployeePaymentForm(employee?.id ?? ""));
+  const [contractForm, setContractForm] = useState(createDefaultEmployeeContractForm);
+  const [payslipForm, setPayslipForm] = useState(() => ({
+    employeeId: employee?.id ?? "",
+    mode: "month",
+    month: new Date().toISOString().slice(0, 7),
+    periodStart: new Date().toISOString().slice(0, 10),
+    periodEnd: new Date().toISOString().slice(0, 10),
+    payPeriodLabel: "",
+  }));
+
+  useEffect(() => {
+    if (!employee?.id) {
+      return;
+    }
+    const currency = employee.currency || getEmployeeRegionCurrency(employee.region);
+    setPaymentForm((current) => ({
+      ...current,
+      employeeId: employee.id,
+      region: employee.region,
+      currency,
+    }));
+    setPayslipForm((current) => ({
+      ...current,
+      employeeId: employee.id,
+    }));
+  }, [employee?.id, employee?.region, employee?.currency]);
+
+  if (!employee) {
+    return (
+      <div className="content">
+        <div className="empty">Employee record not found.</div>
+        <button className="btn" type="button" onClick={onBack}>Back to People</button>
+      </div>
+    );
+  }
+
+  const payments = employeePayments.filter((payment) => payment.employeeId === employee.id);
+  const payslips = employeePayslips.filter((payslip) => payslip.employeeId === employee.id);
+  const employeeContracts = contractLibrary.filter(
+    (contract) => contract.ownerCategory === "employee" && contract.ownerId === employee.id,
+  );
+  const totalPaid = sumAmounts(payments, (payment) => payment.status !== "cancelled");
+  const referralRows = referralIntake.filter(
+    (intake) =>
+      intake.referrerKind === "employee" &&
+      (intake.referrerPartyId === employee.id ||
+        intake.resolvedReferrerPartyId === employee.id ||
+        intake.referrerEmployeeId === employee.employeeCode),
+  );
+  const localCurrency = employee.currency || getEmployeeRegionCurrency(employee.region);
+
+  function updatePaymentForm(field, value) {
+    setPaymentForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  function updatePayslipForm(field, value) {
+    setPayslipForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  function updateContractForm(field, value) {
+    setContractForm((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  }
+
+  async function attachEmployeeContract(fileList) {
+    const file = Array.from(fileList || [])[0];
+    if (!file) {
+      return;
+    }
+
+    setContractForm((current) => ({
+      ...current,
+      fileName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      contentBase64: "",
+    }));
+
+    const contentBase64 = await readFileAsDataUrl(file);
+    setContractForm((current) => ({
+      ...current,
+      fileName: file.name,
+      mimeType: file.type || "application/octet-stream",
+      contentBase64,
+    }));
+  }
+
+  async function submitEmployeePayment(event) {
+    event.preventDefault();
+    const saved = await onSaveEmployeePayment?.({
+      ...paymentForm,
+      employeeId: employee.id,
+      region: paymentForm.region || employee.region,
+      currency: paymentForm.currency || localCurrency,
+    });
+    if (saved) {
+      setPaymentForm(createDefaultEmployeePaymentForm(employee.id));
+    }
+  }
+
+  async function submitPayslip(event) {
+    event.preventDefault();
+    await onGeneratePayslip?.({
+      ...payslipForm,
+      employeeId: employee.id,
+    });
+  }
+
+  async function submitEmployeeContract(event) {
+    event.preventDefault();
+    if (!contractForm.contentBase64) {
+      return;
+    }
+    const saved = await onSaveEmployeeContract?.(employee.id, {
+      ...contractForm,
+      employeeId: employee.id,
+    });
+    if (saved) {
+      setContractForm(createDefaultEmployeeContractForm());
+    }
+  }
+
+  return (
+    <div className="content employee360-layout">
+      <div className="customer360-hero employee360-hero">
+        <button className="btn btn-sm" type="button" onClick={onBack}>Back to People</button>
+        <div>
+          <div className="detail-label">{employee.employeeCode}</div>
+          <div className="customer360-title">{employee.fullName}</div>
+          <p>{employee.title} · {employee.department} · {employee.region}</p>
+          <div className="customer360-chip-row">
+            <span className={`search-status-chip tone-${employee.status === "current" ? "success" : "neutral"}`}>
+              {formatEmployeeStatusLabel(employee.status)}
+            </span>
+            <span className="chip">{localCurrency} payroll</span>
+            <span className="chip">{referralRows.length} total referrals</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="metrics c4">
+        <MetricCard accent label="Monthly salary" value={formatMoney(employee.monthlySalary, localCurrency)} delta={localCurrency} />
+        <MetricCard label="Total paid" value={formatMoney(totalPaid, localCurrency)} delta={`${payments.length} transactions`} />
+        <MetricCard label="Total referrals" value={referralRows.length} delta="Referral engine records" />
+        <MetricCard label="Payslips" value={payslips.length} delta="Generated records" />
+        <MetricCard label="Contracts" value={employeeContracts.length} delta="Offer letters + HR files" />
+      </div>
+
+      <div className="two-col employee360-top-grid">
+        <section className="section no-gap">
+          <div className="section-head"><h2>Employee information</h2></div>
+          <div className="chart-card">
+            <div className="summary-list compact">
+              <div><span>Official email</span><strong>{employee.officialEmail ?? "Not captured"}</strong></div>
+              <div><span>Personal email</span><strong>{employee.personalEmail ?? "Not captured"}</strong></div>
+              <div><span>Official mobile</span><strong>{employee.officialMobile ?? "Not captured"}</strong></div>
+              <div><span>Personal mobile</span><strong>{employee.personalMobile ?? "Not captured"}</strong></div>
+              <div><span>Manager</span><strong>{employee.managerName ?? "Not captured"}</strong></div>
+              <div><span>Joined</span><strong>{formatShortDate(employee.dateOfJoining)}</strong></div>
+              <div><span>Exit</span><strong>{employee.dateOfExit ? formatShortDate(employee.dateOfExit) : "Active / not captured"}</strong></div>
+              <div><span>HR comments</span><strong>{employee.hrComments ?? "None"}</strong></div>
+              <div><span>Critical info</span><strong>{employee.criticalInfo?.notes ?? "None"}</strong></div>
+            </div>
+          </div>
+        </section>
+
+        <section className="section no-gap">
+          <div className="section-head"><h2>Record employee payment</h2></div>
+          <form className="chart-card admin-form-card" onSubmit={submitEmployeePayment}>
+            <div className="field-row">
+              <div className="field">
+                <label>Payment type</label>
+                <select value={paymentForm.paymentType} onChange={(event) => updatePaymentForm("paymentType", event.target.value)}>
+                  {EMPLOYEE_PAYMENT_TYPE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>Amount ({localCurrency})</label>
+                <input type="number" min="0" step="0.01" value={paymentForm.amount} onChange={(event) => updatePaymentForm("amount", event.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Date</label>
+                <input type="date" value={paymentForm.paymentDate} onChange={(event) => updatePaymentForm("paymentDate", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Status</label>
+                <select value={paymentForm.status} onChange={(event) => updatePaymentForm("status", event.target.value)}>
+                  <option value="scheduled">Scheduled</option>
+                  <option value="paid">Paid</option>
+                  <option value="cancelled">Cancelled</option>
+                </select>
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Memo</label>
+                <input value={paymentForm.memo} onChange={(event) => updatePaymentForm("memo", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Reference</label>
+                <input value={paymentForm.reference} onChange={(event) => updatePaymentForm("reference", event.target.value)} />
+              </div>
+            </div>
+            <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>
+              {saving ? "Recording..." : "Record payment transaction"}
+            </button>
+          </form>
+        </section>
+      </div>
+
+      <section className="section">
+        <div className="section-head"><h2>Employee contracts</h2></div>
+        <div className="two-col employee-contract-grid">
+          <form className="chart-card admin-form-card" onSubmit={submitEmployeeContract}>
+            <div className="field-row">
+              <div className="field">
+                <label>Contract type</label>
+                <select value={contractForm.contractType} onChange={(event) => updateContractForm("contractType", event.target.value)}>
+                  {BUSINESS_CONTRACT_TYPE_OPTIONS.filter((option) => option.value !== "client_contract").map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="field">
+                <label>Contract date</label>
+                <input type="date" value={contractForm.contractDate} onChange={(event) => updateContractForm("contractDate", event.target.value)} />
+              </div>
+            </div>
+            <div className="field-row">
+              <div className="field">
+                <label>Effective date</label>
+                <input type="date" value={contractForm.effectiveDate} onChange={(event) => updateContractForm("effectiveDate", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>Expiration date</label>
+                <input type="date" value={contractForm.expirationDate} onChange={(event) => updateContractForm("expirationDate", event.target.value)} />
+              </div>
+            </div>
+            <div className="field">
+              <label>Attach signed file</label>
+              <input
+                type="file"
+                accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
+                onChange={(event) => void attachEmployeeContract(event.target.files)}
+              />
+              {contractForm.fileName ? (
+                <div className="sub">Selected {contractForm.fileName}</div>
+              ) : (
+                <div className="sub">Use this for signed offer letters, NDAs, employment agreements, policy acknowledgements, or stakeholder documents.</div>
+              )}
+            </div>
+            <div className="field">
+              <label>Summary</label>
+              <textarea rows={2} value={contractForm.summary} onChange={(event) => updateContractForm("summary", event.target.value)} placeholder="Short HR/finance summary for search..." />
+            </div>
+            <div className="field">
+              <label>Notes</label>
+              <input value={contractForm.notes} onChange={(event) => updateContractForm("notes", event.target.value)} placeholder="Optional internal notes" />
+            </div>
+            <button className="btn btn-primary btn-sm" type="submit" disabled={saving || !contractForm.contentBase64}>
+              {saving ? "Uploading..." : "Upload employee contract"}
+            </button>
+          </form>
+          <div className="tcard">
+            <div className="trow head employee-contract-row">
+              <div>Contract</div>
+              <div>Date</div>
+              <div />
+            </div>
+            {employeeContracts.map((contract) => (
+              <div className="trow employee-contract-row" key={contract.id}>
+                <div>
+                  <div className="cust">{contract.fileName}</div>
+                  <div className="sub">{contract.contractTypeLabel} · {formatFileSize(contract.fileSizeBytes)}</div>
+                </div>
+                <div className="sub">{formatShortDate(contract.uploadedAt)}</div>
+                <div>
+                  <a className="btn btn-sm" href={contract.downloadPath} rel="noreferrer" target="_blank" download>
+                    Download
+                  </a>
+                </div>
+              </div>
+            ))}
+            {!employeeContracts.length && <div className="empty">No employee contracts uploaded yet.</div>}
+          </div>
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section-head"><h2>Generate payslip</h2></div>
+        <form className="chart-card payslip-form" onSubmit={submitPayslip}>
+          <div className="segmented-control">
+            <button className={payslipForm.mode === "month" ? "active" : ""} type="button" onClick={() => updatePayslipForm("mode", "month")}>Month</button>
+            <button className={payslipForm.mode === "pay_cycle" ? "active" : ""} type="button" onClick={() => updatePayslipForm("mode", "pay_cycle")}>Pay cycle</button>
+          </div>
+          {payslipForm.mode === "month" ? (
+            <div className="field">
+              <label>Payslip month</label>
+              <input type="month" value={payslipForm.month} onChange={(event) => updatePayslipForm("month", event.target.value)} />
+            </div>
+          ) : (
+            <div className="field-row">
+              <div className="field">
+                <label>Cycle label</label>
+                <input value={payslipForm.payPeriodLabel} onChange={(event) => updatePayslipForm("payPeriodLabel", event.target.value)} placeholder="2026-Q2-cycle-1" />
+              </div>
+              <div className="field">
+                <label>Start</label>
+                <input type="date" value={payslipForm.periodStart} onChange={(event) => updatePayslipForm("periodStart", event.target.value)} />
+              </div>
+              <div className="field">
+                <label>End</label>
+                <input type="date" value={payslipForm.periodEnd} onChange={(event) => updatePayslipForm("periodEnd", event.target.value)} />
+              </div>
+            </div>
+          )}
+          <button className="btn btn-primary btn-sm" type="submit" disabled={saving}>
+            {saving ? "Generating..." : "Generate payslip"}
+          </button>
+        </form>
+      </section>
+
+      <section className="section">
+        <div className="section-head"><h2>Payment transactions</h2></div>
+        <div className="tcard">
+          <div className="trow head employee-payment-grid">
+            <div>Payment</div>
+            <div>Amount</div>
+            <div>Date</div>
+            <div>Recorded by</div>
+          </div>
+          {payments.map((payment) => (
+            <div className="trow employee-payment-grid" key={payment.id}>
+              <div>
+                <div className="cust">{formatEmployeePaymentType(payment.paymentType)}</div>
+                <div className="sub">{payment.memo ?? payment.reference ?? "No memo"}</div>
+              </div>
+              <div className="mono">{formatMoney(payment.amount, payment.currency || localCurrency)}</div>
+              <div className="sub">{formatShortDate(payment.paymentDate)}</div>
+              <div className="sub">{payment.recordedByUsername ?? "seed"}</div>
+            </div>
+          ))}
+          {!payments.length && <div className="empty">No employee payment transactions recorded yet.</div>}
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section-head"><h2>Payslips</h2></div>
+        <div className="tcard">
+          <div className="trow head employee-payslip-grid">
+            <div>Pay period</div>
+            <div>Range</div>
+            <div>Gross</div>
+            <div>Payments</div>
+            <div>Generated</div>
+            <div />
+          </div>
+          {payslips.map((payslip) => (
+            <div className="trow employee-payslip-grid" key={payslip.id}>
+              <div className="cust">{payslip.payPeriodLabel}</div>
+              <div className="sub">{formatShortDate(payslip.periodStart)} - {formatShortDate(payslip.periodEnd)}</div>
+              <div className="mono">{formatMoney(payslip.grossAmount, payslip.currency || localCurrency)}</div>
+              <div className="sub">{payslip.paymentIds?.length ?? 0} records</div>
+              <div className="sub">{formatShortDate(payslip.generatedAt)}</div>
+              <div>
+                <a className="btn btn-sm btn-primary" href={`/api/admin/employee-payslips/${payslip.id}/download`} rel="noreferrer" target="_blank" download>
+                  Download PDF
+                </a>
+              </div>
+            </div>
+          ))}
+          {!payslips.length && <div className="empty">No payslips generated yet.</div>}
+        </div>
+      </section>
     </div>
   );
 }
@@ -6007,23 +8930,55 @@ function SettingsView({
 function AdminView({
   referralProgram,
   feedbackSubmissions,
+  customers = [],
+  employees = [],
   insights,
+  referralIntake = [],
+  referralIntakeEvents = [],
   referralSubmissions,
   referrals,
   rewards,
   applyingRewardId,
   reviewingFeedbackId,
+  reviewingIntakeId,
   reviewingSubmissionId,
   onApplyReward,
   onConvertSubmission,
   onDismissSubmission,
+  onQualifyIntake,
+  onResolveIntake,
+  onReviewIntake,
   onUpdateFeedbackStatus,
 }) {
+  const [identitySelections, setIdentitySelections] = useState({});
+  const [reviewNotes, setReviewNotes] = useState({});
   const openReferralSubmissions = referralSubmissions.filter((submission) => submission.status === "submitted");
+  const openReferralIntake = referralIntake.filter((intake) => ["pending_identity", "pending_review"].includes(intake.status));
   const openFeedbackSubmissions = feedbackSubmissions.filter((submission) => submission.status === "new");
   const availableRewards = insights?.qualifiedRewards ?? [];
   const awardedRewards = insights?.appliedRewards ?? [];
   const topReferrers = insights?.topReferrers ?? [];
+
+  function updateIdentitySelection(intakeId, value) {
+    setIdentitySelections((current) => ({
+      ...current,
+      [intakeId]: value,
+    }));
+  }
+
+  function updateReviewNote(intakeId, value) {
+    setReviewNotes((current) => ({
+      ...current,
+      [intakeId]: value,
+    }));
+  }
+
+  function resolveSelectedIdentity(intakeId) {
+    const selected = identitySelections[intakeId] || "";
+    const [partyType, ...idParts] = selected.split("|");
+    const partyId = idParts.join("|");
+    onResolveIntake?.(intakeId, partyType, partyId);
+  }
 
   return (
     <div>
@@ -6040,10 +8995,131 @@ function AdminView({
         <div className="metrics c5">
           <MetricCard accent label="Program status" value={referralProgram.enabled ? "Active" : "Disabled"} />
           <MetricCard label="Tracked relationships" value={referrals.length} />
-          <MetricCard label="Open intake submissions" value={openReferralSubmissions.length} />
+          <MetricCard label="Engine review queue" value={openReferralIntake.length} />
+          <MetricCard label="Legacy intake submissions" value={openReferralSubmissions.length} />
           <MetricCard label="Open feedback" value={openFeedbackSubmissions.length} />
           <MetricCard label="Qualified bonuses" value={availableRewards.length} />
         </div>
+
+        <section className="section">
+          <div className="section-head">
+            <h2>Referral engine intake</h2>
+          </div>
+          <div className="section-desc">
+            New public referrals land here first. Finance must resolve identity when needed, then
+            approve or reject before a referral relationship or reward path can be established.
+          </div>
+          <div className="tcard">
+            <div className="trow head referral-intake-grid">
+              <div>Referral</div>
+              <div>Referrer</div>
+              <div>Client + services</div>
+              <div>Reward</div>
+              <div>Status</div>
+              <div>Action</div>
+            </div>
+            {referralIntake.map((intake) => {
+              const isWorking = reviewingIntakeId === intake.id;
+              const latestEvents = referralIntakeEvents
+                .filter((event) => event.intakeId === intake.id)
+                .slice(0, 2);
+
+              return (
+                <div className="trow referral-intake-grid" key={intake.id}>
+                  <div>
+                    <div className="cust mono">{intake.refCode}</div>
+                    <div className="sub">{formatLongDate(intake.createdAt)}</div>
+                    <div className="sub">{formatReferralRelationshipCode(intake.relationship)}</div>
+                  </div>
+                  <div>
+                    <div className="cust">{intake.referrerName ?? "Manual review needed"}</div>
+                    <div className="sub">
+                      {formatTitleCase(intake.referrerKind)} · {formatTitleCase(intake.referrerContactMethod)}
+                    </div>
+                    <div className="sub">{intake.referrerEmail ?? intake.referrerPhone ?? intake.referrerEmployeeId ?? "No verified contact"}</div>
+                  </div>
+                  <div>
+                    <div className="cust">{intake.clientName}</div>
+                    <div className="sub">{[intake.clientEmail, intake.clientPhone].filter(Boolean).join(" · ")}</div>
+                    <div className="sub">{intake.services.map((service) => service.serviceLabel).join(", ")}</div>
+                  </div>
+                  <div>
+                    <div className="mono">{formatReferralEngineReward(intake)}</div>
+                    <div className="sub">{formatTitleCase(intake.rewardType)}</div>
+                  </div>
+                  <div>
+                    <span className={`search-status-chip tone-${formatReferralEngineStatusTone(intake.status)}`}>
+                      {formatReferralEngineStatusLabel(intake.status)}
+                    </span>
+                    {intake.reviewedAt ? (
+                      <div className="sub">{formatDateTimeValue(intake.reviewedAt)} · {intake.reviewedByUsername ?? "admin"}</div>
+                    ) : null}
+                    {latestEvents.map((event) => (
+                      <div className="sub" key={event.id}>{formatTitleCase(event.eventType)} · {formatDateTimeValue(event.createdAt)}</div>
+                    ))}
+                  </div>
+                  <div className="referral-submission-actions referral-intake-actions">
+                    {intake.status === "pending_identity" ? (
+                      <>
+                        <select
+                          value={identitySelections[intake.id] ?? ""}
+                          onChange={(event) => updateIdentitySelection(intake.id, event.target.value)}
+                        >
+                          <option value="">Resolve to...</option>
+                          <optgroup label="Employees">
+                            {employees.map((employee) => (
+                              <option key={employee.id} value={`employee|${employee.id}`}>
+                                {employee.employeeCode} · {employee.fullName}
+                              </option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Customers">
+                            {customers.map((customer) => (
+                              <option key={customer.id} value={`customer|${customer.id}`}>
+                                {customer.customerCode ?? customer.id} · {customer.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        </select>
+                        <button className="btn btn-sm btn-primary" type="button" disabled={isWorking} onClick={() => resolveSelectedIdentity(intake.id)}>
+                          {isWorking ? "Resolving..." : "Resolve identity"}
+                        </button>
+                        <button className="btn btn-sm" type="button" disabled={isWorking} onClick={() => onReviewIntake?.(intake.id, "reject", reviewNotes[intake.id] ?? "")}>
+                          Reject
+                        </button>
+                      </>
+                    ) : null}
+                    {intake.status === "pending_review" ? (
+                      <>
+                        <textarea
+                          rows={2}
+                          value={reviewNotes[intake.id] ?? ""}
+                          onChange={(event) => updateReviewNote(intake.id, event.target.value)}
+                          placeholder="Optional review note"
+                        />
+                        <button className="btn btn-sm btn-primary" type="button" disabled={isWorking} onClick={() => onReviewIntake?.(intake.id, "approve", reviewNotes[intake.id] ?? "")}>
+                          {isWorking ? "Reviewing..." : "Approve"}
+                        </button>
+                        <button className="btn btn-sm" type="button" disabled={isWorking} onClick={() => onReviewIntake?.(intake.id, "reject", reviewNotes[intake.id] ?? "")}>
+                          Reject
+                        </button>
+                      </>
+                    ) : null}
+                    {intake.status === "verified" ? (
+                      <button className="btn btn-sm btn-primary" type="button" disabled={isWorking} onClick={() => onQualifyIntake?.(intake.id)}>
+                        {isWorking ? "Qualifying..." : "Mark qualified"}
+                      </button>
+                    ) : null}
+                    {["qualified", "rewarded", "rejected", "duplicate"].includes(intake.status) ? (
+                      <span className="sub">Closed</span>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+            {!referralIntake.length && <div className="empty">No referral engine submissions yet.</div>}
+          </div>
+        </section>
 
         <section className="section">
           <div className="section-head">

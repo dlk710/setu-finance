@@ -1,6 +1,6 @@
 # Setu Finance Current State
 
-Last updated: June 5, 2026
+Last updated: June 7, 2026
 
 This document is the consolidated current-state handoff for the Setu Finance portal. It is written for business, finance, operations, and technical reviewers who need to understand what the portal does today.
 
@@ -11,8 +11,8 @@ This document is the consolidated current-state handoff for the Setu Finance por
 | Local development | `http://127.0.0.1:4173/` | Local developer/operator testing. |
 | AWS dev primary | `https://3.135.234.59.sslip.io/` | Current externally reachable dev portal. |
 | AWS dev recovery | `https://18.218.196.158.sslip.io/` | Recovery/backup dev endpoint. |
-| Public referral form | `/refer` | No-login referral intake. |
-| Public referral gateway | `/refer/:customerId`, `/referral-gateway/:customerId`, `/r/:customerId` | No-login referral intake with the referrer customer ID prefilled from the URL. |
+| Public referral form | `/refer` | No-login Referral Engine intake for customers, employees, and manually reviewed referrers. |
+| Public referral gateway | `/refer/:code`, `/referral-gateway/:code`, `/r/:code` | No-login referral gateway. Employee IDs can prefill the employee path; finance review is still required before reward routing. |
 | Public feedback form | `/feedback` | No-login feedback intake with optional attachments. |
 | Provider engagement status API | `/api/integration/engagement-status` | Machine-to-machine read-only engagement status for downstream apps, protected by `X-Api-Key`. |
 
@@ -36,7 +36,7 @@ Authentication/security audit logging is stored in PostgreSQL for low-cost local
 | Finance admin | Manage referral rules, Gmail sync settings, feedback queue, and operational configuration. |
 | Leadership/business user | Review collections, outstanding work, referral performance, exceptions, and operational risk. |
 | Customer/member | Submit referrals through `/refer` and submit feedback through `/feedback` without logging in. |
-| Future sales/employee referrer | Candidate for expanded referral portal; current implementation supports customer/public referral intake first. |
+| Sales/employee referrer | Submits referrals through `/refer`; employee identity can resolve by employee ID, official email, personal email, official mobile, or personal mobile. |
 
 ## 4. Current Functional Map
 
@@ -58,7 +58,13 @@ flowchart TD
     M --> N["PDF receipt email"]
     M --> O["Referral qualification check"]
     O --> P["Apply referral bonus to next draft invoice"]
-    Q["/refer public intake"] --> R["Referral admin queue"]
+    Q["/refer public intake"] --> R["Referral Engine admin queue"]
+    R --> U{"Finance approval"}
+    U -->|"Approve"| V["Verified referral"]
+    U -->|"Reject"| W["Rejected / duplicate history"]
+    V --> X{"Referrer type"}
+    X -->|"Customer"| Y["Invoice discount reward"]
+    X -->|"Employee"| Z["Employee referral payout in Payables"]
     S["/feedback public intake"] --> T["Feedback admin queue"]
 ```
 
@@ -70,14 +76,24 @@ flowchart TD
 | Executive | Default summary landing page using the existing Dashboard route and read model. Legacy `/dashboard` still works. |
 | Clients | Merged v2 section for contract-first onboarding, customer register, and customer 360 entry points. Existing `/onboarding`, `/customers`, and `/customers/:id` routes still work. |
 | Receivables | Merged v2 section for the existing billing console. It now uses tabs for `Overview`, `Invoices`, `Payments to confirm`, `Exceptions`, `Receipts`, and `Inbox sync`, while preserving invoice sending, Zelle sync, payment review, exception resolution, manual payments, completed transactions, and receipt actions. Existing `/billing` still works. |
-| Payables | New v2 hub for money-out categories. Current local build reads the live referral reward ledger and preserves the client invoice-discount path; cash payout, payroll, vendor bill, reimbursement, and expense-import pipelines remain future additive phases. |
-| Referrals | Merged v2 section for referral rules, public referral submissions, relationship tracking, reward qualification, invoice-discount application, feedback queue, parties, codes, and event history. Existing `/admin` still works. |
-| People | New v2 hub showing normalized referral parties today and reserving space for the employee/sales directory phase. |
+| Payables | Money-out workspace for employee payments, employee referral payouts, other paid expenses, other received income/refunds, region-level distribution, and existing customer invoice-discount visibility. |
+| Referrals | Merged v2 section for referral rules, Referral Engine intake review, legacy customer referral submissions, relationship tracking, reward qualification, invoice-discount application, feedback queue, parties, codes, and event history. Existing `/admin` still works. |
+| People | Employee system of record for onboarding employees, employee status, HR comments, compensation fields, employee payment history, and referral-party visibility. |
+| Contracts | Authenticated contract archive for client, employee, NDA, offer letter, stakeholder, and HR agreement files. Rows show category, signed-with party, short summary, signed date, Quick peek, and Download. |
 | Settings | Gmail auto-sync settings, outbound email status, access, and referral-program configuration. Existing Gmail credentials and token paths are not changed by the v2 shell. |
 | Audit | New v2 hub combining activity history, resolved exception history, and structured referral events. |
 | `/refer` | Public no-login referral submission form. |
 | `/refer/:customerId` | Personalized referral gateway for a specific referrer. The customer ID is prefilled from the URL and the email is still verified before finance can convert the submission. |
 | `/feedback` | Public no-login feedback submission form with optional attachments. |
+
+Global navigation search:
+
+- The authenticated finance shell now includes a Workday-style global search bar in the top header.
+- Search suggestions are grouped by category, including pages, tasks, customers, people, finance records, referrals, and feedback.
+- Users can search by page name, task keyword, customer ID, customer name, email, phone, alias, employee ID, employee name, employee email, invoice number, transaction reference, referral code, or feedback context.
+- Search results deeplink into the appropriate route, including customer 360 and employee 360 pages.
+- Search supports first-three-letter matching for quick task discovery, similar to Workday-style search behavior.
+- Search is side-effect free: selecting `Sync Zelle inbox`, `Create invoice`, or `Record manual payment` navigates to the correct workspace/tab but does not automatically sync, apply money, or create records.
 
 Setu portal-family naming:
 
@@ -219,7 +235,97 @@ Receipt PDF includes:
 - invoice reference when available
 - receipt issued timestamp
 
-## 12. Referral Program
+## 12. Referral Engine
+
+The public Referral Engine is available at `/refer` and does not require login.
+
+The current engine supports:
+
+- referrer identity by email, phone, or employee ID
+- email and phone search across employee and customer records
+- employee ID search against employee records only
+- manual self-declared referrers for finance identity resolution
+- service selection using the referral service catalog
+- required relationship/channel selection
+- duplicate detection by referred client email or phone
+- self-referral blocking
+- server-authoritative reward calculation
+- finance admin review before any relationship or reward is established
+
+Reward routing:
+
+- Employee referrers earn a cash-bonus estimate, capped by the configured referral service rules, and qualified rewards appear as referral payouts in Payables.
+- Customer referrers earn invoice-discount rewards that apply to future eligible draft invoices.
+- Manually entered referrers stay `pending_identity` until finance resolves the identity to a customer or employee.
+
+Finance admin states:
+
+- `pending_identity`: finance must resolve the referrer to an employee or customer, or reject.
+- `pending_review`: finance must approve or reject legitimacy.
+- `verified`: approved, but not yet qualified for payout/discount routing.
+- `qualified`: reward has been created in the correct destination.
+- `duplicate` or `rejected`: retained as closed history.
+
+## 13. People And Payables
+
+People now stores employee records separately from customer records.
+
+The People landing page is grouped into:
+
+- `Employee Directory`
+- `Onboard Employee`
+- separate `Former Employees` table
+
+Employee records include:
+
+- employee ID
+- first, middle, last, and preferred names
+- personal and official email
+- personal and official mobile
+- title, department, region, manager
+- status such as current, on leave, contractor, left company, or terminated
+- joining and exit dates
+- HR comments
+- compensation fields for monthly salary, joining bonus, and annual bonus
+- local currency based on region: US/USD, India/INR, Nigeria/NGN
+- critical information notes
+- employee payment history
+- generated payslips by month or custom pay cycle
+
+Employee Directory supports search by name, employee ID, email, phone, department, title, status, and region. It does not show the full employee population by default; results appear after search and are capped to the top 10 matches. Department, title, and region are controlled dropdowns. Employee 360 opens as `/people/:employeeId` and shows full employee information, payment transactions, payslips, uploaded employee contracts, and total referral count.
+
+## 14. Contracts Archive
+
+Contracts is a dedicated authenticated archive for files uploaded from client onboarding/customer 360 and People/employee 360.
+
+Contracts rows show:
+
+- `Contract`: file name, contract type, and file size
+- `Category`: client, employee, stakeholder, or other
+- `Signed with`: client/customer name for client contracts and employee name for employee contracts
+- `Summary`: compact business summary derived from parsed contract fields or HR-upload notes
+- `Signed date`: parsed/entered contract signed date when available
+- actions: `Quick peek` and `Download`
+
+Important behavior:
+
+- `Quick peek` streams supported PDFs, images, and text files through the authenticated backend before any download.
+- `Download` is the explicit action for the raw file.
+- The UI no longer shows internal storage provider/uploader as a main table column.
+- AWS deployments can keep contract files in private S3 because preview/download routes fetch through the backend storage adapter.
+
+## 15. People And Payables Reporting
+
+Payables now reports:
+
+- employee payments by region
+- employee referral payouts
+- other expenses paid
+- other income/refunds received
+- operating expense distribution by region
+- customer referral discounts that remain in Receivables as invoice discounts
+
+## 16. Referral Program
 
 Current state is finance-admin centric with public customer referral intake.
 
@@ -248,7 +354,7 @@ Current limitation:
 - Dedicated employee/sales/partner referral payout portal is not yet implemented.
 - Employee/sales commissions and partner payouts should be modeled as a future `Referral Growth Portal` while Setu Finance remains the financial source of truth.
 
-## 13. Feedback Intake
+## 17. Feedback Intake
 
 Setu Finance now includes a simple public feedback intake.
 
@@ -270,7 +376,7 @@ Admin review:
 - admins can mark feedback as reviewed or archive it
 - engineering follow-up can be created in GitHub Issues later, but GitHub Issues are not the primary public intake channel
 
-## 14. Settings And Integrations
+## 18. Settings And Integrations
 
 Current settings include:
 
@@ -302,7 +408,7 @@ Provider engagement status:
 - default rule: no unpaid overdue invoices means `active`; overdue within 30 days means `dormant`; older overdue invoices mean `inactive`
 - no amount columns are selected by the view or returned by the endpoint
 
-## 15. Current Architecture
+## 19. Current Architecture
 
 Current local stack:
 
@@ -332,7 +438,7 @@ Recommended production direction:
 - EventBridge + worker for Gmail sync and backups
 - SSM Parameter Store or Secrets Manager for secrets
 
-## 16. Data Integrity And Safety Controls
+## 20. Data Integrity And Safety Controls
 
 Current controls:
 
@@ -348,7 +454,7 @@ Current controls:
 - feedback review status
 - secrets kept outside Git
 
-## 17. Current Documentation Index
+## 21. Current Documentation Index
 
 | Document | Purpose |
 | --- | --- |
@@ -356,9 +462,13 @@ Current controls:
 | `docs/user-guide.md` | Step-by-step user guide separated by portal function. |
 | `docs/requirements.md` | Detailed product requirements and acceptance criteria. |
 | `docs/feature-list.md` | Current feature inventory. |
+| `docs/detailed-design.md` | Detailed design for the current Setu Finance product surfaces. |
+| `docs/test-plan.md` | Functional QA plan with expected behavior by area. |
+| `docs/asksetu.md` | AskSetu capability guide, supported questions, and tester checklist. |
 | `docs/architecture.md` | Logical and technical architecture. |
 | `docs/aws-solution-architecture.md` | AWS low-cost and production architecture plan. |
 | `docs/flow-diagrams.md` | Product and process diagrams. |
 | `docs/process-flow.md` | Simple business process flow. |
+| `skills.md` | Current portal capability and operating-skill map. |
 | `files/phase1_prototype.html` | Clickable wireframe/prototype. |
 | `files/setu_phase1_requirements.html` | Business-readable requirements handoff artifact. |

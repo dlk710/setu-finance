@@ -4,11 +4,16 @@ import {
   normalizeCustomerCode,
   normalizeInvoiceCode,
 } from "../shared/seedState.js";
+import { createHash } from "node:crypto";
 import { describeService, normalizeServiceLabel } from "../shared/serviceCatalog.js";
 import { prepareDatabase } from "./db/seed.js";
 import { buildInitials, normalizeDigits, normalizeEmail, normalizeName } from "./db/normalizers.js";
 import { withTransaction } from "./db/pool.js";
 import { loadStoredContractBinary, storeContractBinary } from "./services/contractStorage.js";
+import {
+  buildEmployeePayslipPdfFilename,
+  generateEmployeePayslipPdf,
+} from "./services/employeePayslipPdf.js";
 import {
   normalizeGmailAutoSyncSettings,
   normalizeGmailIntegrationState,
@@ -44,6 +49,80 @@ const FEEDBACK_CATEGORIES = new Set([
 ]);
 const MAX_FEEDBACK_ATTACHMENTS = 3;
 const MAX_FEEDBACK_ATTACHMENT_BYTES = 3 * 1024 * 1024;
+const REFERRAL_ENGINE_SERVICE_CATALOG = [
+  { key: "pb_full", label: "Profile Build - Full", employeeBonus: 500 },
+  { key: "attorney", label: "EB1A Attorney Service", employeeBonus: 400 },
+  { key: "media", label: "Media Service", employeeBonus: 250 },
+  { key: "pb_judging", label: "Profile Build - Judging", employeeBonus: 150 },
+  { key: "pb_authorship", label: "Profile Build - Authorship", employeeBonus: 150 },
+  { key: "pb_speaking", label: "Profile Build - Speaking", employeeBonus: 150 },
+  { key: "idk", label: "I don't know", employeeBonus: 0, scopeUnknown: true },
+];
+const REFERRAL_ENGINE_SERVICE_MAP = new Map(
+  REFERRAL_ENGINE_SERVICE_CATALOG.map((service) => [service.key, service]),
+);
+const REFERRAL_ENGINE_RELATIONSHIPS = new Set([
+  "friend_family",
+  "colleague",
+  "professional_network",
+  "social_media",
+  "online_community",
+  "alumni_network",
+  "event_webinar",
+  "community_group",
+  "existing_client",
+  "other",
+]);
+const REFERRAL_EMPLOYEE_CASH_CAP = 1000;
+const REFERRAL_CUSTOMER_DISCOUNT_PER_SERVICE = 5;
+const REFERRAL_CUSTOMER_DISCOUNT_CAP = 20;
+const REFERRAL_CUSTOMER_DISCOUNT_DOLLAR_CAP = 1000;
+const EMPLOYEE_STATUSES = new Set(["current", "terminated", "left_company", "on_leave", "contractor"]);
+const EMPLOYEE_DEPARTMENTS = new Set([
+  "Profile Build",
+  "Attorney",
+  "Sales",
+  "Media",
+  "Finance",
+  "Administration",
+  "IT Support",
+  "Other",
+]);
+const EMPLOYEE_TITLES = new Set([
+  "CSM",
+  "Team Lead",
+  "Finance Lead",
+  "Paralegal",
+  "Attorney",
+  "Sr Attorney",
+  "Executive",
+  "Media Assistant",
+  "Consultant",
+]);
+const EMPLOYEE_REGION_CURRENCY = new Map([
+  ["US", "USD"],
+  ["India", "INR"],
+  ["Nigeria", "NGN"],
+]);
+const EMPLOYEE_PAYMENT_TYPES = new Set([
+  "monthly_salary",
+  "joining_bonus",
+  "annual_bonus",
+  "referral_bonus",
+  "reimbursement",
+  "other",
+]);
+const BUSINESS_CONTRACT_TYPES = new Map([
+  ["nda", "NDA"],
+  ["employee_contract", "Employee contract"],
+  ["offer_letter", "Signed offer letter"],
+  ["client_contract", "Client contract"],
+  ["stakeholder_contract", "Stakeholder contract"],
+  ["vendor_contract", "Vendor contract"],
+  ["policy_acknowledgement", "Policy acknowledgement"],
+  ["other", "Other"],
+]);
+const OTHER_EXPENSE_DIRECTIONS = new Set(["paid", "received"]);
 
 function roundCurrency(value) {
   return Math.round(Number(value || 0) * 100) / 100;
@@ -71,6 +150,27 @@ function formatCurrency(value) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(value || 0));
+}
+
+function normalizePhoneForReferral(countryCode, phoneValue) {
+  const countryDigits = normalizeDigits(countryCode || "");
+  const phoneDigits = normalizeDigits(phoneValue || "");
+  if (!phoneDigits) {
+    return "";
+  }
+  return `${countryDigits || "1"}${phoneDigits}`;
+}
+
+function hashSensitiveValue(value) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return null;
+  }
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+function createEmployeeCodePreview(sequence) {
+  return `EMP-2026-${String(Number(sequence || 0)).padStart(6, "0")}`;
 }
 
 function createCustomerCodePreview(sequence) {
@@ -349,6 +449,158 @@ function mapReferralPartyRow(row, customerMap = new Map()) {
     payoutHandle: row.payout_handle ?? null,
     taxStatus: row.tax_status,
     status: row.status,
+    createdAt: formatTimestamp(row.created_at),
+    updatedAt: formatTimestamp(row.updated_at),
+  };
+}
+
+function mapEmployeePaymentRow(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    paymentType: row.payment_type,
+    amount: Number(row.amount || 0),
+    currency: row.currency || "USD",
+    paymentDate: formatDateOnlyOutput(row.payment_date),
+    status: row.status,
+    region: row.region ?? null,
+    memo: row.memo ?? null,
+    reference: row.reference ?? null,
+    recordedByUsername: row.recorded_by_username ?? null,
+    createdAt: formatTimestamp(row.created_at),
+  };
+}
+
+function mapEmployeePayslipRow(row) {
+  return {
+    id: row.id,
+    employeeId: row.employee_id,
+    payPeriodLabel: row.pay_period_label,
+    periodStart: formatDateOnlyOutput(row.period_start),
+    periodEnd: formatDateOnlyOutput(row.period_end),
+    paymentIds: row.payment_ids ?? [],
+    grossAmount: Number(row.gross_amount || 0),
+    currency: row.currency || "USD",
+    generatedByUsername: row.generated_by_username ?? null,
+    generatedAt: formatTimestamp(row.generated_at),
+    createdAt: formatTimestamp(row.created_at),
+  };
+}
+
+function mapEmployeeRow(row, payments = []) {
+  const fullName = [row.first_name, row.middle_name, row.last_name].filter(Boolean).join(" ");
+  return {
+    id: row.id,
+    employeeCode: row.employee_code,
+    firstName: row.first_name,
+    middleName: row.middle_name ?? "",
+    lastName: row.last_name,
+    preferredName: row.preferred_name ?? "",
+    fullName,
+    personalEmail: row.personal_email ?? null,
+    officialEmail: row.official_email ?? null,
+    personalMobile: row.personal_mobile ?? null,
+    officialMobile: row.official_mobile ?? null,
+    title: row.title,
+    department: row.department,
+    region: row.region,
+    managerName: row.manager_name ?? null,
+    status: row.status,
+    dateOfJoining: formatDateOnlyOutput(row.date_of_joining),
+    dateOfExit: formatDateOnlyOutput(row.date_of_exit),
+    promotionHistory: row.promotion_history ?? [],
+    hrComments: row.hr_comments ?? null,
+    oneTimeJoiningBonus: Number(row.one_time_joining_bonus || 0),
+    annualBonus: Number(row.annual_bonus || 0),
+    monthlySalary: Number(row.monthly_salary || 0),
+    currency: row.currency || "USD",
+    criticalInfo: row.critical_info ?? {},
+    payments,
+    totalPaid: payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+    createdAt: formatTimestamp(row.created_at),
+    updatedAt: formatTimestamp(row.updated_at),
+  };
+}
+
+function mapOtherExpenseRow(row) {
+  return {
+    id: row.id,
+    expenseCode: row.expense_code,
+    direction: row.expense_direction,
+    category: row.category,
+    vendorOrSource: row.vendor_or_source,
+    amount: Number(row.amount || 0),
+    currency: row.currency || "USD",
+    expenseDate: formatDateOnlyOutput(row.expense_date),
+    status: row.status,
+    region: row.region ?? null,
+    department: row.department ?? null,
+    paymentMethod: row.payment_method ?? null,
+    memo: row.memo ?? null,
+    receiptReference: row.receipt_reference ?? null,
+    recordedByUsername: row.recorded_by_username ?? null,
+    createdAt: formatTimestamp(row.created_at),
+  };
+}
+
+function mapReferralPayoutRow(row, referralPartyMap = new Map()) {
+  const party = referralPartyMap.get(row.party_id) ?? null;
+  return {
+    id: row.id,
+    partyId: row.party_id,
+    party,
+    partyName: party?.displayName ?? row.party_display_name ?? "Unknown referrer",
+    partyType: party?.partyType ?? row.party_type ?? null,
+    referralId: row.referral_id ?? null,
+    rewardLedgerId: row.reward_ledger_id ?? null,
+    amount: Number(row.amount || 0),
+    payoutMethod: row.payout_method,
+    payoutStatus: row.payout_status,
+    scheduledAt: formatTimestamp(row.scheduled_at),
+    paidAt: formatTimestamp(row.paid_at),
+    notes: row.notes ?? null,
+    createdBy: row.created_by ?? null,
+    createdAt: formatTimestamp(row.created_at),
+  };
+}
+
+function mapReferralIntakeRow(row, services = []) {
+  return {
+    id: row.id,
+    refCode: row.ref_code,
+    referrerResolution: row.referrer_resolution,
+    referrerKind: row.referrer_kind,
+    referrerPartyType: row.referrer_party_type ?? null,
+    referrerPartyId: row.referrer_party_id ?? null,
+    referrerName: row.referrer_name ?? null,
+    referrerContactMethod: row.referrer_contact_method,
+    referrerEmail: row.referrer_email ?? null,
+    referrerPhone: row.referrer_phone ?? null,
+    referrerEmployeeId: row.referrer_employee_id ?? null,
+    consentIdentityAt: formatTimestamp(row.consent_identity_at),
+    clientName: row.client_name,
+    clientEmail: row.client_email_raw ?? row.client_email_norm ?? null,
+    clientPhone: row.client_phone_raw ?? row.client_phone_norm ?? null,
+    relationship: row.relationship ?? null,
+    rewardType: row.reward_type,
+    rewardEstimate:
+      row.reward_estimate === null || row.reward_estimate === undefined
+        ? null
+        : Number(row.reward_estimate),
+    rewardSnapshot: row.reward_snapshot ?? {},
+    duplicateOfIntakeId: row.duplicate_of_intake_id ?? null,
+    duplicateReason: row.duplicate_reason ?? null,
+    status: row.status,
+    source: row.source ?? "portal",
+    reviewedByUsername: row.reviewed_by_username ?? null,
+    reviewedAt: formatTimestamp(row.reviewed_at),
+    reviewNotes: row.review_notes ?? null,
+    resolvedReferrerPartyType: row.resolved_referrer_party_type ?? null,
+    resolvedReferrerPartyId: row.resolved_referrer_party_id ?? null,
+    createdReferralId: row.created_referral_id ?? null,
+    createdPayoutId: row.created_payout_id ?? null,
+    createdRewardId: row.created_reward_id ?? null,
+    services,
     createdAt: formatTimestamp(row.created_at),
     updatedAt: formatTimestamp(row.updated_at),
   };
@@ -718,6 +970,121 @@ function mapContractRow(row) {
     services,
     installments,
     downloadPath: `/api/contracts/${row.id}/download`,
+    previewPath: `/api/contracts/${row.id}/preview`,
+  };
+}
+
+function getContractServiceSummary(criticalFields) {
+  const services = Array.isArray(criticalFields?.services) ? criticalFields.services : [];
+  return services
+    .map((service) => {
+      const description = describeService(service.name ?? service.shortLabel ?? service.longLabel ?? service);
+      return description.shortLabel;
+    })
+    .filter(Boolean)
+    .slice(0, 3)
+    .join(", ");
+}
+
+function compactContractSummary(parts, fallback = "Contract record") {
+  const summary = parts
+    .filter(Boolean)
+    .map((part) => String(part).trim())
+    .filter(Boolean)
+    .join(" · ");
+  const normalized = (summary || fallback)
+    .replace(/\s+/g, " ")
+    .trim();
+  if (normalized.length <= 120) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 117).trim()}...`;
+}
+
+function mapClientContractLibraryRow(row) {
+  const criticalFields = row.critical_fields ?? {};
+  const parsedFields = row.parsed_fields ?? {};
+  const ownerCode = row.customer_code ?? null;
+  const ownerName =
+    parsedFields.clientName ??
+    criticalFields.clientName ??
+    row.customer_name ??
+    "Client";
+  const contractKindLabel =
+    parsedFields.contractKindLabel ??
+    criticalFields.contractKindLabel ??
+    "Client contract";
+
+  return {
+    id: row.id,
+    source: "client",
+    ownerCategory: "client",
+    ownerId: row.customer_id,
+    ownerCode,
+    ownerName,
+    contractType: parsedFields.contractKind ?? criticalFields.contractKind ?? "client_contract",
+    contractTypeLabel: contractKindLabel,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    fileSizeBytes: Number(row.file_size_bytes || 0),
+    storageProvider: row.storage_provider,
+    uploadedByUsername: row.uploaded_by_username ?? null,
+    uploadedAt: formatTimestamp(row.created_at),
+    contractDate: formatDateOnlyOutput(row.contract_date),
+    signedDate: formatDateOnlyOutput(row.contract_date),
+    signedWithName: ownerName,
+    effectiveDate: formatDateOnlyOutput(row.service_start_date),
+    expirationDate: null,
+    summary: compactContractSummary(
+      [
+        contractKindLabel,
+        getContractServiceSummary(criticalFields),
+        row.total_fee ? `fee ${formatCurrency(row.total_fee)}` : null,
+        row.installment_count ? `${row.installment_count} installments` : null,
+      ],
+      `${contractKindLabel} for ${ownerName}`,
+    ),
+    notes: criticalFields.billingCadence ?? null,
+    downloadPath: `/api/contracts/${row.id}/download`,
+    previewPath: `/api/contracts/${row.id}/preview`,
+    customerPath: ownerCode ? `/customers/${ownerCode}` : null,
+  };
+}
+
+function mapBusinessContractRow(row) {
+  const ownerName = row.owner_name;
+  return {
+    id: row.id,
+    source: row.owner_category,
+    ownerCategory: row.owner_category,
+    ownerId: row.owner_id ?? null,
+    ownerCode: row.owner_code ?? null,
+    ownerName,
+    contractType: row.contract_type,
+    contractTypeLabel: row.contract_type_label,
+    fileName: row.file_name,
+    mimeType: row.mime_type,
+    fileSizeBytes: Number(row.file_size_bytes || 0),
+    storageProvider: row.storage_provider,
+    uploadedByUsername: row.uploaded_by_username ?? null,
+    uploadedAt: formatTimestamp(row.created_at),
+    contractDate: formatDateOnlyOutput(row.contract_date),
+    signedDate: formatDateOnlyOutput(row.contract_date),
+    signedWithName: ownerName,
+    effectiveDate: formatDateOnlyOutput(row.effective_date),
+    expirationDate: formatDateOnlyOutput(row.expiration_date),
+    summary: compactContractSummary(
+      [
+        row.summary,
+        row.contract_type_label,
+        row.owner_category === "employee" ? `employee ${ownerName}` : ownerName,
+      ],
+      `${row.contract_type_label} for ${ownerName}`,
+    ),
+    notes: row.notes ?? null,
+    downloadPath: `/api/business-contracts/${row.id}/download`,
+    previewPath: `/api/business-contracts/${row.id}/preview`,
+    employeePath: row.owner_category === "employee" && row.owner_code ? `/people/${row.owner_code}` : null,
   };
 }
 
@@ -1040,6 +1407,8 @@ async function insertContractRecords(
     const uploadedAt = new Date();
     const storeResult = await storeContractBinary({
       customerCode,
+      ownerCategory: "client",
+      ownerCode: customerCode,
       fileName: contractUpload.fileName,
       mimeType: contractUpload.mimeType,
       buffer: contractUpload.buffer,
@@ -1631,6 +2000,275 @@ async function insertReferralEvent(
   );
 }
 
+async function insertReferralIntakeEvent(
+  client,
+  {
+    intakeId,
+    refCode = null,
+    eventType,
+    fromStatus = null,
+    toStatus = null,
+    actorUsername = "system",
+    actorKind = "system",
+    detail = null,
+    payload = {},
+  },
+) {
+  await client.query(
+    `
+      INSERT INTO referral_intake_events (
+        id,
+        intake_id,
+        ref_code,
+        event_type,
+        from_status,
+        to_status,
+        actor_username,
+        actor_kind,
+        detail,
+        payload,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, NOW())
+    `,
+    [
+      `rie-${crypto.randomUUID()}`,
+      intakeId,
+      refCode,
+      eventType,
+      fromStatus,
+      toStatus,
+      actorUsername,
+      actorKind,
+      detail,
+      JSON.stringify(payload ?? {}),
+    ],
+  );
+}
+
+function normalizeReferralEngineServices(serviceKeys = []) {
+  const requested = Array.isArray(serviceKeys) ? serviceKeys : [];
+  const uniqueKeys = Array.from(new Set(requested.map((key) => String(key || "").trim()).filter(Boolean)));
+  const hasUnknown = uniqueKeys.includes("idk");
+  const normalizedKeys = hasUnknown ? ["idk"] : uniqueKeys.filter((key) => key !== "idk");
+  return normalizedKeys
+    .map((key) => REFERRAL_ENGINE_SERVICE_MAP.get(key))
+    .filter(Boolean)
+    .map((service) => ({ ...service }));
+}
+
+function computeReferralEngineReward(referrerKind, serviceKeys = []) {
+  const services = normalizeReferralEngineServices(serviceKeys);
+  const scopeUnknown = services.some((service) => service.scopeUnknown);
+  if (!services.length || scopeUnknown || referrerKind === "unverified") {
+    return {
+      rewardType: "tbd",
+      rewardEstimate: null,
+      services,
+      snapshot: {
+        services,
+        reason: scopeUnknown ? "scope_unknown" : referrerKind === "unverified" ? "identity_pending" : "no_services",
+      },
+    };
+  }
+
+  if (referrerKind === "employee") {
+    const estimate = Math.min(
+      services.reduce((sum, service) => sum + Number(service.employeeBonus || 0), 0),
+      REFERRAL_EMPLOYEE_CASH_CAP,
+    );
+    return {
+      rewardType: "cash_bonus",
+      rewardEstimate: estimate,
+      services,
+      snapshot: {
+        services,
+        employeeCashCap: REFERRAL_EMPLOYEE_CASH_CAP,
+        computedAt: new Date().toISOString(),
+      },
+    };
+  }
+
+  const estimate = Math.min(
+    services.length * REFERRAL_CUSTOMER_DISCOUNT_PER_SERVICE,
+    REFERRAL_CUSTOMER_DISCOUNT_CAP,
+  );
+  return {
+    rewardType: "invoice_discount",
+    rewardEstimate: estimate,
+    services,
+    snapshot: {
+      services,
+      discountPercentPerService: REFERRAL_CUSTOMER_DISCOUNT_PER_SERVICE,
+      discountPercentCap: REFERRAL_CUSTOMER_DISCOUNT_CAP,
+      dollarCap: REFERRAL_CUSTOMER_DISCOUNT_DOLLAR_CAP,
+      computedAt: new Date().toISOString(),
+    },
+  };
+}
+
+async function findEmployeeByContact(client, { email = "", phoneDigits = "", employeeCode = "" }) {
+  const normalizedEmail = normalizeEmail(email);
+  const normalizedPhone = normalizeDigits(phoneDigits);
+  const normalizedEmployeeCode = String(employeeCode || "").trim().toUpperCase();
+  const result = await client.query(
+    `
+      SELECT *
+      FROM employees
+      WHERE ($1::text <> '' AND (normalized_official_email = $1 OR normalized_personal_email = $1))
+         OR ($2::text <> '' AND (official_mobile_digits = $2 OR personal_mobile_digits = $2))
+         OR ($3::text <> '' AND employee_code = $3)
+      ORDER BY status = 'current' DESC, created_at ASC, id ASC
+      LIMIT 1
+    `,
+    [normalizedEmail, normalizedPhone, normalizedEmployeeCode],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function resolveReferrerRecord(client, { method, value }) {
+  const normalizedMethod = String(method || "").trim();
+  const rawValue = String(value || "").trim();
+  if (!rawValue || !["email", "phone", "employee_id"].includes(normalizedMethod)) {
+    return null;
+  }
+
+  if (normalizedMethod === "employee_id") {
+    const employee = await findEmployeeByContact(client, { employeeCode: rawValue });
+    if (!employee) {
+      return null;
+    }
+    return {
+      kind: "employee",
+      partyType: "employee",
+      partyId: employee.id,
+      name: [employee.first_name, employee.last_name].filter(Boolean).join(" "),
+      employeeCode: employee.employee_code,
+      email: employee.official_email ?? employee.personal_email ?? null,
+      phoneDigits: employee.official_mobile_digits ?? employee.personal_mobile_digits ?? null,
+    };
+  }
+
+  const normalizedEmail = normalizedMethod === "email" ? normalizeEmail(rawValue) : "";
+  const normalizedPhone = normalizedMethod === "phone" ? normalizeDigits(rawValue) : "";
+
+  const employee = await findEmployeeByContact(client, {
+    email: normalizedEmail,
+    phoneDigits: normalizedPhone,
+  });
+  if (employee) {
+    return {
+      kind: "employee",
+      partyType: "employee",
+      partyId: employee.id,
+      name: [employee.first_name, employee.last_name].filter(Boolean).join(" "),
+      employeeCode: employee.employee_code,
+      email: employee.official_email ?? employee.personal_email ?? null,
+      phoneDigits: employee.official_mobile_digits ?? employee.personal_mobile_digits ?? null,
+    };
+  }
+
+  const customer = await findCustomerByReferralContact(client, {
+    email: normalizedEmail,
+    phoneDigits: normalizedPhone,
+  });
+  if (!customer) {
+    return null;
+  }
+  const party = await ensureClientReferralParty(client, customer.id);
+  return {
+    kind: "customer",
+    partyType: "customer",
+    partyId: customer.id,
+    referralPartyId: party?.id ?? null,
+    name: customer.full_name,
+    customerCode: normalizeCustomerCode(customer.customer_code) ?? customer.customer_code,
+    email: normalizedEmail || party?.email || null,
+    phoneDigits: normalizedPhone || party?.phone_digits || null,
+  };
+}
+
+async function ensureEmployeeReferralParty(client, employeeId) {
+  const employee = await findEmployeeByContact(client, { employeeCode: employeeId });
+  const resolvedEmployee =
+    employee ??
+    (
+      await client.query(
+        `
+          SELECT *
+          FROM employees
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [employeeId],
+      )
+    ).rows[0];
+  if (!resolvedEmployee) {
+    return null;
+  }
+
+  const partyId = `party-${resolvedEmployee.id}`;
+  const fullName = [resolvedEmployee.first_name, resolvedEmployee.last_name].filter(Boolean).join(" ");
+  const referralCode = `PTY-${resolvedEmployee.employee_code}`;
+  const result = await client.query(
+    `
+      INSERT INTO referral_parties (
+        id,
+        party_type,
+        display_name,
+        email,
+        phone_digits,
+        referral_code,
+        payout_method,
+        payout_handle,
+        tax_status,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, 'employee', $2, $3, $4, $5, 'payroll', $6, 'collected', 'active', NOW(), NOW())
+      ON CONFLICT (id)
+      DO UPDATE
+      SET display_name = EXCLUDED.display_name,
+          email = EXCLUDED.email,
+          phone_digits = EXCLUDED.phone_digits,
+          payout_handle = EXCLUDED.payout_handle,
+          updated_at = NOW()
+      RETURNING *
+    `,
+    [
+      partyId,
+      fullName,
+      resolvedEmployee.official_email ?? resolvedEmployee.personal_email ?? null,
+      resolvedEmployee.official_mobile_digits ?? resolvedEmployee.personal_mobile_digits ?? null,
+      referralCode,
+      resolvedEmployee.employee_code,
+    ],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findReferralIntakeDuplicate(client, { emailNorm, phoneNorm }) {
+  if (!emailNorm && !phoneNorm) {
+    return null;
+  }
+  const result = await client.query(
+    `
+      SELECT id, ref_code, client_name, status
+      FROM referral_intake
+      WHERE status NOT IN ('rejected', 'duplicate')
+        AND (
+          ($1::text IS NOT NULL AND client_email_norm = $1)
+          OR ($2::text IS NOT NULL AND client_phone_norm = $2)
+        )
+      ORDER BY created_at ASC, id ASC
+      LIMIT 1
+    `,
+    [emailNorm || null, phoneNorm || null],
+  );
+  return result.rows[0] ?? null;
+}
+
 async function createReferralSubmissionRecord(
   client,
   {
@@ -2052,6 +2690,15 @@ async function hydratePortalState(client) {
     FROM customer_contracts
     ORDER BY customer_id, created_at DESC, id DESC
   `);
+  const contractLibraryClientResult = await client.query(`
+    SELECT
+      customer_contracts.*,
+      customers.full_name AS customer_name,
+      customers.customer_code
+    FROM customer_contracts
+    JOIN customers ON customers.id = customer_contracts.customer_id
+    ORDER BY customer_contracts.created_at DESC, customer_contracts.id DESC
+  `);
   const invoicesResult = await client.query(`
     SELECT
       invoices.*,
@@ -2217,9 +2864,55 @@ async function hydratePortalState(client) {
     FROM customer_reward_ledger
     ORDER BY earned_at DESC, created_at DESC, id DESC
   `);
+  const referralPayoutsResult = await client.query(`
+    SELECT rp.*, parties.display_name AS party_display_name, parties.party_type
+    FROM referral_payouts rp
+    LEFT JOIN referral_parties parties ON parties.id = rp.party_id
+    ORDER BY COALESCE(rp.paid_at, rp.scheduled_at, rp.created_at) DESC, rp.created_at DESC, rp.id DESC
+  `);
   const referralEventsResult = await client.query(`
     SELECT *
     FROM referral_events
+    ORDER BY created_at DESC, id DESC
+  `);
+  const employeesResult = await client.query(`
+    SELECT *
+    FROM employees
+    ORDER BY status = 'current' DESC, region ASC, last_name ASC, first_name ASC
+  `);
+  const employeePaymentsResult = await client.query(`
+    SELECT *
+    FROM employee_payments
+    ORDER BY payment_date DESC, created_at DESC, id DESC
+  `);
+  const employeePayslipsResult = await client.query(`
+    SELECT *
+    FROM employee_payslips
+    ORDER BY period_start DESC, generated_at DESC, id DESC
+  `);
+  const businessContractsResult = await client.query(`
+    SELECT *
+    FROM business_contracts
+    ORDER BY created_at DESC, id DESC
+  `);
+  const otherExpensesResult = await client.query(`
+    SELECT *
+    FROM other_expenses
+    ORDER BY expense_date DESC, created_at DESC, id DESC
+  `);
+  const referralIntakeResult = await client.query(`
+    SELECT *
+    FROM referral_intake
+    ORDER BY created_at DESC, id DESC
+  `);
+  const referralIntakeServicesResult = await client.query(`
+    SELECT *
+    FROM referral_intake_services
+    ORDER BY created_at ASC, id ASC
+  `);
+  const referralIntakeEventsResult = await client.query(`
+    SELECT *
+    FROM referral_intake_events
     ORDER BY created_at DESC, id DESC
   `);
   const dashboardResult = await client.query(
@@ -2387,6 +3080,9 @@ async function hydratePortalState(client) {
     partyId: row.party_id ?? null,
     party: referralPartyMap.get(row.party_id) ?? null,
   }));
+  const referralPayouts = referralPayoutsResult.rows.map((row) =>
+    mapReferralPayoutRow(row, referralPartyMap),
+  );
   const referrals = referralsResult.rows.map((row) => {
     const referrer = customerMap.get(row.referrer_customer_id);
     const referrerParty =
@@ -2443,6 +3139,51 @@ async function hydratePortalState(client) {
   const feedbackSubmissions = feedbackSubmissionsResult.rows.map((row) =>
     mapFeedbackSubmissionRow(row, customerMap),
   );
+  const employeePaymentMap = new Map();
+  const employeePayments = employeePaymentsResult.rows.map(mapEmployeePaymentRow);
+  for (const payment of employeePayments) {
+    const current = employeePaymentMap.get(payment.employeeId) ?? [];
+    current.push(payment);
+    employeePaymentMap.set(payment.employeeId, current);
+  }
+  const employees = employeesResult.rows.map((row) =>
+    mapEmployeeRow(row, employeePaymentMap.get(row.id) ?? []),
+  );
+  const employeePayslips = employeePayslipsResult.rows.map(mapEmployeePayslipRow);
+  const contractLibrary = [
+    ...contractLibraryClientResult.rows.map(mapClientContractLibraryRow),
+    ...businessContractsResult.rows.map(mapBusinessContractRow),
+  ].sort(
+    (left, right) =>
+      new Date(right.uploadedAt || 0).getTime() - new Date(left.uploadedAt || 0).getTime(),
+  );
+  const otherExpenses = otherExpensesResult.rows.map(mapOtherExpenseRow);
+  const referralIntakeServiceMap = new Map();
+  for (const row of referralIntakeServicesResult.rows) {
+    const current = referralIntakeServiceMap.get(row.intake_id) ?? [];
+    current.push({
+      id: row.id,
+      serviceKey: row.service_key,
+      serviceLabel: row.service_label,
+    });
+    referralIntakeServiceMap.set(row.intake_id, current);
+  }
+  const referralIntake = referralIntakeResult.rows.map((row) =>
+    mapReferralIntakeRow(row, referralIntakeServiceMap.get(row.id) ?? []),
+  );
+  const referralIntakeEvents = referralIntakeEventsResult.rows.map((row) => ({
+    id: row.id,
+    intakeId: row.intake_id,
+    refCode: row.ref_code,
+    eventType: row.event_type,
+    fromStatus: row.from_status ?? null,
+    toStatus: row.to_status ?? null,
+    actorUsername: row.actor_username ?? null,
+    actorKind: row.actor_kind ?? "system",
+    detail: row.detail ?? null,
+    payload: row.payload ?? {},
+    createdAt: formatTimestamp(row.created_at),
+  }));
 
   return {
     customers,
@@ -2542,9 +3283,18 @@ async function hydratePortalState(client) {
       referralProgram,
       referralParties,
       referralSubmissions,
+      referralIntake,
+      referralIntakeEvents,
+      referralPayouts,
       referrals,
       referralEvents,
       rewards,
+      employees,
+      employeePayments,
+      employeePayslips,
+      contractLibrary,
+      formerEmployees: employees.filter((employee) => ["terminated", "left_company"].includes(employee.status)),
+      otherExpenses,
     },
   };
 }
@@ -2723,6 +3473,20 @@ async function fetchContractRecord(client, contractId) {
   return result.rows[0] ?? null;
 }
 
+async function fetchBusinessContractRecord(client, contractId) {
+  const result = await client.query(
+    `
+      SELECT *
+      FROM business_contracts
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [contractId],
+  );
+
+  return result.rows[0] ?? null;
+}
+
 async function reserveSequenceValue(client, sequenceName, startingValue = 1) {
   await client.query(`
     INSERT INTO app_sequences (sequence_name, next_value)
@@ -2775,6 +3539,22 @@ async function reserveNextReferralCode(client) {
   return {
     sequence,
     referralCode: createReferralCodePreview(sequence),
+  };
+}
+
+async function reserveNextReferralIntakeCode(client) {
+  const sequence = await reserveSequenceValue(client, "referral_intake", 1);
+  return {
+    sequence,
+    referralCode: createReferralCodePreview(sequence),
+  };
+}
+
+async function reserveNextEmployeeCode(client) {
+  const sequence = await reserveSequenceValue(client, "employee", 1);
+  return {
+    sequence,
+    employeeCode: createEmployeeCodePreview(sequence),
   };
 }
 
@@ -3521,9 +4301,924 @@ export async function loadPublicReferralProgramState() {
   return withTransaction(
     async (client) => ({
       referralProgram: await loadReferralProgramConfig(client),
+      referralEngine: {
+        services: REFERRAL_ENGINE_SERVICE_CATALOG,
+        employeeCashCap: REFERRAL_EMPLOYEE_CASH_CAP,
+        customerDiscountPercentPerService: REFERRAL_CUSTOMER_DISCOUNT_PER_SERVICE,
+        customerDiscountPercentCap: REFERRAL_CUSTOMER_DISCOUNT_CAP,
+        customerDiscountDollarCap: REFERRAL_CUSTOMER_DISCOUNT_DOLLAR_CAP,
+        relationships: Array.from(REFERRAL_ENGINE_RELATIONSHIPS),
+      },
     }),
     { readOnly: true },
   );
+}
+
+export async function resolvePublicReferralReferrer({ method, value, consent = false } = {}) {
+  if (!consent) {
+    return { matched: false };
+  }
+  return withTransaction(
+    async (client) => {
+      const resolved = await resolveReferrerRecord(client, { method, value });
+      if (!resolved) {
+        return { matched: false };
+      }
+      return {
+        matched: true,
+        kind: resolved.kind,
+        name: resolved.name,
+        employeeCode: resolved.employeeCode ?? null,
+        customerCode: resolved.customerCode ?? null,
+      };
+    },
+    { readOnly: true },
+  );
+}
+
+export async function submitReferralIntake(payload = {}, requestMeta = {}) {
+  return withTransaction(async (client) => {
+    const config = await loadReferralProgramConfig(client);
+    if (!config.enabled) {
+      const error = new Error("Referral intake is not accepting new submissions right now.");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const resolution = String(payload.referrer_resolution || "").trim();
+    const referrerInput = payload.referrer ?? {};
+    const clientInput = payload.client ?? {};
+    const referrerMethod = resolution === "self_declared" ? "self" : String(referrerInput.method || "").trim();
+    const relationship = String(payload.relationship || "").trim();
+    const clientName = String(clientInput.name || "").replace(/\s+/g, " ").trim();
+    const clientEmailRaw = String(clientInput.email || "").trim();
+    const clientPhoneRaw = String(clientInput.phone || "").trim();
+    const clientPhoneCc = String(clientInput.phone_cc || clientInput.phoneCountryCode || "+1").trim();
+    const clientEmailNorm = normalizeEmail(clientEmailRaw) || null;
+    const clientPhoneNorm = clientPhoneRaw
+      ? normalizePhoneForReferral(clientPhoneCc, clientPhoneRaw) || null
+      : null;
+    const selectedServices = normalizeReferralEngineServices(payload.services ?? []);
+
+    if (!["auto", "self_declared"].includes(resolution)) {
+      throw new Error("Choose a valid referrer path.");
+    }
+    if (!clientName) {
+      throw new Error("Client name is required.");
+    }
+    if (!clientEmailNorm && !clientPhoneNorm) {
+      throw new Error("Client email or phone is required.");
+    }
+    if (!relationship || !REFERRAL_ENGINE_RELATIONSHIPS.has(relationship)) {
+      throw new Error("Choose how the referrer knows the client.");
+    }
+    if (!selectedServices.length) {
+      throw new Error("Select at least one service.");
+    }
+    if (payload.agreement_terms !== true) {
+      throw new Error("Referral program terms must be accepted before submission.");
+    }
+
+    let resolved = null;
+    let referrerKind = "unverified";
+    let referrerPartyType = null;
+    let referrerPartyId = null;
+    let referrerName = null;
+    let referrerEmail = null;
+    let referrerPhone = null;
+    let referrerEmployeeId = null;
+    let status = "pending_identity";
+    let consentIdentityAt = null;
+
+    if (resolution === "auto") {
+      if (!referrerInput.consent_identity) {
+        throw new Error("Confirm identity ownership before submitting the referral.");
+      }
+      resolved = await resolveReferrerRecord(client, {
+        method: referrerMethod,
+        value: referrerInput.value,
+      });
+      if (!resolved) {
+        throw new Error("We could not match that referrer. Use manual review instead.");
+      }
+      referrerKind = resolved.kind;
+      referrerPartyType = resolved.partyType;
+      referrerPartyId = resolved.partyId;
+      referrerName = resolved.name;
+      referrerEmail = resolved.email ?? null;
+      referrerPhone = resolved.phoneDigits ?? null;
+      referrerEmployeeId = resolved.employeeCode ?? null;
+      status = "pending_review";
+      consentIdentityAt = new Date().toISOString();
+    } else {
+      const self = referrerInput.self ?? {};
+      referrerName = String(self.name || "").replace(/\s+/g, " ").trim();
+      referrerEmail = normalizeEmail(self.email || "") || null;
+      referrerPhone = normalizeDigits(self.phone || "") || null;
+      if (!referrerName) {
+        throw new Error("Your name is required for manual review.");
+      }
+      if (!referrerEmail && !referrerPhone) {
+        throw new Error("Your email or phone is required for manual review.");
+      }
+    }
+
+    const ownContacts = [referrerEmail, referrerPhone, String(referrerInput.value || "").includes("@") ? normalizeEmail(referrerInput.value) : null, normalizeDigits(referrerInput.value || "")]
+      .filter(Boolean);
+    const clientContacts = [clientEmailNorm, clientPhoneNorm].filter(Boolean);
+    if (clientContacts.some((contact) => ownContacts.includes(contact))) {
+      throw new Error("Self-referrals are not allowed.");
+    }
+
+    const duplicate = await findReferralIntakeDuplicate(client, {
+      emailNorm: clientEmailNorm,
+      phoneNorm: clientPhoneNorm,
+    });
+    const { referralCode } = await reserveNextReferralIntakeCode(client);
+    const intakeId = `rintake-${crypto.randomUUID()}`;
+    const reward = computeReferralEngineReward(referrerKind, selectedServices.map((service) => service.key));
+    const duplicateStatus = duplicate ? "duplicate" : status;
+
+    await client.query(
+      `
+        INSERT INTO referral_intake (
+          id, ref_code, referrer_resolution, referrer_kind, referrer_party_type,
+          referrer_party_id, referrer_name, referrer_contact_method, referrer_email,
+          referrer_phone, referrer_employee_id, consent_identity_at, client_name,
+          client_email_norm, client_phone_norm, client_email_raw, client_phone_raw,
+          relationship, reward_type, reward_estimate, reward_snapshot,
+          duplicate_of_intake_id, duplicate_reason, agreement_terms_at, status,
+          source, ip_hash, user_agent_hash, created_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, $15, $16, $17, $18, $19,
+          $20, $21::jsonb, $22, $23, NOW(), $24, 'portal', $25, $26, NOW(), NOW()
+        )
+      `,
+      [
+        intakeId,
+        referralCode,
+        resolution,
+        duplicate ? referrerKind : reward.rewardType === "tbd" && resolution === "self_declared" ? "unverified" : referrerKind,
+        referrerPartyType,
+        referrerPartyId,
+        referrerName,
+        referrerMethod,
+        referrerEmail,
+        referrerPhone,
+        referrerEmployeeId,
+        consentIdentityAt,
+        clientName,
+        clientEmailNorm,
+        clientPhoneNorm,
+        clientEmailRaw || null,
+        clientPhoneRaw ? `${clientPhoneCc} ${clientPhoneRaw}`.trim() : null,
+        relationship,
+        duplicate ? "tbd" : reward.rewardType,
+        duplicate ? null : reward.rewardEstimate,
+        JSON.stringify(reward.snapshot),
+        duplicate?.id ?? null,
+        duplicate ? `Contact already belongs to ${duplicate.ref_code}` : null,
+        duplicateStatus,
+        hashSensitiveValue(requestMeta.ip),
+        hashSensitiveValue(requestMeta.userAgent),
+      ],
+    );
+
+    for (const service of selectedServices) {
+      await client.query(
+        `
+          INSERT INTO referral_intake_services (id, intake_id, service_key, service_label, created_at)
+          VALUES ($1, $2, $3, $4, NOW())
+          ON CONFLICT (intake_id, service_key) DO NOTHING
+        `,
+        [`rsvc-${crypto.randomUUID()}`, intakeId, service.key, service.label],
+      );
+    }
+
+    await insertReferralIntakeEvent(client, {
+      intakeId,
+      refCode: referralCode,
+      eventType: duplicate ? "duplicate_detected" : "submitted",
+      fromStatus: null,
+      toStatus: duplicateStatus,
+      actorUsername: "public-referrer",
+      actorKind: "public_referrer",
+      detail: duplicate
+        ? `Duplicate referral contact blocked; original ${duplicate.ref_code}.`
+        : "Referral intake submitted for finance review.",
+      payload: {
+        referrerKind,
+        relationship,
+        serviceKeys: selectedServices.map((service) => service.key),
+      },
+    });
+    await insertActivity(
+      client,
+      duplicate
+        ? `Duplicate referral intake blocked for ${clientName}`
+        : `Referral intake ${referralCode} submitted for ${clientName}`,
+      "public-form",
+    );
+
+    if (duplicate) {
+      return {
+        duplicate: true,
+        ref_code: referralCode,
+        duplicate_ref_code: duplicate.ref_code,
+        message: "This client contact already has an active referral on file.",
+      };
+    }
+
+    return {
+      ref_code: referralCode,
+      reward_type: reward.rewardType,
+      reward_estimate: reward.rewardEstimate,
+      status: duplicateStatus,
+      message: `${clientName} has been added to the referral intake queue for finance review.`,
+    };
+  });
+}
+
+async function fetchReferralIntakeForUpdate(client, intakeId) {
+  const result = await client.query(
+    `
+      SELECT *
+      FROM referral_intake
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [intakeId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findCustomerByReferralIntakeClient(client, intake) {
+  return findCustomerByReferralContact(client, {
+    email: intake.client_email_norm ?? "",
+    phoneDigits: intake.client_phone_norm ?? "",
+  });
+}
+
+export async function resolveReferralIntakeIdentity({ intakeId, partyType, partyId, actingUsername = "unknown" }) {
+  return withTransaction(async (client) => {
+    const intake = await fetchReferralIntakeForUpdate(client, intakeId);
+    if (!intake) {
+      throw new Error("Referral intake record not found.");
+    }
+    if (intake.status !== "pending_identity") {
+      throw new Error("Only pending identity referrals can be resolved.");
+    }
+
+    let resolved = null;
+    if (partyType === "employee") {
+      const employee = await client.query(`SELECT * FROM employees WHERE id = $1 OR employee_code = $1 LIMIT 1`, [partyId]);
+      const row = employee.rows[0];
+      if (row) {
+        resolved = {
+          kind: "employee",
+          partyType: "employee",
+          partyId: row.id,
+          name: [row.first_name, row.last_name].filter(Boolean).join(" "),
+          email: row.official_email ?? row.personal_email ?? null,
+          phone: row.official_mobile_digits ?? row.personal_mobile_digits ?? null,
+          employeeCode: row.employee_code,
+        };
+      }
+    } else if (partyType === "customer") {
+      const customer = await client.query(`SELECT id, customer_code, full_name FROM customers WHERE id = $1 OR customer_code = $1 LIMIT 1`, [partyId]);
+      const row = customer.rows[0];
+      if (row) {
+        resolved = {
+          kind: "customer",
+          partyType: "customer",
+          partyId: row.id,
+          name: row.full_name,
+          customerCode: row.customer_code,
+        };
+      }
+    }
+    if (!resolved) {
+      throw new Error("Could not resolve the referrer identity.");
+    }
+
+    const serviceRows = await client.query(`SELECT service_key FROM referral_intake_services WHERE intake_id = $1`, [intake.id]);
+    const reward = computeReferralEngineReward(resolved.kind, serviceRows.rows.map((row) => row.service_key));
+    await client.query(
+      `
+        UPDATE referral_intake
+        SET referrer_kind = $2,
+            referrer_party_type = $3,
+            referrer_party_id = $4,
+            referrer_name = $5,
+            referrer_email = COALESCE($6, referrer_email),
+            referrer_phone = COALESCE($7, referrer_phone),
+            referrer_employee_id = COALESCE($8, referrer_employee_id),
+            reward_type = $9,
+            reward_estimate = $10,
+            reward_snapshot = $11::jsonb,
+            status = 'pending_review',
+            reviewed_by_username = $12,
+            reviewed_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [
+        intake.id,
+        resolved.kind,
+        resolved.partyType,
+        resolved.partyId,
+        resolved.name,
+        resolved.email ?? null,
+        resolved.phone ?? null,
+        resolved.employeeCode ?? null,
+        reward.rewardType,
+        reward.rewardEstimate,
+        JSON.stringify(reward.snapshot),
+        actingUsername,
+      ],
+    );
+    await insertReferralIntakeEvent(client, {
+      intakeId: intake.id,
+      refCode: intake.ref_code,
+      eventType: "identity_resolved",
+      fromStatus: intake.status,
+      toStatus: "pending_review",
+      actorUsername: actingUsername,
+      actorKind: "admin",
+      detail: `Referrer identity resolved to ${resolved.name}.`,
+    });
+    await insertActivity(client, `Referral intake ${intake.ref_code} identity resolved`, actingUsername);
+    return {
+      state: await hydratePortalState(client),
+      message: `Referral intake ${intake.ref_code} is ready for finance approval.`,
+    };
+  });
+}
+
+export async function setReferralIntakeReviewStatus({ intakeId, action, notes = "", actingUsername = "unknown" }) {
+  return withTransaction(async (client) => {
+    const intake = await fetchReferralIntakeForUpdate(client, intakeId);
+    if (!intake) {
+      throw new Error("Referral intake record not found.");
+    }
+    if (!["approve", "reject"].includes(action)) {
+      throw new Error("Choose approve or reject.");
+    }
+    if (action === "reject") {
+      await client.query(
+        `
+          UPDATE referral_intake
+          SET status = 'rejected',
+              reviewed_by_username = $2,
+              reviewed_at = NOW(),
+              review_notes = COALESCE($3, review_notes),
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [intake.id, actingUsername, String(notes || "").trim() || null],
+      );
+      await insertReferralIntakeEvent(client, {
+        intakeId: intake.id,
+        refCode: intake.ref_code,
+        eventType: "rejected",
+        fromStatus: intake.status,
+        toStatus: "rejected",
+        actorUsername: actingUsername,
+        actorKind: "admin",
+        detail: "Finance rejected the referral intake.",
+      });
+      await insertActivity(client, `Referral intake ${intake.ref_code} rejected`, actingUsername);
+      return {
+        state: await hydratePortalState(client),
+        message: `Referral intake ${intake.ref_code} rejected.`,
+      };
+    }
+
+    if (intake.status !== "pending_review") {
+      throw new Error("Only pending-review referrals can be approved.");
+    }
+
+    let createdReferralId = null;
+    const referredCustomer = await findCustomerByReferralIntakeClient(client, intake);
+    if (intake.referrer_kind === "customer" && referredCustomer?.id) {
+      const referrerParty = await ensureClientReferralParty(client, intake.referrer_party_id);
+      createdReferralId = await upsertCustomerReferral(client, {
+        referrerCustomerId: intake.referrer_party_id,
+        referrerPartyId: referrerParty?.id ?? null,
+        referredCustomerId: referredCustomer.id,
+        relationshipLabel: intake.relationship,
+        referredOn: intake.created_at,
+        notes: `Approved from referral intake ${intake.ref_code}`,
+        actorUsername: actingUsername,
+        actorKind: "admin",
+      });
+    }
+
+    await client.query(
+      `
+        UPDATE referral_intake
+        SET status = 'verified',
+            reviewed_by_username = $2,
+            reviewed_at = NOW(),
+            review_notes = COALESCE($3, review_notes),
+            resolved_referrer_party_type = referrer_party_type,
+            resolved_referrer_party_id = referrer_party_id,
+            created_referral_id = COALESCE($4, created_referral_id),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [intake.id, actingUsername, String(notes || "").trim() || null, createdReferralId],
+    );
+    await insertReferralIntakeEvent(client, {
+      intakeId: intake.id,
+      refCode: intake.ref_code,
+      eventType: "approved",
+      fromStatus: intake.status,
+      toStatus: "verified",
+      actorUsername: actingUsername,
+      actorKind: "admin",
+      detail: createdReferralId
+        ? "Finance approved and established a customer referral relationship."
+        : "Finance approved the referral intake. Relationship will link after onboarding if needed.",
+    });
+    await insertActivity(client, `Referral intake ${intake.ref_code} approved`, actingUsername);
+    return {
+      state: await hydratePortalState(client),
+      message: `Referral intake ${intake.ref_code} approved.`,
+    };
+  });
+}
+
+export async function markReferralIntakeQualified({ intakeId, actingUsername = "unknown" }) {
+  return withTransaction(async (client) => {
+    const intake = await fetchReferralIntakeForUpdate(client, intakeId);
+    if (!intake) {
+      throw new Error("Referral intake record not found.");
+    }
+    if (!["verified", "qualified"].includes(intake.status)) {
+      throw new Error("Only approved referrals can be marked qualified.");
+    }
+
+    let createdRewardId = intake.created_reward_id ?? null;
+    let createdPayoutId = intake.created_payout_id ?? null;
+    if (intake.referrer_kind === "employee") {
+      const party = await ensureEmployeeReferralParty(client, intake.referrer_party_id);
+      if (!party) {
+        throw new Error("Employee payout party could not be created.");
+      }
+      createdPayoutId = createdPayoutId ?? `payout-${intake.id}`;
+      await client.query(
+        `
+          INSERT INTO referral_payouts (
+            id, party_id, referral_id, reward_ledger_id, amount, payout_method,
+            payout_status, scheduled_at, notes, created_by, created_at, updated_at
+          )
+          VALUES ($1, $2, NULL, NULL, $3, 'payroll', 'scheduled', NOW(), $4, $5, NOW(), NOW())
+          ON CONFLICT (id)
+          DO UPDATE
+          SET amount = EXCLUDED.amount,
+              updated_at = NOW()
+        `,
+        [
+          createdPayoutId,
+          party.id,
+          Number(intake.reward_estimate || 0),
+          `Employee referral payout for ${intake.ref_code}`,
+          actingUsername,
+        ],
+      );
+    } else if (intake.referrer_kind === "customer") {
+      createdRewardId = createdRewardId ?? `reward-${intake.id}`;
+      const amount = Math.min(REFERRAL_CUSTOMER_DISCOUNT_DOLLAR_CAP, Math.max(0, Number(REFERRAL_CUSTOMER_DISCOUNT_DOLLAR_CAP || 0)));
+      await client.query(
+        `
+          INSERT INTO customer_reward_ledger (
+            id, customer_id, referral_id, reward_type, status, amount, description,
+            delivery_method, party_id, earned_at, created_at
+          )
+          VALUES ($1, $2, $3, 'referral_bonus', 'available', $4, $5, 'invoice_discount', NULL, NOW(), NOW())
+          ON CONFLICT (id)
+          DO UPDATE
+          SET amount = EXCLUDED.amount
+        `,
+        [
+          createdRewardId,
+          intake.referrer_party_id,
+          intake.created_referral_id ?? null,
+          amount,
+          `Referral intake ${intake.ref_code} qualified for ${intake.reward_estimate ?? 0}% invoice discount, capped at ${formatCurrency(amount)}.`,
+        ],
+      );
+    }
+
+    await client.query(
+      `
+        UPDATE referral_intake
+        SET status = 'qualified',
+            created_payout_id = COALESCE($2, created_payout_id),
+            created_reward_id = COALESCE($3, created_reward_id),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [intake.id, createdPayoutId, createdRewardId],
+    );
+    await insertReferralIntakeEvent(client, {
+      intakeId: intake.id,
+      refCode: intake.ref_code,
+      eventType: "qualified",
+      fromStatus: intake.status,
+      toStatus: "qualified",
+      actorUsername: actingUsername,
+      actorKind: "admin",
+      detail: intake.referrer_kind === "employee" ? "Employee cash payout scheduled." : "Customer invoice discount reward created.",
+    });
+    await insertActivity(client, `Referral intake ${intake.ref_code} marked qualified`, actingUsername);
+    return {
+      state: await hydratePortalState(client),
+      message: `Referral intake ${intake.ref_code} marked qualified.`,
+    };
+  });
+}
+
+export async function createEmployeeRecord({ form, actingUsername = "unknown" }) {
+  return withTransaction(async (client) => {
+    const firstName = String(form.firstName || "").trim();
+    const lastName = String(form.lastName || "").trim();
+    const officialEmail = String(form.officialEmail || "").trim();
+    const personalEmail = String(form.personalEmail || "").trim();
+    const officialMobile = String(form.officialMobile || "").trim();
+    const personalMobile = String(form.personalMobile || "").trim();
+    const title = String(form.title || "").trim();
+    const department = String(form.department || "Profile Build").trim();
+    const region = String(form.region || "US").trim();
+    const currency = EMPLOYEE_REGION_CURRENCY.get(region);
+    const status = String(form.status || "current").trim();
+    if (!firstName || !lastName || !officialEmail || !title) {
+      throw new Error("First name, last name, official email, and title are required.");
+    }
+    if (!EMPLOYEE_STATUSES.has(status)) {
+      throw new Error("Choose a valid employee status.");
+    }
+    if (!EMPLOYEE_TITLES.has(title)) {
+      throw new Error("Choose a valid employee title.");
+    }
+    if (!EMPLOYEE_DEPARTMENTS.has(department)) {
+      throw new Error("Choose a valid employee department.");
+    }
+    if (!currency) {
+      throw new Error("Choose a valid employee region.");
+    }
+    const { employeeCode } = await reserveNextEmployeeCode(client);
+    const employeeId = `employee-${crypto.randomUUID()}`;
+    await client.query(
+      `
+        INSERT INTO employees (
+          id, employee_code, first_name, middle_name, last_name, preferred_name,
+          personal_email, normalized_personal_email, official_email, normalized_official_email,
+          personal_mobile, personal_mobile_digits, official_mobile, official_mobile_digits,
+          title, department, region, manager_name, status, date_of_joining, date_of_exit,
+          promotion_history, hr_comments, one_time_joining_bonus, annual_bonus, monthly_salary,
+          currency, critical_info, created_at, updated_at
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20::date, $21::date,
+          $22::jsonb, $23, $24, $25, $26, $27, $28::jsonb, NOW(), NOW()
+        )
+      `,
+      [
+        employeeId,
+        employeeCode,
+        firstName,
+        String(form.middleName || "").trim() || null,
+        lastName,
+        String(form.preferredName || "").trim() || null,
+        personalEmail || null,
+        normalizeEmail(personalEmail) || null,
+        officialEmail,
+        normalizeEmail(officialEmail),
+        personalMobile || null,
+        normalizeDigits(personalMobile) || null,
+        officialMobile || null,
+        normalizeDigits(officialMobile) || null,
+        title,
+        department,
+        region,
+        String(form.managerName || "").trim() || null,
+        status,
+        normalizeDateInput(form.dateOfJoining, new Date()),
+        normalizeDateInput(form.dateOfExit),
+        JSON.stringify([
+          {
+            date: normalizeDateInput(form.dateOfJoining, new Date()),
+            title,
+            note: "Employee onboarded in Setu Finance.",
+          },
+        ]),
+        String(form.hrComments || "").trim() || null,
+        Number(form.oneTimeJoiningBonus || 0),
+        Number(form.annualBonus || 0),
+        Number(form.monthlySalary || 0),
+        currency,
+        JSON.stringify({
+          notes: String(form.criticalInfo || "").trim() || null,
+          salaryEffectiveDate: normalizeDateInput(form.salaryEffectiveDate, form.dateOfJoining || new Date()),
+        }),
+      ],
+    );
+    await insertActivity(client, `Employee onboarded: ${firstName} ${lastName} (${employeeCode})`, actingUsername);
+    return {
+      state: await hydratePortalState(client),
+      message: `${firstName} ${lastName} onboarded with employee ID ${employeeCode}.`,
+    };
+  });
+}
+
+export async function recordEmployeePayment({ form, actingUsername = "unknown" }) {
+  return withTransaction(async (client) => {
+    const employeeId = String(form.employeeId || "").trim();
+    const paymentType = String(form.paymentType || "monthly_salary").trim();
+    const amount = Number(form.amount || 0);
+    if (!employeeId || !EMPLOYEE_PAYMENT_TYPES.has(paymentType) || !Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Choose an employee, valid payment type, and amount.");
+    }
+    const employee = await client.query(`SELECT id, region, currency FROM employees WHERE id = $1 LIMIT 1`, [employeeId]);
+    if (!employee.rowCount) {
+      throw new Error("Employee record not found.");
+    }
+    const paymentRegion = String(form.region || employee.rows[0].region || "").trim();
+    const paymentCurrency =
+      String(form.currency || "").trim() ||
+      employee.rows[0].currency ||
+      EMPLOYEE_REGION_CURRENCY.get(paymentRegion) ||
+      "USD";
+    await client.query(
+      `
+        INSERT INTO employee_payments (
+          id, employee_id, payment_type, amount, currency, payment_date, status, region,
+          memo, reference, recorded_by_username, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6::date, $7, $8, $9, $10, $11, NOW(), NOW())
+      `,
+      [
+        `emp-pay-${crypto.randomUUID()}`,
+        employeeId,
+        paymentType,
+        amount,
+        paymentCurrency,
+        normalizeDateInput(form.paymentDate, new Date()),
+        String(form.status || "paid").trim(),
+        paymentRegion || null,
+        String(form.memo || "").trim() || null,
+        String(form.reference || "").trim() || null,
+        actingUsername,
+      ],
+    );
+    await insertActivity(client, `Employee payment recorded: ${formatCurrency(amount)}`, actingUsername);
+    return {
+      state: await hydratePortalState(client),
+      message: `Employee payment ${formatCurrency(amount)} recorded.`,
+    };
+  });
+}
+
+export async function generateEmployeePayslip({ form, actingUsername = "unknown" }) {
+  return withTransaction(async (client) => {
+    const employeeId = String(form.employeeId || "").trim();
+    const mode = String(form.mode || "month").trim();
+    if (!employeeId) {
+      throw new Error("Choose an employee before generating a payslip.");
+    }
+    const employee = await client.query(`SELECT id, currency FROM employees WHERE id = $1 LIMIT 1`, [employeeId]);
+    if (!employee.rowCount) {
+      throw new Error("Employee record not found.");
+    }
+
+    let periodStart;
+    let periodEnd;
+    let label;
+    if (mode === "pay_cycle") {
+      periodStart = normalizeDateInput(form.periodStart);
+      periodEnd = normalizeDateInput(form.periodEnd);
+      if (!periodStart || !periodEnd || periodEnd < periodStart) {
+        throw new Error("Choose a valid pay cycle start and end date.");
+      }
+      label = String(form.payPeriodLabel || `${periodStart} to ${periodEnd}`).trim();
+    } else {
+      const monthValue = String(form.month || "").trim();
+      if (!/^\d{4}-\d{2}$/.test(monthValue)) {
+        throw new Error("Choose a valid payslip month.");
+      }
+      periodStart = `${monthValue}-01`;
+      const endDate = new Date(`${periodStart}T00:00:00.000Z`);
+      endDate.setUTCMonth(endDate.getUTCMonth() + 1);
+      endDate.setUTCDate(0);
+      periodEnd = endDate.toISOString().slice(0, 10);
+      label = monthValue;
+    }
+
+    const paymentsResult = await client.query(
+      `
+        SELECT id, amount, currency
+        FROM employee_payments
+        WHERE employee_id = $1
+          AND payment_date BETWEEN $2::date AND $3::date
+          AND status <> 'cancelled'
+        ORDER BY payment_date ASC, created_at ASC, id ASC
+      `,
+      [employeeId, periodStart, periodEnd],
+    );
+    const grossAmount = paymentsResult.rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const paymentIds = paymentsResult.rows.map((row) => row.id);
+    const currency = paymentsResult.rows[0]?.currency || employee.rows[0].currency || "USD";
+    const payslipId = `emp-slip-${crypto.randomUUID()}`;
+
+    const payslipResult = await client.query(
+      `
+        INSERT INTO employee_payslips (
+          id, employee_id, pay_period_label, period_start, period_end, payment_ids,
+          gross_amount, currency, generated_by_username, generated_at, created_at
+        )
+        VALUES ($1, $2, $3, $4::date, $5::date, $6::jsonb, $7, $8, $9, NOW(), NOW())
+        ON CONFLICT (employee_id, pay_period_label)
+        DO UPDATE SET
+          period_start = EXCLUDED.period_start,
+          period_end = EXCLUDED.period_end,
+          payment_ids = EXCLUDED.payment_ids,
+          gross_amount = EXCLUDED.gross_amount,
+          currency = EXCLUDED.currency,
+          generated_by_username = EXCLUDED.generated_by_username,
+          generated_at = NOW()
+        RETURNING id
+      `,
+      [
+        payslipId,
+        employeeId,
+        label,
+        periodStart,
+        periodEnd,
+        JSON.stringify(paymentIds),
+        grossAmount,
+        currency,
+        actingUsername,
+      ],
+    );
+    await insertActivity(client, `Employee payslip generated: ${label}`, actingUsername);
+    return {
+      state: await hydratePortalState(client),
+      message: `Payslip ${label} generated with ${paymentIds.length} payment record${paymentIds.length === 1 ? "" : "s"}.`,
+      payslipId: payslipResult.rows[0]?.id ?? payslipId,
+    };
+  });
+}
+
+export async function uploadEmployeeContractRecord({
+  employeeId,
+  form,
+  actingUsername = "unknown",
+}) {
+  return withTransaction(async (client) => {
+    const resolvedEmployeeId = String(employeeId || form?.employeeId || "").trim();
+    const employeeResult = await client.query(
+      `
+        SELECT id, employee_code, first_name, middle_name, last_name
+        FROM employees
+        WHERE id = $1 OR employee_code = $1
+        LIMIT 1
+      `,
+      [resolvedEmployeeId],
+    );
+    if (!employeeResult.rowCount) {
+      throw new Error("Employee record not found.");
+    }
+
+    const employee = employeeResult.rows[0];
+    const contractType = String(form?.contractType || "employee_contract").trim();
+    const contractTypeLabel = BUSINESS_CONTRACT_TYPES.get(contractType);
+    if (!contractTypeLabel) {
+      throw new Error("Choose a valid contract type.");
+    }
+
+    const normalizedUpload = normalizeContractUploads([
+      {
+        fileName: form?.fileName,
+        mimeType: form?.mimeType,
+        contentBase64: form?.contentBase64,
+        extractedTextPreview: form?.summary,
+      },
+    ])[0];
+    if (!normalizedUpload) {
+      throw new Error("Upload a valid employee contract file.");
+    }
+
+    const uploadedAt = new Date();
+    const ownerName = [employee.first_name, employee.middle_name, employee.last_name]
+      .filter(Boolean)
+      .join(" ");
+    const storeResult = await storeContractBinary({
+      ownerCategory: "employee",
+      ownerCode: employee.employee_code,
+      fileName: normalizedUpload.fileName,
+      mimeType: normalizedUpload.mimeType,
+      buffer: normalizedUpload.buffer,
+      uploadedAt,
+    });
+    const contractId = `business-contract-${crypto.randomUUID()}`;
+
+    await client.query(
+      `
+        INSERT INTO business_contracts (
+          id, owner_category, owner_id, owner_code, owner_name, contract_type,
+          contract_type_label, file_name, mime_type, file_size_bytes, storage_provider,
+          storage_key, summary, notes, contract_date, effective_date, expiration_date,
+          uploaded_by_username, created_at, updated_at
+        )
+        VALUES (
+          $1, 'employee', $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14::date, $15::date, $16::date, $17, NOW(), NOW()
+        )
+      `,
+      [
+        contractId,
+        employee.id,
+        employee.employee_code,
+        ownerName,
+        contractType,
+        contractTypeLabel,
+        normalizedUpload.fileName,
+        normalizedUpload.mimeType,
+        normalizedUpload.buffer.length,
+        storeResult.storageProvider,
+        storeResult.storageKey,
+        String(form?.summary || "").trim() || null,
+        String(form?.notes || "").trim() || null,
+        normalizeDateInput(form?.contractDate),
+        normalizeDateInput(form?.effectiveDate),
+        normalizeDateInput(form?.expirationDate),
+        actingUsername,
+      ],
+    );
+
+    await insertActivity(
+      client,
+      `${contractTypeLabel} uploaded for ${ownerName} (${employee.employee_code})`,
+      actingUsername,
+    );
+
+    return {
+      state: await hydratePortalState(client),
+      message: `${contractTypeLabel} uploaded for ${ownerName}.`,
+      contractId,
+    };
+  });
+}
+
+export async function recordOtherExpense({ form, actingUsername = "unknown" }) {
+  return withTransaction(async (client) => {
+    const direction = String(form.direction || "paid").trim();
+    const category = String(form.category || "").trim();
+    const vendorOrSource = String(form.vendorOrSource || "").trim();
+    const amount = Number(form.amount || 0);
+    if (!OTHER_EXPENSE_DIRECTIONS.has(direction) || !category || !vendorOrSource || !Number.isFinite(amount) || amount <= 0) {
+      throw new Error("Direction, category, vendor/source, and amount are required.");
+    }
+    const expenseId = `other-exp-${crypto.randomUUID()}`;
+    const sequence = await reserveSequenceValue(client, "other_expense", 1);
+    const expenseCode = `EXP-2026-${String(sequence).padStart(6, "0")}`;
+    await client.query(
+      `
+        INSERT INTO other_expenses (
+          id, expense_code, expense_direction, category, vendor_or_source, amount, currency,
+          expense_date, status, region, department, payment_method, memo, receipt_reference,
+          recorded_by_username, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 'USD', $7::date, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+      `,
+      [
+        expenseId,
+        expenseCode,
+        direction,
+        category,
+        vendorOrSource,
+        amount,
+        normalizeDateInput(form.expenseDate, new Date()),
+        String(form.status || (direction === "received" ? "received" : "paid")).trim(),
+        String(form.region || "").trim() || null,
+        String(form.department || "").trim() || null,
+        String(form.paymentMethod || "").trim() || null,
+        String(form.memo || "").trim() || null,
+        String(form.receiptReference || "").trim() || null,
+        actingUsername,
+      ],
+    );
+    await insertActivity(client, `${direction === "received" ? "Other income" : "Other expense"} recorded: ${expenseCode}`, actingUsername);
+    return {
+      state: await hydratePortalState(client),
+      message: `${expenseCode} recorded.`,
+    };
+  });
 }
 
 function normalizeFeedbackAttachments(attachments = []) {
@@ -3597,6 +5292,92 @@ export async function loadContractDownloadRecord(contractId) {
       return {
         contract: mapContractRow(record),
         file,
+      };
+    },
+    { readOnly: true },
+  );
+}
+
+export async function loadBusinessContractDownloadRecord(contractId) {
+  return withTransaction(
+    async (client) => {
+      const record = await fetchBusinessContractRecord(client, contractId);
+      if (!record) {
+        throw new Error("Business contract record not found.");
+      }
+
+      const file = await loadStoredContractBinary({
+        storageProvider: record.storage_provider,
+        storageKey: record.storage_key,
+        mimeType: record.mime_type,
+        fileName: record.file_name,
+      });
+
+      return {
+        contract: mapBusinessContractRow(record),
+        file,
+      };
+    },
+    { readOnly: true },
+  );
+}
+
+export async function loadEmployeePayslipDownloadRecord(payslipId) {
+  return withTransaction(
+    async (client) => {
+      const payslipResult = await client.query(
+        `
+          SELECT *
+          FROM employee_payslips
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [payslipId],
+      );
+      if (!payslipResult.rowCount) {
+        throw new Error("Payslip record not found.");
+      }
+
+      const payslip = payslipResult.rows[0];
+      const employeeResult = await client.query(
+        `
+          SELECT *
+          FROM employees
+          WHERE id = $1
+          LIMIT 1
+        `,
+        [payslip.employee_id],
+      );
+      if (!employeeResult.rowCount) {
+        throw new Error("Employee record not found.");
+      }
+
+      const paymentIds = Array.isArray(payslip.payment_ids) ? payslip.payment_ids : [];
+      const paymentsResult = paymentIds.length
+        ? await client.query(
+            `
+              SELECT *
+              FROM employee_payments
+              WHERE id = ANY($1::text[])
+              ORDER BY payment_date ASC, created_at ASC, id ASC
+            `,
+            [paymentIds],
+          )
+        : { rows: [] };
+
+      const buffer = await generateEmployeePayslipPdf({
+        employee: employeeResult.rows[0],
+        payslip,
+        payments: paymentsResult.rows,
+      });
+
+      return {
+        fileName: buildEmployeePayslipPdfFilename({
+          employee: employeeResult.rows[0],
+          payslip,
+        }),
+        mimeType: "application/pdf",
+        buffer,
       };
     },
     { readOnly: true },

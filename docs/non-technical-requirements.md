@@ -10,6 +10,8 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 
 - Finance operations staff who onboard clients, create invoices, and apply payments
 - Program administrators who manage referral rules and policy settings
+- HR/operations leaders who maintain employee records and payroll-like finance visibility
+- Employees, sales users, and existing clients who submit referrals through a no-login public form
 - Leadership users who need a clean dashboard of collections, outstanding balances, and operational issues
 
 ## Business Outcomes
@@ -18,6 +20,11 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - Start intake from the signed contract instead of retyping billing setup from scratch
 - Keep a durable history of client enrollments, billing activity, and payment decisions
 - Make Zelle-based collections easier to reconcile without removing human control over final posting
+- Let employees, sales users, and customers refer prospects without giving them access to the finance portal
+- Ensure every new referral is reviewed by finance before rewards or relationships are established
+- Give leadership visibility into employee payables, referral payouts, and other operating expenses by region
+- Give finance a single searchable Contracts archive with signed-with party, short summary, signed date, Quick peek, and Download
+- Let staff ask AskSetu quick read-only questions from current portal data
 - Support future expansion into a broader product suite by using stable customer IDs and reusable customer records
 
 ## Required Business Capabilities
@@ -42,6 +49,9 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 - The customer register should show a clearly defined status for each customer so finance can tell at a glance whether the record is active, awaiting payment, overdue, or needs review.
 - Clicking a customer should open a full 360 page with signup date, contact details, service history, invoices, transaction history, referrals, rewards, and current billing or contract context.
 - The customer 360 page must show uploaded contracts and critical extracted fields such as fee, service-start date, installment count, and contract file link.
+- A dedicated Contracts archive must let finance search client and employee contracts without opening each customer or employee page.
+- Contract rows must show who the contract is signed with, a short summary, and the signed date.
+- Users must be able to quick-preview supported contracts before downloading the raw file.
 
 ### 3. Invoicing must be fast and controlled
 
@@ -95,21 +105,52 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 ### 8. Referral program rules must be configurable
 
 - The system must support referral relationships between existing and newly onboarded clients.
+- The system must provide a separate public Referral Engine form for employees, sales users, customers, and other referrers.
+- The public referral form must not require finance-portal login.
+- Referrers must be able to search themselves by email, phone, or employee ID.
+- Email and phone lookup must search both employee and customer records after consent.
+- Employee ID lookup must search only the employee database.
+- If the referrer cannot be matched automatically, the referral must still be saved for finance identity review.
+- Every new referral must go through finance-admin approval before a referral relationship, reward, payout, or invoice adjustment is established.
+- The system must prevent obvious duplicate referred-client entries and self-referrals.
 - The system must store who referred whom, the relationship type, and the referral date.
 - Referral bonuses should default to `$500`, but the amount must be configurable by admins.
 - Qualification should default to `at least $3,000 paid or 6 months`, but both values must be configurable by admins.
 - Admins must be able to disable the referral program for new enrollments without deleting historical referral records.
 - Historical referral records must preserve the rule snapshot active when the referral was created.
-- Qualified referral bonuses must be applied as discounts on a future invoice, not as direct credits or cash payouts.
+- Qualified customer referral bonuses must be applied as discounts on a future invoice, not as direct credits.
+- Qualified employee or sales referral rewards must route through the employee payables process before payment.
 - Finance users should be able to see which customers are qualified for a referral bonus, which invoice will receive the discount, and who applied it.
 - Reporting should be simple enough for non-technical users to understand referral relationships, qualified value, and total bonus spent.
 
-### 9. The portal must be safe for internal finance work
+### 9. Employee records must support HR and finance visibility
+
+- The system must maintain employee records separately from customer records.
+- Finance or HR users must be able to onboard employees with an assigned employee ID.
+- Employee records must capture name, personal and official email, personal and official phone, region, department, title, manager, employment type, status, and HR comments.
+- Employee records must capture joining date, termination or exit date, promotion date, and other important lifecycle dates.
+- Employee records must capture monthly salary, one-time joining bonus, annual bonus, salary-effective date, and currency.
+- Employee status must distinguish current employees from terminated, left, suspended, contractor, or other appropriate states.
+- Each employee must have a 360 view with profile, status, compensation context, referral identity, and payment history.
+- Every payment made to an employee must be recorded with type, amount, currency, date, reference, memo, recording user, and region.
+- Employee payables must roll up clearly in the Payables section by region.
+- Employee contracts must be searchable in the central Contracts archive and must show the employee name as the signed-with party.
+
+### 10. Other expenses and income must be tracked
+
+- The system must provide an `Other` section for expenses that are not customer invoices or employee payments.
+- Examples should include work laptops, facilities rent or lease, software, travel, marketing, insurance, legal, accounting, tax, utilities, and miscellaneous expenses.
+- The same section should support received entries such as refunds, reimbursements, rebates, grants, or other income.
+- Every entry must capture category, direction, vendor or source, amount with cents, currency, date, region, department, reference, memo, and recording user.
+- Other expenses and income must appear in Payables reporting without interfering with receivables or customer payment application.
+
+### 11. The portal must be safe for internal finance work
 
 - The portal must require login before finance data is visible.
 - Payment application must stay human-controlled.
 - Important state changes should be traceable in system history.
-- In cloud environments, uploaded contracts must be stored in a private S3 bucket organized by customer ID and date.
+- In cloud environments, uploaded contracts must be stored in a private S3 bucket organized by owner category, owner ID, and date.
+- AskSetu must be read-only and answer current-state questions about customers, invoices, payments, contracts, employees, payables, Gmail sync, outbound email, referrals, and recent activity.
 
 ## Non-Functional Expectations
 
@@ -129,5 +170,7 @@ Setu Finance should give the operations team one place to onboard clients, bill 
 ## Success Criteria
 
 - A finance team member can onboard a client, send an invoice, review a synced Zelle transaction, apply it, and send or re-send a PDF receipt without leaving the portal.
-- A referred client can be linked to a referrer during onboarding and tracked until the reward becomes available.
-- Leadership can see outstanding invoices, pending confirmations, exceptions, referral progress, and received-amount trends in one system.
+- A public referrer can submit a referral, finance can approve it, and only then can the relationship and reward path become active.
+- Finance can onboard an employee, record employee payments, and see the spend reflected by region.
+- Finance can record an operating expense or received refund and see it reflected in Payables reporting.
+- Leadership can see outstanding invoices, pending confirmations, exceptions, referral progress, employee payables, other expenses, and received-amount trends in one system.

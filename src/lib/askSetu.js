@@ -3,6 +3,9 @@ import { formatCurrency, formatLongDate } from "./finance.js";
 export const ASK_SETU_SUGGESTIONS = [
   "How many payments need review right now?",
   "Who has due invoices today?",
+  "Show contracts signed with Lohith Deshpande",
+  "How many employees are active?",
+  "Summarize payables by region",
   "Summarize Karthik Pamaraju",
   "What happened in the latest Gmail sync?",
   "Is outbound email ready?",
@@ -118,6 +121,82 @@ function findPaymentMatch(payments, query) {
     return null;
   }
   return payments.find((payment) => normalizeDigits(payment.transactionReference).includes(digitQuery));
+}
+
+function findEmployeeMatches(employees, query) {
+  const normalized = normalizeText(query);
+  const digitQuery = normalizeDigits(query);
+
+  return employees.filter((employee) => {
+    const haystack = [
+      employee.employeeCode,
+      employee.firstName,
+      employee.middleName,
+      employee.lastName,
+      employee.fullName,
+      employee.officialEmail,
+      employee.personalEmail,
+      employee.officialMobile,
+      employee.personalMobile,
+      employee.department,
+      employee.title,
+      employee.region,
+      employee.status,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const normalizedHaystack = normalizeText(haystack);
+    const digitHaystack = normalizeDigits(haystack);
+    return (
+      normalizedHaystack.includes(normalized) ||
+      normalized.includes(normalizedHaystack) ||
+      (digitQuery && digitHaystack.includes(digitQuery))
+    );
+  });
+}
+
+function findContractMatches(contracts, query) {
+  const normalized = normalizeText(query);
+  const stopWords = new Set([
+    "show",
+    "contract",
+    "contracts",
+    "signed",
+    "with",
+    "for",
+    "the",
+    "client",
+    "employee",
+    "agreement",
+    "agreements",
+    "list",
+  ]);
+  const queryTokens = normalized
+    .split(" ")
+    .filter((token) => token.length > 2 && !stopWords.has(token));
+
+  return contracts.filter((contract) => {
+    const haystack = [
+      contract.fileName,
+      contract.ownerCategory,
+      contract.ownerCode,
+      contract.ownerName,
+      contract.signedWithName,
+      contract.contractType,
+      contract.contractTypeLabel,
+      contract.summary,
+      contract.notes,
+      contract.signedDate,
+      contract.contractDate,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    const normalizedHaystack = normalizeText(haystack);
+    if (normalizedHaystack.includes(normalized) || normalized.includes(normalizedHaystack)) {
+      return true;
+    }
+    return queryTokens.length > 0 && queryTokens.every((token) => normalizedHaystack.includes(token));
+  });
 }
 
 function listNames(items, fallbackField = "customerName") {
@@ -244,6 +323,90 @@ function answerReferralStatus(state) {
   )} and ${formatCountLabel(rewards.length, "reward")} on the ledger.`;
 }
 
+function answerPeopleStatus(question, state) {
+  const normalized = normalizeText(question);
+  const employees = state.admin?.employees ?? [];
+  const employeePayments = state.admin?.employeePayments ?? [];
+  const payslips = state.admin?.employeePayslips ?? [];
+  const currentEmployees = employees.filter((employee) => employee.status === "current");
+  const formerEmployees = employees.filter((employee) => ["terminated", "left_company"].includes(employee.status));
+
+  if (normalized.includes("payslip")) {
+    return `There are ${formatCountLabel(payslips.length, "generated payslip")} in employee records. Open People, search the employee, then use Employee 360 to generate or download payslips.`;
+  }
+
+  if (normalized.includes("payment") || normalized.includes("paid") || normalized.includes("salary")) {
+    const paidTotal = employeePayments
+      .filter((payment) => payment.status !== "cancelled")
+      .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+    return `Employee ledger has ${formatCountLabel(employeePayments.length, "payment record")} totaling ${formatCurrency(
+      paidTotal,
+    )} excluding cancelled records.`;
+  }
+
+  return `People has ${formatCountLabel(employees.length, "employee")} total: ${formatCountLabel(
+    currentEmployees.length,
+    "current employee",
+  )} and ${formatCountLabel(formerEmployees.length, "former employee")}. The directory is search-first and shows only the top 10 matches.`;
+}
+
+function answerPayablesStatus(state) {
+  const employeePayments = state.admin?.employeePayments ?? [];
+  const referralPayouts = state.admin?.referralPayouts ?? [];
+  const otherExpenses = state.admin?.otherExpenses ?? [];
+  const employeePaid = employeePayments
+    .filter((payment) => payment.status !== "cancelled")
+    .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+  const otherPaid = otherExpenses
+    .filter((entry) => entry.direction === "paid" || entry.expenseDirection === "paid")
+    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+  const otherReceived = otherExpenses
+    .filter((entry) => entry.direction === "received" || entry.expenseDirection === "received")
+    .reduce((sum, entry) => sum + Number(entry.amount || 0), 0);
+
+  return `Payables shows ${formatCurrency(employeePaid)} in employee payments, ${formatCountLabel(
+    referralPayouts.length,
+    "referral payout",
+  )}, ${formatCurrency(otherPaid)} in other paid expenses, and ${formatCurrency(otherReceived)} in other received income/refunds.`;
+}
+
+function answerContractStatus(question, state) {
+  const contracts = state.admin?.contractLibrary ?? [];
+  if (!contracts.length) {
+    return "No contracts are saved in the contract library yet.";
+  }
+
+  const normalized = normalizeText(question);
+  const clientCount = contracts.filter((contract) => contract.ownerCategory === "client").length;
+  const employeeCount = contracts.filter((contract) => contract.ownerCategory === "employee").length;
+  const matches = findContractMatches(contracts, question);
+
+  if (
+    matches.length &&
+    (normalized.includes("with") ||
+      normalized.includes("signed") ||
+      normalized.includes("lohith") ||
+      normalized.includes("employee") ||
+      normalized.includes("client") ||
+      normalized.includes("nda") ||
+      normalized.includes("offer"))
+  ) {
+    return matches
+      .slice(0, 5)
+      .map((contract) => {
+        const signedDate = contract.signedDate ? formatLongDate(contract.signedDate) : "signed date not captured";
+        return `${contract.fileName}: ${contract.contractTypeLabel} signed with ${
+          contract.signedWithName || contract.ownerName
+        } on ${signedDate}. Summary: ${contract.summary || "summary not captured"}.`;
+      })
+      .join(" ");
+  }
+
+  return `Contracts has ${formatCountLabel(contracts.length, "contract")} total: ${clientCount} client, ${employeeCount} employee, and ${
+    contracts.length - clientCount - employeeCount
+  } stakeholder/other. Use Contracts to search, Quick peek, or download raw files.`;
+}
+
 function answerLatestActivity(state) {
   const activity = state.activity?.slice(0, 4) ?? [];
   if (!activity.length) {
@@ -278,7 +441,7 @@ function answerPaymentQuestion(payment) {
 export function buildAskSetuAnswer(question, state) {
   const trimmed = String(question || "").trim();
   if (!trimmed) {
-    return "Ask me about payments to confirm, due invoices, customer status, Gmail sync, outbound email, or referrals.";
+    return "Ask me about payments to confirm, due invoices, customer status, contracts, employees, payables, Gmail sync, outbound email, referrals, or recent activity.";
   }
 
   const normalized = normalizeText(trimmed);
@@ -293,6 +456,30 @@ export function buildAskSetuAnswer(question, state) {
 
   if (normalized.includes("outbound") || normalized.includes("email ready") || normalized.includes("send receipt") || normalized.includes("receipt email")) {
     return answerEmailStatus(state);
+  }
+
+  if (normalized.includes("contract") || normalized.includes("agreement") || normalized.includes("nda") || normalized.includes("offer letter")) {
+    return answerContractStatus(trimmed, state);
+  }
+
+  if (normalized.includes("employee") || normalized.includes("people") || normalized.includes("payslip") || normalized.includes("salary")) {
+    const employeeMatches = findEmployeeMatches(state.admin?.employees ?? [], trimmed);
+    if (employeeMatches.length === 1 && !normalized.includes("how many")) {
+      const employee = employeeMatches[0];
+      const payments = (state.admin?.employeePayments ?? []).filter((payment) => payment.employeeId === employee.id);
+      const paidTotal = payments
+        .filter((payment) => payment.status !== "cancelled")
+        .reduce((sum, payment) => sum + Number(payment.amount || 0), 0);
+      return `${employee.fullName} (${employee.employeeCode}) is ${employee.status} in ${employee.department} as ${employee.title}. Region: ${employee.region}. Recorded employee payments: ${formatCountLabel(
+        payments.length,
+        "payment",
+      )} totaling ${formatCurrency(paidTotal)}.`;
+    }
+    return answerPeopleStatus(trimmed, state);
+  }
+
+  if (normalized.includes("payable") || normalized.includes("expense") || normalized.includes("money out")) {
+    return answerPayablesStatus(state);
   }
 
   if (normalized.includes("referral")) {
@@ -326,8 +513,8 @@ export function buildAskSetuAnswer(question, state) {
   }
 
   if (normalized.includes("what can you do") || normalized === "help" || normalized.includes("anything")) {
-    return "I can answer quick questions from the current portal state: customer summaries, due invoices, pending payments, exception counts, Gmail sync health, outbound email status, referral rules, and invoice or transaction lookups by number.";
+    return "I can answer quick questions from the current portal state: customer summaries, due invoices, pending payments, exception counts, contracts and signed-with details, employee records, payables, Gmail sync health, outbound email status, referral rules, and invoice or transaction lookups by number.";
   }
 
-  return "I couldn’t answer that directly from the current portal state yet. Try asking about a customer, invoice number, transaction number, due invoices, pending payments, Gmail sync, outbound email, or referrals.";
+  return "I couldn’t answer that directly from the current portal state yet. Try asking about a customer, employee, contract, invoice number, transaction number, due invoices, pending payments, Gmail sync, outbound email, payables, or referrals.";
 }

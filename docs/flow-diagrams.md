@@ -50,9 +50,12 @@ flowchart LR
     H --> I
     I --> J["Save customer"]
     J --> K["Store contract metadata"]
-    J --> L["Create draft invoices"]
-    K --> M["Customer 360 contract section"]
-    L --> N["Billing console due invoice queue"]
+    K --> L["Contracts archive row"]
+    L --> M["Quick peek through authenticated API"]
+    L --> N["Download raw file when intentional"]
+    J --> O["Create draft invoices"]
+    K --> P["Customer 360 contract section"]
+    O --> Q["Billing console due invoice queue"]
 ```
 
 ## 3. Payment Matching Process
@@ -120,24 +123,60 @@ flowchart TD
     H --> N["Exception history and review"]
 ```
 
-## 6. Referral Program Process
+## 6. Referral Engine And Reward Routing Process
 
 ```mermaid
-flowchart LR
-    A["Referral submitted or captured during onboarding"] --> B["Create referral relationship"]
-    B --> C["Store rule snapshot"]
-    C --> D["Track referred customer's applied payments"]
-    D --> E{"Qualification reached?"}
-    E -->|"Paid threshold met"| F["Reward becomes available"]
-    E -->|"6 months reached"| F
-    E -->|"Not yet"| D
-    F --> G["Finance reviews qualified bonus"]
-    G --> H["Apply bonus to next draft invoice"]
-    H --> I["Invoice payable amount reduced"]
-    I --> J["Reward ledger marked applied"]
+flowchart TD
+    A["Referrer opens /refer"] --> B{"How does referrer identify?"}
+    B -->|"Email or phone"| C["Search employee and customer DB"]
+    B -->|"Employee ID"| D["Search employee DB only"]
+    B -->|"Not found"| E["Self-declared manual review"]
+    C --> F{"Matched?"}
+    D --> F
+    F -->|"Yes"| G["Capture identity consent"]
+    F -->|"No"| E
+    G --> H["Select services and referred client contact"]
+    E --> H
+    H --> I{"Duplicate or self-referral?"}
+    I -->|"Yes"| J["Save duplicate/rejected history; no reward"]
+    I -->|"No"| K["Create referral_intake"]
+    K --> L{"Initial status"}
+    L -->|"Self-declared"| M["Pending identity"]
+    L -->|"Matched"| N["Pending finance review"]
+    M --> O["Finance resolves identity to employee or customer"]
+    O --> N
+    N --> P{"Finance decision"}
+    P -->|"Reject"| Q["Rejected history"]
+    P -->|"Approve"| R["Verified referral"]
+    R --> S{"Client qualifies?"}
+    S -->|"Not yet"| R
+    S -->|"Yes"| T{"Referrer type"}
+    T -->|"Customer"| U["Create invoice-discount reward"]
+    T -->|"Employee"| V["Create referral payout in Payables"]
+    U --> W["Apply discount to next eligible draft invoice"]
+    V --> X["Finance pays through employee/payables process"]
 ```
 
-## 7. AWS User Flow And Service Touchpoints
+## 7. People And Payables Process
+
+```mermaid
+flowchart TD
+    A["Finance opens People"] --> B["Onboard employee"]
+    B --> C["Assign employee ID and HR/compensation fields"]
+    C --> D["Employee appears in employee DB"]
+    D --> E["Referral Engine can match employee by ID/email/phone"]
+    D --> F["Record employee payment"]
+    F --> G["Employee 360 payment history"]
+    G --> H["Payables employee spend by region"]
+    I["Finance opens Payables"] --> J["Record Other entry"]
+    J --> K{"Direction"}
+    K -->|"Paid"| L["Operating expense by category and region"]
+    K -->|"Received"| M["Income/refund entry tracked separately"]
+    N["Qualified employee referral"] --> O["Referral payout ledger"]
+    O --> H
+```
+
+## 8. AWS User Flow And Service Touchpoints
 
 ```mermaid
 flowchart TD
@@ -159,7 +198,7 @@ flowchart TD
     PG --> BackupJob
 ```
 
-## 8. Diagram Legend
+## 9. Diagram Legend
 
 | Component | One-line function |
 | --- | --- |
@@ -168,7 +207,10 @@ flowchart TD
 | S3 static web app | Low-cost storage for the compiled frontend bundle. |
 | Node API | Express backend that enforces auth, business rules, payment application, receipt actions, and portal APIs. |
 | PostgreSQL | System of record for customers, contracts, invoices, payments, exceptions, referrals, settings, and audit history. |
-| Private S3 contracts bucket | Secure encrypted storage for uploaded contract files by customer ID/date. |
+| Referral Engine | Public no-login referral intake and finance-admin approval gate before reward routing. |
+| People ledger | Employee master data, status, compensation context, and payment history. |
+| Payables ledger | Employee payments, employee referral payouts, other expenses paid, and other income/refund entries. |
+| Private S3 contracts bucket | Secure encrypted storage for uploaded contract files by owner category, owner ID, and date. |
 | SES | AWS-native outbound invoice and receipt email delivery. |
 | SSM Parameter Store / Secrets Manager | Secure runtime storage for passwords, Gmail tokens, SMTP/SES credentials, and API secrets. |
 | CloudWatch logs | Centralized application, worker, sync, and error logs. |
@@ -178,7 +220,7 @@ flowchart TD
 | SQS work queue | Decouples background work from user-facing API requests. |
 | S3 backup bucket | Stores database backup snapshots with lifecycle transition to low-cost archive storage. |
 
-## 9. Risk Controls
+## 10. Risk Controls
 
 | Risk | Control |
 | --- | --- |
@@ -186,5 +228,7 @@ flowchart TD
 | Same Zelle transaction number replayed | Confirmed Zelle references are unique across Gmail and manual Zelle scopes. |
 | Payment posted to wrong customer | Exceptions require human review and customer assignment before apply. |
 | Manual payment entered without proof | Manual form captures route, reference, memo, and internal verification note. |
-| Referral bonus paid incorrectly | Rewards are applied only as invoice discounts and tracked in reward ledger. |
+| Referral bonus paid incorrectly | Every Referral Engine submission requires finance approval before reward routing; customer rewards are invoice discounts and employee rewards route to Payables. |
+| Employee payment not visible to finance | Employee payments are stored in `employee_payments` and roll up in People 360 plus Payables region reporting. |
+| Other expense loses context | Other entries store category, direction, vendor/source, region, department, memo, reference, recording user, and exact cents. |
 | Lost cloud data | PostgreSQL backups should run every 2 hours into private S3 with lifecycle policy. |

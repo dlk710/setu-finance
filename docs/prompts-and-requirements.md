@@ -63,6 +63,11 @@ The codebase now implements the following current-state requirements:
 - spreadsheet-style customer register with explicit customer-status visibility
 - customer 360 view with onboarding, billing, payments, referrals, and working contract context
 - dashboard received-amount trend drill-down by day, week, month, and year
+- public Referral Engine with finance-admin review before relationship/reward routing
+- People workspace for employee onboarding, employee directory search, employee 360, payments, contracts, and payslips
+- Payables workspace for employee payments, employee referral payouts, other paid expenses, and other received income/refunds
+- Contracts archive with signed-with party, compact summary, signed date, Quick peek, and Download
+- AskSetu read-only assistant for customers, invoices, payments, contracts, employees, payables, Gmail sync, outbound email, referrals, and recent activity
 
 ## Requirements that are still intentionally deferred
 
@@ -82,3 +87,6 @@ When future contributors ask “why does this system work this way?”, this fil
 - [docs/non-technical-requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/non-technical-requirements.md)
 - [docs/aws-solution-architecture.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/aws-solution-architecture.md)
 - [docs/design-system.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/design-system.md)
+- [docs/detailed-design.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/detailed-design.md)
+- [docs/test-plan.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/test-plan.md)
+- [docs/asksetu.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/asksetu.md)

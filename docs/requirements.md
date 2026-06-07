@@ -19,7 +19,11 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Same Zelle transaction-number replay protection.
 - PDF receipt generation and outbound receipt email.
 - Configurable referral program with invoice-discount reward application.
-- Public referral and feedback intake forms.
+- Public Referral Engine for customer, employee, and manually reviewed referrers.
+- Finance-admin referral intake review before any relationship or reward is established.
+- Employee People ledger with onboarding, HR status, compensation fields, and payment history.
+- Payables ledger for employee payments, employee referral payouts, other expenses paid, and other income/refunds received.
+- Public feedback intake form.
 - Status-only provider engagement API for downstream applications.
 - Dashboard reporting for payments, exceptions, invoices, and referral performance.
 - PostgreSQL persistence with migration-managed schema.
@@ -39,9 +43,10 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 | Persona | Responsibility | Primary Portal Areas |
 | --- | --- | --- |
 | Finance operator | Onboards customers, sends invoices, reviews payments, resolves exceptions, sends receipts | Onboarding, Billing console, Customers |
-| Finance admin | Maintains referral rules, Gmail sync settings, operational settings | Settings, Referral Program |
+| Finance admin | Maintains referral rules, Gmail sync settings, referral intake approvals, employee records, payables, and operational settings | Settings, Referral Program, People, Payables |
 | Leadership user | Reviews collections, outstanding work, referral performance, risk queues | Dashboard, Referral Program |
 | Customer/member | Submits referrals and feedback without portal login | `/refer`, `/feedback` |
+| Employee/sales referrer | Submits referrals without portal login and can be matched by employee ID, email, or phone | `/refer` |
 | Future integration worker | Runs background email sync, email sending, reconciliation, backups | AWS worker layer |
 
 ## 4. Functional Requirements
@@ -193,16 +198,96 @@ Setu Finance is an internal finance operations portal that starts from signed cl
   - referral date
   - rule snapshot at referral creation
   - legitimacy status and review notes
-- The referral data model must support customer/client referrers now and remain extensible for employees, sales partners, and external partners later.
+- The referral data model must support customer/client referrers and employee referrers now, and remain extensible for sales partners and external partners later.
 - Existing customer-referral links must remain intact through `referrer_customer_id` while the newer party linkage is added beside it.
 - Referral lifecycle actions must be auditable through referral events.
-- Referral bonuses must be applied as future invoice discounts.
-- No direct cash or credit payout should be made outside invoice discounting.
+- Customer referral bonuses must be applied as future invoice discounts.
+- Employee referral bonuses must be routed to Payables as scheduled referral payout records after finance approval and qualification.
+- No direct customer cash or credit payout should be made outside invoice discounting.
 - Qualified referral rewards should appear clearly in green/reviewable sections.
 - Dashboard reporting should show referral counts, qualified referrals, and bonus spend.
-- Public referral form must allow customers to submit referrals without login and must prevent duplicate submissions by referred email or phone.
+- Public Referral Engine must allow customers, employees, and self-declared referrers to submit referrals without login.
+- Email and phone referrer search must search both customer and employee records.
+- Employee ID search must search employee records only.
+- A new referral must always enter finance admin review before a relationship or reward is established.
+- Duplicate referred client contact must be blocked by referred email or phone.
+- Self-referral must be blocked server-side.
+- The server must recompute reward type and estimate; browser-submitted reward values must never be trusted.
 
-### 4.10 Dashboard And Reporting
+### 4.10 People And Employee Records
+
+- Finance must be able to onboard employees separately from customers.
+- People landing must clearly expose `Onboard Employee` above `Employee Directory`.
+- People landing must show quick employee metrics, including total employee count, current employee count, payment transaction count, and former employee count.
+- Employee Directory must not show a complete employee list before search because the employee population may grow beyond 300 records.
+- Employee Directory must show only the top 10 relevant matching employees after a user searches or applies filters.
+- Employee Directory must support search by first name, last name, employee ID, email, phone, department, title, status, and region.
+- Department must use controlled values: Profile Build, Attorney, Sales, Media, Finance, Administration, IT Support, and Other.
+- Title must use controlled values: CSM, Team Lead, Finance Lead, Paralegal, Attorney, Sr Attorney, Executive, Media Assistant, and Consultant.
+- Region must allow only US, India, and Nigeria.
+- Salary currency must derive from region: US/USD, India/INR, Nigeria/NGN.
+- Employee ID must be assigned by the system.
+- Employee record must capture:
+  - first name
+  - middle name
+  - last name
+  - preferred name
+  - personal email
+  - official email
+  - personal mobile
+  - official mobile
+  - title
+  - department
+  - region
+  - manager
+  - employment status
+  - date of joining
+  - date of exit when applicable
+  - monthly salary
+  - one-time joining bonus
+  - annual bonus
+  - HR leader comments
+  - critical information notes
+- Employment status must support current, on leave, contractor, left company, and terminated.
+- Former employees must be maintained separately from active/current employees.
+- Employee 360 view must open as a routed full page and show role, contact details, HR status, compensation summary, comments, critical information, total referrals, payslips, and every payment recorded for the employee.
+- Employee payments must capture payment type, amount with cents, date, status, region, memo, reference, and recording user.
+- Employee payslips must be generated by calendar month or custom pay cycle from recorded employee payment records.
+- Employee payslips must be downloadable as PDF files from employee 360.
+- Employee 360 must support upload of signed offer letters, NDAs, employment agreements, policy acknowledgements, and other employee/stakeholder contract files.
+- Employee contract uploads must save metadata in the database and file payloads in categorized local or S3-ready storage by owner category, employee ID, and date.
+- Payables reporting must include employee payments distributed by region.
+
+### 4.11 Contracts Library
+
+- The finance admin portal must include a dedicated `Contracts` space.
+- Contracts space must be searchable by signed-with name, owner ID, category, contract type, file name, summary, and notes.
+- Contracts table must show `Contract`, `Category`, `Signed with`, `Summary`, `Signed date`, and action controls.
+- Contracts table must not show internal storage provider/uploader as a primary column.
+- Contract summaries must be compact and suitable for scanning in a table.
+- Client contract rows must clearly show the client name the contract is signed with.
+- Employee contract rows must clearly show the employee name the contract is signed with.
+- Contracts must be categorized as client, employee, stakeholder, or other.
+- Contract types must support NDA, client contract, offer letter, employee contract, stakeholder contract, vendor contract, policy acknowledgement, and other.
+- Contracts space must not provide a standalone upload control at this time.
+- Client contract records must flow into Contracts from customer onboarding and customer 360 uploads.
+- Employee contract records must flow into Contracts from People employee 360 uploads.
+- Admins must be able to quick-preview browser-supported contracts from Contracts before downloading the raw file.
+- Quick preview must stream through authenticated backend endpoints and must not require public S3 object access.
+- Admins must be able to download the raw uploaded contract files from Contracts.
+- Downloads must be protected by admin authentication.
+- Cloud deployment must be able to store these files in a private S3 bucket with owner/category/date based keys.
+
+### 4.12 Payables And Other Expenses
+
+- Payables must report employee payments, employee referral payouts, other paid expenses, and other received income/refunds.
+- Other expenses must support common categories such as laptop/equipment, facility rent/lease, software subscription, legal/compliance, travel, marketing, professional services, training, refund/income, and other.
+- Other entries must capture direction, category, vendor/source, amount with cents, date, status, region, department, payment method, memo, receipt/reference, and recording user.
+- Paid Other entries must be included in money-out reporting.
+- Received Other entries must be included separately as money-in/refund/income reporting.
+- Customer referral invoice discounts must remain visible but must not be treated as direct cash payables.
+
+### 4.13 Dashboard And Reporting
 
 - The v2 `Executive` dashboard must default as the signed-in home page while the legacy `/dashboard` route remains valid.
 - Dashboard should summarize:
@@ -217,7 +302,7 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Transaction chart must show sum of received amounts by day, week, month, or year, with month as default.
 - Duplicate-blocked, archived, or replay-risk transactions must not count toward received totals.
 
-### 4.11 Public Feedback Intake
+### 4.14 Public Feedback Intake
 
 - Users must be able to submit feedback without logging into the finance portal.
 - Public feedback form must capture:
@@ -237,14 +322,14 @@ Setu Finance is an internal finance operations portal that starts from signed cl
 - Feedback attachments must be available only through protected admin endpoints.
 - GitHub Issues may be used for internal engineering follow-up, but must not be the primary public intake channel for sensitive customer feedback.
 
-### 4.12 Settings
+### 4.15 Settings
 
 - Admin-facing settings should live under the user profile/settings area rather than cluttering the main operational workspace.
 - Settings must include Gmail auto-sync enablement and interval.
 - Settings must include referral-program rule maintenance.
 - Settings should be designed to grow into email provider, storage, and backup controls.
 
-### 4.13 Provider Engagement Status API
+### 4.16 Provider Engagement Status API
 
 - Finance must expose `GET /api/integration/engagement-status` for downstream provider apps.
 - The endpoint must require `X-Api-Key` and reject missing or incorrect keys with `401`.

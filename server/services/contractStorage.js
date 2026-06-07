@@ -53,17 +53,20 @@ function getS3Client() {
   return cachedS3Client;
 }
 
-function buildStorageKey({ customerCode, uploadedAt, fileName }) {
-  const safeCustomerCode = sanitizePathSegment(customerCode || "unassigned");
+function buildStorageKey({ customerCode, ownerCategory = "", ownerCode = "", uploadedAt, fileName }) {
+  const safeOwnerCategory = sanitizePathSegment(ownerCategory);
+  const safeOwnerCode = sanitizePathSegment(ownerCode || customerCode || "unassigned");
   const safeFileName = sanitizePathSegment(fileName || "contract");
   const dateParts = getUploadedDateParts(uploadedAt);
-  return path.posix.join(
-    safeCustomerCode,
+  const keyParts = [
+    ...(safeOwnerCategory ? [safeOwnerCategory] : []),
+    safeOwnerCode,
     dateParts.year,
     dateParts.month,
     dateParts.day,
     `${dateParts.timestamp}-${safeFileName}`,
-  );
+  ];
+  return path.posix.join(...keyParts);
 }
 
 async function storeLocalContract({ storageKey, buffer }) {
@@ -77,7 +80,7 @@ async function storeLocalContract({ storageKey, buffer }) {
   };
 }
 
-async function storeS3Contract({ storageKey, buffer, fileName, mimeType }) {
+async function storeS3Contract({ storageKey, buffer, fileName, mimeType, ownerCategory = "" }) {
   const { bucket, prefix } = getContractStorageConfig();
   if (!bucket) {
     throw new Error("Contracts S3 bucket is not configured.");
@@ -93,7 +96,8 @@ async function storeS3Contract({ storageKey, buffer, fileName, mimeType }) {
       ContentDisposition: `inline; filename="${fileName}"`,
       ServerSideEncryption: "AES256",
       Metadata: {
-        "customer-code": storageKey.split("/")[0] || "unknown",
+        "owner-category": ownerCategory || "client",
+        "owner-code": storageKey.split("/").at(ownerCategory ? 1 : 0) || "unknown",
       },
     }),
   );
@@ -104,12 +108,20 @@ async function storeS3Contract({ storageKey, buffer, fileName, mimeType }) {
   };
 }
 
-export async function storeContractBinary({ customerCode, fileName, mimeType, buffer, uploadedAt }) {
-  const storageKey = buildStorageKey({ customerCode, uploadedAt, fileName });
+export async function storeContractBinary({
+  customerCode,
+  ownerCategory = "",
+  ownerCode = "",
+  fileName,
+  mimeType,
+  buffer,
+  uploadedAt,
+}) {
+  const storageKey = buildStorageKey({ customerCode, ownerCategory, ownerCode, uploadedAt, fileName });
   const config = getContractStorageConfig();
 
   if (config.bucket) {
-    return storeS3Contract({ storageKey, buffer, fileName, mimeType });
+    return storeS3Contract({ storageKey, buffer, fileName, mimeType, ownerCategory });
   }
 
   return storeLocalContract({ storageKey, buffer });

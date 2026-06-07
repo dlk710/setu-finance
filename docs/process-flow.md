@@ -12,18 +12,19 @@ flowchart TD
     B --> C["Admin reviews and overrides anything needed"]
     C --> D["Create or update customer record"]
     D --> E["Store contract and key extracted fields"]
-    E --> F["Generate draft invoices from the contract schedule"]
-    F --> G["Send invoice"]
-    G --> H["Capture payment from Zelle email or manual review"]
-    H --> I{"Match confidence"}
-    I -->|"Clear"| J["Payments to confirm"]
-    I -->|"Unclear"| K["Exceptions"]
-    K --> L["Finance resolves and assigns the right customer / action"]
-    L --> J
-    J --> M["Apply transaction"]
-    M --> N["Completed transactions"]
-    N --> O["Send or re-send PDF receipt"]
-    O --> P["Update dashboard, customer 360, and history"]
+    E --> F["Expose in Contracts archive for Quick peek / Download"]
+    F --> G["Generate draft invoices from the contract schedule"]
+    G --> H["Send invoice"]
+    H --> I["Capture payment from Zelle email or manual review"]
+    I --> J{"Match confidence"}
+    J -->|"Clear"| K["Payments to confirm"]
+    J -->|"Unclear"| L["Exceptions"]
+    L --> M["Finance resolves and assigns the right customer / action"]
+    M --> K
+    K --> N["Apply transaction"]
+    N --> O["Completed transactions"]
+    O --> P["Send or re-send PDF receipt"]
+    P --> Q["Update dashboard, customer 360, and history"]
 ```
 
 ### In Plain English
@@ -76,7 +77,8 @@ flowchart LR
 - Parsed contract details should prefill the client record, services, billing cadence, fee, installments, and service-start date wherever possible.
 - Admins can manually override contract-derived values before the record is saved.
 - Every service enrollment is timestamped so later add-on services remain historically traceable.
-- Contract binaries and extracted critical fields stay linked to the customer record and are visible in the full customer 360 page.
+- Contract binaries and extracted critical fields stay linked to the customer record and are visible in customer 360 plus the Contracts archive.
+- The Contracts archive shows signed-with party, compact summary, signed date, Quick peek, and Download without exposing internal storage details to operators.
 - Synced Zelle emails are converted into durable transaction records with captured details such as amount, transaction number, memo, dates, source emails, and raw extracted text.
 - The system does not auto-post money blindly. A human still decides when to apply a prepared transaction.
 - Applying a payment and sending a receipt are now separate actions.

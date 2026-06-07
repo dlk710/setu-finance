@@ -36,7 +36,7 @@ This is acceptable for dev/non-prod and very low-cost testing. Production should
 | Static frontend | S3 + CloudFront | Host and cache React/Vite bundle | Very low |
 | API runtime | App Runner or ECS/Fargate | Run existing Node/Express API without rewriting into serverless functions | Low to moderate |
 | Database | RDS PostgreSQL | Managed system of record with snapshots and point-in-time recovery option | Main fixed cost |
-| Contract storage | Private S3 bucket | Encrypted customer contract files by customer ID/date | Usage-based |
+| Contract storage | Private S3 bucket | Encrypted client/employee contract files by owner category, owner ID, and date; preview/download streams through API | Usage-based |
 | Backups | S3 backup bucket + lifecycle rules | Store 2-hour PostgreSQL backups and transition older objects to cheaper classes | Low |
 | Queue | SQS | Decouple sync/email/reconciliation work from user requests | Usage-based |
 | Scheduled jobs | EventBridge Scheduler | Trigger Gmail sync and backups on schedule | Very low |
@@ -102,7 +102,7 @@ flowchart TD
 | Node API on App Runner / ECS | Runs authentication, business rules, matching, payments, receipts, settings, and admin APIs. |
 | Portal auth session | Protects finance data and keeps users signed in during operational work. |
 | RDS PostgreSQL | Durable system of record for customers, contracts, invoices, payments, exceptions, referrals, settings, and audit history. |
-| Private S3 contracts bucket | Encrypted storage for uploaded contracts organized by customer ID/date. |
+| Private S3 contracts bucket | Encrypted storage for uploaded contracts organized by owner category, owner ID, and date; files remain private while preview/download streams through the authenticated API. |
 | SES outbound email | Sends invoice emails and PDF receipt emails at low cost. |
 | SSM / Secrets Manager | Holds runtime secrets outside code and Git. |
 | CloudWatch logs | Central place to review API, worker, sync, and error logs. |

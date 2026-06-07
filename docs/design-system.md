@@ -94,6 +94,17 @@ The billing console is organized around operational queues:
 
 That structure should remain stable as the product suite grows.
 
+### Contract archive table
+
+The Contracts workspace should stay scannable and action-oriented:
+
+- show `Signed with` instead of internal owner/storage terminology
+- show a compact `Summary` column rather than long extracted text
+- show `Signed date` as a business field
+- keep `Quick peek` separate from `Download`
+- avoid exposing storage provider/uploader as primary table content
+- keep private S3/local storage details behind the authenticated API
+
 ## Guidance for future screens
 
 If new modules are added, they should preserve:

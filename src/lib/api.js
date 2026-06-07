@@ -42,6 +42,20 @@ export function submitPublicReferral(form) {
   });
 }
 
+export function resolveReferralReferrer(form) {
+  return apiRequest("/api/public/referral/resolve", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export function submitReferralEngine(form) {
+  return apiRequest("/api/public/referral", {
+    method: "POST",
+    body: form,
+  });
+}
+
 export function submitPublicFeedback(form) {
   return apiRequest("/api/public/feedback", {
     method: "POST",

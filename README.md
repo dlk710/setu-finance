@@ -12,6 +12,11 @@ Local full-stack prototype for:
 - giving finance a spreadsheet-style customer register with a full-page 360 customer view
 - summarizing saved received amounts on the dashboard by day, week, month, or year
 - managing a configurable referral program with relationship history, qualification tracking, and invoice discounts
+- running a public Referral Engine that requires finance review before reward routing
+- maintaining employee records, employee contracts, employee payments, and payslip PDFs
+- tracking payables for employee payments, employee referral payouts, operating expenses, and received refunds/income
+- searching a Contracts archive with signed-with party, compact summary, signed date, Quick peek, and raw download
+- answering read-only operational questions through AskSetu
 - capturing public user feedback through a no-login `/feedback` form with optional attachments
 - persisting the operational backend in PostgreSQL instead of a file store
 
@@ -90,6 +95,9 @@ Change them in [.env](/Users/lohithdeshpande/Documents/Claude/Projects/FinancePr
 - service history appears only when an existing customer is selected for follow-up enrollment
 - the `Referral Program` workspace defines configurable rules, tracks relationship history, and applies earned bonuses as invoice discounts
 - public referral intake supports both `/refer` and personalized gateway links such as `/refer/100001`, `/referral-gateway/100001`, or `/r/100001`
+- `People` supports employee onboarding, search-first employee directory, employee 360, employee payments, employee contracts, and payslip PDFs
+- `Contracts` is a search-only archive showing signed-with party, short summary, signed date, Quick peek, and Download
+- AskSetu answers read-only questions about customers, invoices, payments, exceptions, contracts, employees, payables, Gmail sync, email, referrals, and recent activity
 - provider integrations can read status-only engagement data from `/api/integration/engagement-status` with `X-Api-Key`; no amounts are exposed
 - authentication audit events are visible in `Audit` and store safe event metadata only; passwords, tokens, API keys, and raw IP/user-agent values are never stored
 
@@ -120,7 +128,10 @@ The local frontend now uses the merged v2 finance shell with a Setu portal-famil
 - `Clients` is the new entry point for onboarding, customer register, and customer 360 (`/clients`, plus existing `/onboarding` and `/customers`)
 - `Receivables` wraps the existing billing console at `/receivables` while `/billing` remains valid, now organized into `Overview`, `Invoices`, `Payments to confirm`, `Exceptions`, `Receipts`, and `Inbox sync` tabs
 - `Referrals` wraps the existing Referral Program at `/referrals` while `/admin` remains valid
-- `Payables`, `People`, and `Audit` are safe hub views for the next product-suite phases
+- `Payables` tracks employee payments, employee referral payouts, other paid expenses, and received refunds/income
+- `People` manages employee onboarding, search-first directory, employee 360, employee contracts, payment records, and payslip downloads
+- `Contracts` is a search-only archive with signed-with party, short summary, signed date, Quick peek, and Download
+- `Audit` shows activity, auth events, exception history, and referral events
 - Gmail/Zelle sync credentials, SMTP settings, and existing backend routes are preserved
 
 Setu portal-family identities:
@@ -216,6 +227,10 @@ The repo includes the current-state product artifacts alongside the live code:
 - consolidated current-state handoff: [docs/current-state.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/current-state.md)
 - portal user guide by function: [docs/user-guide.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/user-guide.md)
 - detailed requirements document: [docs/requirements.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/requirements.md)
+- detailed design document: [docs/detailed-design.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/detailed-design.md)
+- tester functional test plan: [docs/test-plan.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/test-plan.md)
+- AskSetu capability guide: [docs/asksetu.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/asksetu.md)
+- current capability map: [skills.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/skills.md)
 - business pitch deck notes: [docs/pitch-deck.md](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/docs/pitch-deck.md)
 - business pitch deck slides: [files/setu_finance_pitch_deck.html](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_finance_pitch_deck.html)
 - PowerPoint deck: [files/setu_finance_pitch_deck.pptx](/Users/lohithdeshpande/Documents/Claude/Projects/FinanceProduct/files/setu_finance_pitch_deck.pptx)

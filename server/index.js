@@ -4,25 +4,37 @@ import {
   convertReferralSubmissionToRelationship,
   confirmPendingPaymentRecord,
   createCustomerOnboardingRecord,
+  createEmployeeRecord,
   createInvoiceRecord,
   deleteArchivedExceptionRecord,
   dismissReferralSubmission,
+  generateEmployeePayslip,
   listDueInvoiceIds,
+  loadBusinessContractDownloadRecord,
   loadContractDownloadRecord,
+  loadEmployeePayslipDownloadRecord,
   loadFeedbackAttachmentRecord,
   loadPublicReferralProgramState,
   listPendingPaymentIds,
   loadState,
+  markReferralIntakeQualified,
   prepareStateStore,
+  recordEmployeePayment,
   recordManualPaymentRecord,
+  recordOtherExpense,
+  resolvePublicReferralReferrer,
+  resolveReferralIntakeIdentity,
   resolveExceptionRecord,
   sendReceiptForPaymentRecord,
   sendQueuedInvoice,
+  setReferralIntakeReviewStatus,
+  submitReferralIntake,
   submitPublicFeedbackEntry,
   submitPublicReferralEntry,
   updateFeedbackSubmissionStatus,
   updateGmailAutoSyncSettings,
   updateReferralProgramSettings,
+  uploadEmployeeContractRecord,
 } from "./stateStore.js";
 import {
   authenticatePortalUser,
@@ -58,6 +70,26 @@ function createHttpError(statusCode, message) {
   return error;
 }
 
+const publicReferralRateLimit = new Map();
+
+function publicReferralRateLimiter(request, _response, next) {
+  const key = request.ip || request.headers["x-forwarded-for"] || "local";
+  const now = Date.now();
+  const windowMs = 60 * 60 * 1000;
+  const entry = publicReferralRateLimit.get(key) ?? { count: 0, resetAt: now + windowMs };
+  if (entry.resetAt <= now) {
+    entry.count = 0;
+    entry.resetAt = now + windowMs;
+  }
+  entry.count += 1;
+  publicReferralRateLimit.set(key, entry);
+  if (entry.count > 20) {
+    next(createHttpError(429, "Too many referral attempts. Please wait and try again."));
+    return;
+  }
+  next();
+}
+
 function formatApiState(state) {
   return {
     ...state,
@@ -69,6 +101,15 @@ function formatApiState(state) {
       },
     },
   };
+}
+
+function setContractFileResponseHeaders(response, file, disposition = "attachment") {
+  response.setHeader("Content-Type", file.mimeType || "application/octet-stream");
+  response.setHeader(
+    "Content-Disposition",
+    `${disposition}; filename="${file.fileName.replace(/"/g, "")}"`,
+  );
+  response.setHeader("Cache-Control", "private, no-store");
 }
 
 app.get("/api/auth/status", (request, response) => {
@@ -161,6 +202,27 @@ app.get("/api/public/referral-program", async (_request, response, next) => {
   try {
     const data = await loadPublicReferralProgramState();
     response.json(data);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/public/referral/resolve", publicReferralRateLimiter, async (request, response, next) => {
+  try {
+    const result = await resolvePublicReferralReferrer(request.body ?? {});
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/public/referral", publicReferralRateLimiter, async (request, response, next) => {
+  try {
+    const result = await submitReferralIntake(request.body ?? {}, {
+      ip: request.ip,
+      userAgent: request.headers["user-agent"],
+    });
+    response.json(result);
   } catch (error) {
     next(error);
   }
@@ -333,11 +395,37 @@ app.post("/api/contracts/preview", async (request, response, next) => {
 app.get("/api/contracts/:contractId/download", async (request, response, next) => {
   try {
     const result = await loadContractDownloadRecord(request.params.contractId);
-    response.setHeader("Content-Type", result.file.mimeType || "application/octet-stream");
-    response.setHeader(
-      "Content-Disposition",
-      `inline; filename="${result.file.fileName.replace(/"/g, "")}"`,
-    );
+    setContractFileResponseHeaders(response, result.file, "inline");
+    response.send(result.file.buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/contracts/:contractId/preview", async (request, response, next) => {
+  try {
+    const result = await loadContractDownloadRecord(request.params.contractId);
+    setContractFileResponseHeaders(response, result.file, "inline");
+    response.send(result.file.buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/business-contracts/:contractId/download", async (request, response, next) => {
+  try {
+    const result = await loadBusinessContractDownloadRecord(request.params.contractId);
+    setContractFileResponseHeaders(response, result.file, "attachment");
+    response.send(result.file.buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/business-contracts/:contractId/preview", async (request, response, next) => {
+  try {
+    const result = await loadBusinessContractDownloadRecord(request.params.contractId);
+    setContractFileResponseHeaders(response, result.file, "inline");
     response.send(result.file.buffer);
   } catch (error) {
     next(error);
@@ -423,6 +511,147 @@ app.post("/api/admin/referral-submissions/:submissionId/dismiss", async (request
       request.portalUser?.username ?? "unknown",
     );
 
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/referral-intake/:intakeId/resolve-identity", async (request, response, next) => {
+  try {
+    const { partyType, partyId } = request.body ?? {};
+    const result = await resolveReferralIntakeIdentity({
+      intakeId: request.params.intakeId,
+      partyType,
+      partyId,
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/referral-intake/:intakeId/review", async (request, response, next) => {
+  try {
+    const { action, notes = "" } = request.body ?? {};
+    const result = await setReferralIntakeReviewStatus({
+      intakeId: request.params.intakeId,
+      action,
+      notes,
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/referral-intake/:intakeId/qualify", async (request, response, next) => {
+  try {
+    const result = await markReferralIntakeQualified({
+      intakeId: request.params.intakeId,
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/employees", async (request, response, next) => {
+  try {
+    const result = await createEmployeeRecord({
+      form: request.body?.form ?? {},
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/employee-payments", async (request, response, next) => {
+  try {
+    const result = await recordEmployeePayment({
+      form: request.body?.form ?? {},
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/employee-payslips", async (request, response, next) => {
+  try {
+    const result = await generateEmployeePayslip({
+      form: request.body?.form ?? {},
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/admin/employee-payslips/:payslipId/download", async (request, response, next) => {
+  try {
+    const result = await loadEmployeePayslipDownloadRecord(request.params.payslipId);
+    response.setHeader("Content-Type", result.mimeType);
+    response.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${result.fileName.replace(/"/g, "")}"`,
+    );
+    response.send(result.buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/employees/:employeeId/contracts", async (request, response, next) => {
+  try {
+    const result = await uploadEmployeeContractRecord({
+      employeeId: request.params.employeeId,
+      form: request.body?.form ?? {},
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
+    response.json({
+      message: result.message,
+      state: formatApiState(result.state),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/admin/other-expenses", async (request, response, next) => {
+  try {
+    const result = await recordOtherExpense({
+      form: request.body?.form ?? {},
+      actingUsername: request.portalUser?.username ?? "unknown",
+    });
     response.json({
       message: result.message,
       state: formatApiState(result.state),
